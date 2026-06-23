@@ -29,11 +29,28 @@ final class SelectorModel {
 
     let worktree: WorktreeModel
 
+    /// Invoked whenever the selected repo/worktree changes, so the owner can persist
+    /// the new selection (drives "reopen where I left off").
+    var onSelectionChange: (() -> Void)?
+
     private let environment: AppEnvironment
 
     init(environment: AppEnvironment) {
         self.environment = environment
         self.worktree = WorktreeModel(environment: environment)
+        // An external write to the active worktree should re-light its live dot
+        // immediately, without waiting for a manual refresh.
+        self.worktree.onActivity = { [weak self] _ in self?.refreshLiveState() }
+    }
+
+    /// Recompute only the cheap `isLive` flags from the activity monitor (no git),
+    /// e.g. after a file-watch event reports external activity.
+    func refreshLiveState(now: Date = Date()) {
+        for wt in worktrees {
+            var info = worktreeInfo[wt.path] ?? WorktreeInfo()
+            info.isLive = environment.activityMonitor.isBusy(worktreePath: wt.path, within: 5, now: now)
+            worktreeInfo[wt.path] = info
+        }
     }
 
     func setRepositories(_ repos: [Repository]) {
@@ -47,6 +64,7 @@ final class SelectorModel {
         branches = []
         browseBranch = nil
         worktree.clear()
+        onSelectionChange?()
     }
 
     /// Select a repo: discover its worktrees + branches, then focus the primary
@@ -67,6 +85,7 @@ final class SelectorModel {
         if let primary = worktrees.first(where: { $0.isPrimary }) ?? worktrees.first {
             await selectWorktree(primary)
         }
+        onSelectionChange?()
     }
 
     /// Load per-worktree ahead/behind + change count + live state for the
@@ -94,6 +113,7 @@ final class SelectorModel {
         selectedWorktree = wt
         browseBranch = nil
         await worktree.load(worktreePath: wt.path, repo: selectedRepo)
+        onSelectionChange?()
     }
 
     /// Browse another branch read-only (snapshot), without checkout (D2).

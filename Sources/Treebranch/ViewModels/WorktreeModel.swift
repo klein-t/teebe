@@ -45,6 +45,15 @@ final class WorktreeModel {
 
     /// Window (seconds) used to flag a worktree as "busy" before a guarded op.
     var busyWindow: TimeInterval = 5
+    /// Window (seconds) after one of teebe's OWN writes during which file-watch
+    /// events are attributed to us and NOT recorded as worktree activity — so the
+    /// user's own stage/commit/discard/trash/new/rename never reads as "an agent is
+    /// active" (the live dot / busy warning are for *external* writers).
+    var selfWriteIgnoreWindow: TimeInterval = 1.5
+    private(set) var lastSelfWriteAt: Date?
+    /// Called (with the worktree path) when an *external* write is observed, so the
+    /// owner can refresh the live/activity indicators.
+    var onActivity: ((String) -> Void)?
 
     private let environment: AppEnvironment
     private var repo: Repository?
@@ -86,13 +95,15 @@ final class WorktreeModel {
     func commitPending() async {
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
-        // Stage everything not yet staged so the commit captures the change set.
-        let unstaged = changes.filter { !$0.isStaged && !$0.isUntracked }.map(\.path)
-        let untracked = changes.filter { $0.isUntracked }.map(\.path)
+        // Stage every path with working-tree changes so the commit captures the full
+        // change set — including the unstaged half of a partially-staged file and
+        // untracked files. Purely-staged paths (worktreeStatus == .unmodified) need
+        // no `add`.
+        let toStage = changes.filter { $0.worktreeStatus != .unmodified }.map(\.path)
         if let worktreePath {
             await perform {
-                if !(unstaged + untracked).isEmpty {
-                    try await self.queue?.stage(worktreePath: worktreePath, paths: unstaged + untracked)
+                if !toStage.isEmpty {
+                    try await self.queue?.stage(worktreePath: worktreePath, paths: toStage)
                 }
             }
         }
@@ -136,13 +147,31 @@ final class WorktreeModel {
         watcher?.stop()
         let watcher = environment.makeWatcher()
         watcher.start(paths: [path], debounce: 0.25) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.worktreePath == path, !self.isBrowsingSnapshot else { return }
-                self.environment.activityMonitor.recordActivity(worktreePath: path, at: Date())
-                await self.refresh()
-            }
+            Task { @MainActor in await self?.handleFileSystemEvent() }
         }
         self.watcher = watcher
+    }
+
+    /// Handle a file-watch event for the active worktree: record *external* activity
+    /// (skipping our own recent writes), notify the owner, then refresh. Synchronous
+    /// and parameterized so it is unit-testable without real FSEvents.
+    func handleFileSystemEvent(now: Date = Date()) async {
+        guard let worktreePath, !isBrowsingSnapshot else { return }
+        if !recentSelfWrite(now: now) {
+            environment.activityMonitor.recordActivity(worktreePath: worktreePath, at: now)
+            onActivity?(worktreePath)
+        }
+        await refresh()
+    }
+
+    /// Mark that teebe just wrote into the worktree, so the imminent file-watch
+    /// event is not misattributed to an external agent.
+    func noteSelfWrite(at date: Date = Date()) { lastSelfWriteAt = date }
+
+    /// Whether teebe wrote into the worktree within `selfWriteIgnoreWindow` of `now`.
+    func recentSelfWrite(now: Date = Date()) -> Bool {
+        guard let lastSelfWriteAt else { return false }
+        return now.timeIntervalSince(lastSelfWriteAt) < selfWriteIgnoreWindow
     }
 
     /// Re-query status and rebuild the tree (called on watcher events).
@@ -407,6 +436,7 @@ final class WorktreeModel {
     }
 
     private func perform(_ operation: @escaping () async throws -> Void) async {
+        noteSelfWrite()
         do {
             try await operation()
             errorMessage = nil

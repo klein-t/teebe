@@ -108,6 +108,23 @@ struct ChangeStoryTests {
         #expect(git.discardedWorking.isEmpty)
     }
 
+    @Test("D7b: commit stages the unstaged half of a partially-staged file")
+    func d7PartialStaged() async {
+        let (dir, cleanup) = tempDir(); defer { cleanup() }
+        let git = FakeGitClient()
+        git.statusResult = StatusResult(changes: [
+            FileChange(path: "partial.txt", indexStatus: .modified, worktreeStatus: .modified),
+            FileChange(path: "stagedonly.txt", indexStatus: .added, worktreeStatus: .unmodified),
+        ])
+        let model = WorktreeModel(environment: makeTestEnvironment(git: git))
+        await model.load(worktreePath: dir, repo: Repository(path: dir))
+        model.commitMessage = "msg"
+        await model.commitPending()
+        // Only partial.txt has an unstaged delta to add; stagedonly.txt is already staged.
+        #expect(git.stagedPaths == [["partial.txt"]])
+        #expect(git.commitMessages == ["msg"])
+    }
+
     @Test("D8: commit is a no-op when the message is blank")
     func d8BlankMessage() async {
         let (dir, cleanup) = tempDir(); defer { cleanup() }
@@ -174,11 +191,6 @@ struct PersistStoryTests {
         #expect(app.selector.selectedRepo?.path == "/repoB")
     }
 
-    // I3 (documented defect): the last selected *worktree* is persisted but bootstrap
-    // always focuses the primary worktree, so a non-primary last selection is lost.
-    // Asserts the EXPECTED behavior, wrapped as a known issue so it documents the bug
-    // without failing the suite. The wrapper will report "unexpectedly passed" once
-    // the audit's fix phase restores the last worktree — that's the signal to remove it.
     @Test("I3: bootstrap restores the last selected worktree, not just the primary")
     func i3RestoreWorktree() async {
         let git = FakeGitClient()
@@ -195,8 +207,73 @@ struct PersistStoryTests {
 
         let app = AppModel(environment: env)
         await app.bootstrap()
-        withKnownIssue("I3: last selected worktree is persisted but not restored (FEATURE_AUDIT I3)") {
-            #expect(app.selector.selectedWorktree?.path == "/repo-feature")
-        }
+        #expect(app.selector.selectedWorktree?.path == "/repo-feature")
+    }
+
+    @Test("I1: switching the selected worktree persists it durably (no quit hook needed)")
+    func i1PersistSelection() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [
+            Worktree(path: "/repo", branch: "main", isPrimary: true),
+            Worktree(path: "/repo-feature", branch: "feature"),
+        ]
+        let env = makeTestEnvironment(git: git)
+        let app = AppModel(environment: env)
+        _ = await app.addRepository(path: "/repo")   // selects primary
+        await app.selector.selectWorktree(Worktree(path: "/repo-feature", branch: "feature"))
+        // Persisted immediately on selection — survives a relaunch with no terminate hook.
+        let saved = env.store.load()
+        #expect(saved.lastSelectedRepoPath == "/repo")
+        #expect(saved.lastSelectedWorktreePath == "/repo-feature")
+    }
+}
+
+@MainActor
+@Suite("User stories: live & activity (C/J)")
+struct LiveActivityStoryTests {
+    private func tempDir() -> (String, () -> Void) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tb-la-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return (dir.path, { try? FileManager.default.removeItem(at: dir) })
+    }
+
+    @Test("J2: a file-watch event during teebe's own write is NOT recorded as activity")
+    func j2SelfWriteSuppressed() async {
+        let (dir, cleanup) = tempDir(); defer { cleanup() }
+        let monitor = WorktreeActivityMonitor()
+        let model = WorktreeModel(environment: makeTestEnvironment(monitor: monitor))
+        await model.load(worktreePath: dir, repo: Repository(path: dir))
+        let t = Date(timeIntervalSince1970: 1000)
+        model.noteSelfWrite(at: t)
+        await model.handleFileSystemEvent(now: t.addingTimeInterval(0.2))   // inside ignore window
+        #expect(monitor.isBusy(worktreePath: dir, within: 5, now: t.addingTimeInterval(0.3)) == false)
+    }
+
+    @Test("J2: an external file-watch event IS recorded and notifies onActivity")
+    func j2ExternalRecorded() async {
+        let (dir, cleanup) = tempDir(); defer { cleanup() }
+        let monitor = WorktreeActivityMonitor()
+        let model = WorktreeModel(environment: makeTestEnvironment(monitor: monitor))
+        await model.load(worktreePath: dir, repo: Repository(path: dir))
+        var notified: String?
+        model.onActivity = { notified = $0 }
+        let t = Date(timeIntervalSince1970: 2000)
+        await model.handleFileSystemEvent(now: t)   // no prior self-write
+        #expect(monitor.isBusy(worktreePath: dir, within: 5, now: t.addingTimeInterval(1)) == true)
+        #expect(notified == dir)
+    }
+
+    @Test("C4: refreshLiveState lights a worktree the activity monitor reports busy")
+    func c4RefreshLive() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        let monitor = WorktreeActivityMonitor()
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git, monitor: monitor))
+        await selector.selectRepo(Repository(path: "/repo"))
+        #expect(selector.info(for: Worktree(path: "/repo")).isLive == false)
+        let t = Date(timeIntervalSince1970: 3000)
+        monitor.recordActivity(worktreePath: "/repo", at: t)
+        selector.refreshLiveState(now: t.addingTimeInterval(1))
+        #expect(selector.info(for: Worktree(path: "/repo")).isLive == true)
     }
 }

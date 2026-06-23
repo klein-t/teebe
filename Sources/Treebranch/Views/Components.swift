@@ -61,10 +61,19 @@ struct LiveDot: View {
                     .scaleEffect(animate ? 2.4 : 1)
                     .opacity(active ? (animate ? 0 : 0.5) : 0)
             )
-            .onAppear {
-                guard active else { return }
-                withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { animate = true }
-            }
+            .onAppear { syncPulse() }
+            // Restart/stop the pulse when liveness flips after first appearance —
+            // `.onAppear` fires once, so a worktree that goes live later would
+            // otherwise show a static (unpulsing) dot.
+            .onChange(of: active) { syncPulse() }
+    }
+
+    private func syncPulse() {
+        if active {
+            withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { animate = true }
+        } else {
+            withAnimation(.linear(duration: 0)) { animate = false }
+        }
     }
 }
 
