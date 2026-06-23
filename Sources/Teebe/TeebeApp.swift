@@ -23,6 +23,7 @@ struct TeebeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var app: AppModel
     @State private var preview: PreviewModel
+    @StateObject private var updater = UpdaterController()
 
     init() {
         // One shared environment, constructed exactly once.
@@ -39,6 +40,12 @@ struct TeebeApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize) // freely resizable; content scrolls inside
         .defaultSize(width: 440, height: 640)
+        .commands {
+            // Standard "Check for Updates…" item, placed in the app menu next to About.
+            CommandGroup(after: .appInfo) {
+                CheckForUpdatesCommand(updater: updater)
+            }
+        }
 
         // Separate floating Quick Look panel (D4 / PRD §5.2).
         Window("Quick Look", id: "preview") {
