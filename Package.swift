@@ -10,6 +10,11 @@ let package = Package(
         .library(name: "TeebeCore", targets: ["TeebeCore"]),
         .executable(name: "Teebe", targets: ["Teebe"]),
     ],
+    dependencies: [
+        // Sparkle: in-app auto-update framework (appcast + EdDSA-signed updates).
+        // App-layer only — TeebeCore stays UI/dependency-free.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
+    ],
     targets: [
         // Pure, UI-independent core: models, git layer, parsers, services.
         .target(
@@ -18,7 +23,10 @@ let package = Package(
         // SwiftUI app: thin views + @Observable view models. Depends on Core.
         .executableTarget(
             name: "Teebe",
-            dependencies: ["TeebeCore"],
+            dependencies: [
+                "TeebeCore",
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
             resources: [.process("Resources")]
         ),
         // Core unit + integration tests (Swift Testing).

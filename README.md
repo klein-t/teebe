@@ -15,6 +15,32 @@ whatever native app you already use.
 > watcher, file ops, write queue) and the app's view models are implemented and
 > tested; the SwiftUI shell is functional and wired (visual design in progress).
 
+## Install
+
+Download the latest `teebe.app` from the
+[Releases](https://github.com/klein-t/teebe/releases) page, unzip it, and drag
+it into `/Applications`. On first launch, right-click the app and choose **Open**
+to get past Gatekeeper. The app keeps itself up to date via Sparkle.
+
+## Uninstall
+
+teebe is a self-contained `.app` with no installer, so removing it is just:
+
+```sh
+# 1. Quit teebe, then delete the app
+rm -rf /Applications/teebe.app
+
+# 2. Remove its saved state (added repos/worktrees, window layout)
+rm -rf ~/Library/Application\ Support/teebe
+
+# 3. Remove Sparkle's auto-update preferences and cache (optional)
+defaults delete dev.teebe.app 2>/dev/null
+rm -rf ~/Library/Caches/dev.teebe.app
+```
+
+teebe never touches your repositories themselves — uninstalling only removes the
+app and its own state.
+
 ## Build & test
 
 ```sh

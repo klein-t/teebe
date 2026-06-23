@@ -161,11 +161,26 @@ struct SectionHeader<Trailing: View>: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Text("▸")
-                .font(.system(size: 15))
+            // The native macOS DisclosureGroup glyph: a `chevron.right` is a thin,
+            // doubly-symmetric stroke whose ink centroid coincides with its
+            // bounding-box center, so rotating it about the default `.center` anchor
+            // is a true spin-in-place. A *filled* `arrowtriangle.right.fill` has its
+            // area-centroid 1/3 from the base, NOT at the bbox center, so rotating it
+            // swept the visual mass through an arc — a left/down lurch read as a
+            // "bounce" that survives any easing curve and any glyph SOURCE swap
+            // (text→symbol) because it is geometric, not temporal. A square frame +
+            // explicit `.center` anchor pins the pivot to the glyph's visual center.
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(Palette.secondaryText)
-                .frame(width: 13)
-                .rotationEffect(.degrees(isOpen ? 90 : 0))
+                .frame(width: 13, height: 13)
+                .rotationEffect(.degrees(isOpen ? 90 : 0), anchor: .center)
+                // No animation — snap in lockstep with the window. A section toggle
+                // resizes the window, which SNAPS (setFrame display:true) on close
+                // and on the worktree-only grow; a chevron animating its rotation
+                // against that synchronous snap hitches, and THAT was the residual
+                // "bounce". Snapping the arrow removes it. (Opening CHANGES/FILES
+                // glides the window open; an already-flipped arrow rides along fine.)
             Text(title)
                 .font(.system(size: 11, weight: .bold))
                 .tracking(0.5)
@@ -178,7 +193,10 @@ struct SectionHeader<Trailing: View>: View {
         .padding(.horizontal, 9)
         .frame(height: 32)
         .contentShape(Rectangle())
-        .onTapGesture { withAnimation(.snappy(duration: 0.26)) { onToggle() } }
+        // The layout/window resize is animated by RootView.setOpen (it eases on
+        // open but snaps on close, so the window and content never desync and
+        // bounce). The header just reports the toggle.
+        .onTapGesture { onToggle() }
     }
 }
 
