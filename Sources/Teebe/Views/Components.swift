@@ -166,6 +166,10 @@ struct SectionHeader<Trailing: View>: View {
                 .foregroundStyle(Palette.secondaryText)
                 .frame(width: 13)
                 .rotationEffect(.degrees(isOpen ? 90 : 0))
+                // The chevron rotates on its own clean ease — no overshoot — so it
+                // animates independently of the window/layout resize without being
+                // the one thing left bouncing. See RootView.setOpen.
+                .animation(.easeInOut(duration: 0.2), value: isOpen)
             Text(title)
                 .font(.system(size: 11, weight: .bold))
                 .tracking(0.5)
@@ -178,7 +182,10 @@ struct SectionHeader<Trailing: View>: View {
         .padding(.horizontal, 9)
         .frame(height: 32)
         .contentShape(Rectangle())
-        .onTapGesture { withAnimation(.snappy(duration: 0.26)) { onToggle() } }
+        // The layout/window resize is animated by RootView.setOpen (it eases on
+        // open but snaps on close, so the window and content never desync and
+        // bounce). The header just reports the toggle.
+        .onTapGesture { onToggle() }
     }
 }
 
