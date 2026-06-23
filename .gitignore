@@ -19,10 +19,10 @@ xcuserdata/
 CLAUDE.local.md
 
 # Generated project (XcodeGen)
-Treebranch.xcodeproj/
+Teebe.xcodeproj/
 
 # Built app bundle (scripts/make-app.sh)
-Treebranch.app/
+Teebe.app/
 *.app/
 
 # Secrets / credentials — never commit these

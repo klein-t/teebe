@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Treebranch is in active development (pre-1.0). Security fixes are applied to the
+Teebe is in active development (pre-1.0). Security fixes are applied to the
 `main` branch only. There are no long-term-support branches yet.
 
 ## Reporting a vulnerability
@@ -25,7 +25,7 @@ coordinate disclosure.
 
 ## Scope & threat model
 
-Treebranch is a local, sandboxed macOS app that browses git repositories and
+Teebe is a local, sandboxed macOS app that browses git repositories and
 worktrees on your machine. It:
 
 - Stores **no credentials and no secrets**. Persisted state is limited to UI

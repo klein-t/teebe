@@ -6,12 +6,12 @@ cd "$(dirname "$0")/.."
 
 CONFIG="${1:-debug}"   # debug | release
 APP="teebe.app"
-LOGO="Sources/Treebranch/Resources/teebe-logo.png"
+LOGO="Sources/Teebe/Resources/teebe-logo.png"
 
 echo "==> swift build -c $CONFIG"
 swift build -c "$CONFIG"
 
-BIN="$(swift build -c "$CONFIG" --show-bin-path)/Treebranch"
+BIN="$(swift build -c "$CONFIG" --show-bin-path)/Teebe"
 
 echo "==> assembling $APP"
 rm -rf "$APP"
