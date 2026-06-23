@@ -1,9 +1,10 @@
 name: Release
 
-# CD: on a version tag (vX.Y.Z), build a release .app bundle and attach it to a
-# GitHub Release. The bundle is ad-hoc signed only (see scripts/make-app.sh);
-# Developer ID signing + notarization are out of scope until signing certs are
-# wired in as repository secrets.
+# CD: on a version tag (vX.Y.Z), build a release .app bundle, sign a Sparkle
+# appcast, and attach both to a GitHub Release. The bundle is ad-hoc code-signed
+# only (see scripts/make-app.sh); Developer ID signing + notarization are out of
+# scope until signing certs are wired in as repository secrets. Sparkle updates
+# are integrity-signed with an EdDSA key independent of Apple notarization.
 on:
   push:
     tags:
@@ -23,14 +24,38 @@ jobs:
         run: swift --version
 
       - name: Build release .app bundle
+        env:
+          # Sparkle: public key embedded in Info.plist must pair with the private
+          # key used to sign the appcast below. Set as a repo variable/secret.
+          SU_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
         run: ./scripts/make-app.sh release
 
-      - name: Zip the app
-        run: ditto -c -k --keepParent teebe.app "teebe-${GITHUB_REF_NAME}.zip"
+      - name: Stage update archive
+        run: |
+          mkdir -p sparkle-updates
+          ditto -c -k --keepParent teebe.app "sparkle-updates/teebe-${GITHUB_REF_NAME}.zip"
+
+      - name: Generate & sign Sparkle appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          GEN="$(find .build/artifacts -name generate_appcast -path '*/bin/*' | head -1)"
+          # Sign update enclosures with the EdDSA private key (read from stdin),
+          # and point download URLs at this release's assets.
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | "$GEN" \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/klein-t/teebe/releases/download/${GITHUB_REF_NAME}/" \
+            sparkle-updates
+          cp sparkle-updates/teebe-*.zip .
+          cp sparkle-updates/appcast.xml .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: teebe-*.zip
+          # Publish both the app zip and the appcast; SUFeedURL points at
+          # releases/latest/download/appcast.xml so the feed tracks the newest tag.
+          files: |
+            teebe-*.zip
+            appcast.xml
           generate_release_notes: true
           draft: true

@@ -8,15 +8,28 @@ CONFIG="${1:-debug}"   # debug | release
 APP="teebe.app"
 LOGO="Sources/Teebe/Resources/teebe-logo.png"
 
+# Sparkle auto-update config. Override via env in CI; the public key pairs with
+# the EdDSA private key used to sign updates (see CONTRIBUTING.md). The feed
+# points at the appcast published alongside each GitHub Release.
+SU_FEED_URL="${SU_FEED_URL:-https://github.com/klein-t/teebe/releases/latest/download/appcast.xml}"
+SU_PUBLIC_ED_KEY="${SU_PUBLIC_ED_KEY:-REPLACE_WITH_SPARKLE_PUBLIC_ED_KEY}"
+
 echo "==> swift build -c $CONFIG"
 swift build -c "$CONFIG"
 
-BIN="$(swift build -c "$CONFIG" --show-bin-path)/Teebe"
+BINDIR="$(swift build -c "$CONFIG" --show-bin-path)"
+BIN="$BINDIR/Teebe"
 
 echo "==> assembling $APP"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$BIN" "$APP/Contents/MacOS/teebe"
+
+# Embed Sparkle.framework (SwiftPM stages it next to the binary) and point the
+# executable's runtime search path at the bundle's Frameworks dir.
+echo "==> embedding Sparkle.framework"
+cp -R "$BINDIR/Sparkle.framework" "$APP/Contents/Frameworks/"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/teebe" 2>/dev/null || true
 
 # Build a multi-resolution AppIcon.icns from the logo so it shows in Finder,
 # the Dock, and the app switcher.
@@ -31,7 +44,7 @@ if [[ -f "$LOGO" ]]; then
   iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 fi
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -47,11 +60,17 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>SUFeedURL</key><string>${SU_FEED_URL}</string>
+  <key>SUPublicEDKey</key><string>${SU_PUBLIC_ED_KEY}</string>
+  <key>SUEnableAutomaticChecks</key><true/>
 </dict>
 </plist>
 PLIST
 
-# Ad-hoc sign so macOS is happy launching it locally.
+# Ad-hoc sign so macOS is happy launching it locally. Sign the embedded
+# framework first (inside-out), then the app. Real distribution replaces "-"
+# with a Developer ID identity + notarization (see CONTRIBUTING.md).
+codesign --force --deep --sign - "$APP/Contents/Frameworks/Sparkle.framework" >/dev/null 2>&1 || true
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 
 echo "==> built $APP"

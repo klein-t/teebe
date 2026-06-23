@@ -58,6 +58,49 @@ first contribution is merged, you must agree to the
 PR that you agree to the CLA. This lets the project stay offerable under both
 licenses.
 
+## Shipping updates (Sparkle)
+
+teebe self-updates via [Sparkle](https://sparkle-project.org). Updates are
+delivered through an **appcast** (`appcast.xml`) published as an asset on each
+GitHub Release; the app's `SUFeedURL` points at
+`releases/latest/download/appcast.xml`, so the feed always reflects the newest
+tag. Each update is integrity-signed with an **EdDSA key** — this is Sparkle's
+own signature and is independent of Apple notarization (which governs
+first-launch Gatekeeper trust, not updates).
+
+### One-time signing-key setup (maintainer)
+
+Sparkle ships a `generate_keys` tool (in the resolved package under
+`.build/artifacts/sparkle/Sparkle/bin/`). Run it once **in your Terminal** (it
+stores the private key in the login Keychain):
+
+```sh
+.build/artifacts/sparkle/Sparkle/bin/generate_keys      # prints the public key
+.build/artifacts/sparkle/Sparkle/bin/generate_keys -x sparkle_private.key   # export for CI
+```
+
+Then add these to the GitHub repo (Settings → Secrets and variables → Actions):
+
+- `SPARKLE_PUBLIC_ED_KEY` — the public key string (embedded in `Info.plist` at
+  build time via `SU_PUBLIC_ED_KEY`).
+- `SPARKLE_ED_PRIVATE_KEY` — the contents of `sparkle_private.key` (used by CI
+  to sign the appcast). Treat it like any signing secret; do not commit it.
+
+Delete `sparkle_private.key` after adding the secret. The private key is the
+root of update trust — if it leaks, rotate it (new keypair, new public key in
+the next release).
+
+### What happens on release
+
+The Release workflow builds the `.app` with the public key baked in, zips it,
+runs `generate_appcast` (signing each update with the private key), and uploads
+both the zip and `appcast.xml`. Existing users get an in-app "Update available"
+prompt; the menu also has **Check for Updates…**.
+
+> Note: until the app is Developer ID-signed and **notarized**, first-time
+> downloads still hit Gatekeeper (right-click → Open). Notarization is separate
+> from Sparkle and tracked independently.
+
 ## Security
 
 Never commit secrets. See [`SECURITY.md`](SECURITY.md) for the reporting policy
