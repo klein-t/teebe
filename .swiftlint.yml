@@ -1,0 +1,26 @@
+included:
+  - Sources
+  - Tests
+excluded:
+  - .build
+
+disabled_rules:
+  - trailing_whitespace
+  - todo
+  - line_length        # SF Mono fixtures / long URLs
+  - type_body_length
+  - file_length
+  - function_body_length
+
+opt_in_rules:
+  - empty_count
+
+identifier_name:
+  min_length: 1
+  max_length: 60
+
+# Parsers (diff/status) are intentionally branchy. Keep the warning at the
+# default so complexity stays visible, but don't hard-fail CI on it.
+cyclomatic_complexity:
+  warning: 10
+  error: 30

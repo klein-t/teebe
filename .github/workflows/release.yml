@@ -1,0 +1,36 @@
+name: Release
+
+# CD: on a version tag (vX.Y.Z), build a release .app bundle and attach it to a
+# GitHub Release. The bundle is ad-hoc signed only (see scripts/make-app.sh);
+# Developer ID signing + notarization are out of scope until signing certs are
+# wired in as repository secrets.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish .app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Build release .app bundle
+        run: ./scripts/make-app.sh release
+
+      - name: Zip the app
+        run: ditto -c -k --keepParent teebe.app "teebe-${GITHUB_REF_NAME}.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: teebe-*.zip
+          generate_release_notes: true
+          draft: true

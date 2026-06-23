@@ -1,0 +1,53 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# macOS
+.DS_Store
+
+# Local agent/session workspace (scheduled-task locks, etc.)
+.claude/
+**/.claude/
+CLAUDE.local.md
+
+# Generated project (XcodeGen)
+Teebe.xcodeproj/
+
+# Built app bundle (scripts/make-app.sh)
+Teebe.app/
+*.app/
+
+# Secrets / credentials — never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.key
+*.keystore
+*.mobileprovision
+*.cer
+*.certSigningRequest
+secrets.*
+**/secrets.*
+.infisical.json.local
+
+# Internal planning docs & agent instructions — kept local, never published
+docs/
+CLAUDE.md
+
+# AI / agent process artifacts — audit catalogs, findings write-ups, scratch
+# tracking docs, and skill-manager state. Local working notes, never published.
+*_AUDIT.md
+*_AUDIT.csv
+*_FINDINGS.md
+.agents/
+skills-lock.json
