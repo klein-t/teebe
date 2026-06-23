@@ -92,10 +92,16 @@ the next release).
 
 ### What happens on release
 
-The Release workflow builds the `.app` with the public key baked in, zips it,
-runs `generate_appcast` (signing each update with the private key), and uploads
-both the zip and `appcast.xml`. Existing users get an in-app "Update available"
-prompt; the menu also has **Check for Updates…**.
+The Release workflow builds the `.app` (stamping the tag as `CFBundleVersion`,
+which is what Sparkle compares to detect a newer version), zips it, runs
+`generate_appcast` (signing each update with the private key), and uploads both
+the zip and `appcast.xml` to a **draft** release.
+
+**Publishing the draft is what ships the update.** `SUFeedURL` points at
+`releases/latest/download/appcast.xml`, and GitHub's `latest` ignores drafts —
+so until you publish the release, existing apps won't see the new `appcast.xml`.
+Once published, existing users get an in-app "Update available" prompt; the menu
+also has **Check for Updates…**.
 
 > Note: until the app is Developer ID-signed and **notarized**, first-time
 > downloads still hit Gatekeeper (right-click → Open). Notarization is separate

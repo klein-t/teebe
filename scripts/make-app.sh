@@ -8,6 +8,13 @@ CONFIG="${1:-debug}"   # debug | release
 APP="teebe.app"
 LOGO="Sources/Teebe/Resources/teebe-logo.png"
 
+# Version stamped into the bundle. CFBundleVersion is what Sparkle's comparator
+# uses to decide whether an update is newer, so it MUST increase per release —
+# CI passes the release tag (e.g. APP_VERSION=0.2.0). A static value would make
+# every release look identical and Sparkle would never offer an update.
+APP_VERSION="${APP_VERSION:-0.1.0}"
+BUILD_NUMBER="${BUILD_NUMBER:-$APP_VERSION}"
+
 # Sparkle auto-update config. Override via env in CI; the public key pairs with
 # the EdDSA private key used to sign updates (see CONTRIBUTING.md). The feed
 # points at the appcast published alongside each GitHub Release.
@@ -55,8 +62,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>teebe</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
+  <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSHighResolutionCapable</key><true/>

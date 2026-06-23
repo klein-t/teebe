@@ -28,7 +28,10 @@ jobs:
           # Sparkle: public key embedded in Info.plist must pair with the private
           # key used to sign the appcast below. Set as a repo variable/secret.
           SU_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
-        run: ./scripts/make-app.sh release
+        run: |
+          # Stamp the release version into the bundle. CFBundleVersion must
+          # increase per release or Sparkle never sees a newer version.
+          APP_VERSION="${GITHUB_REF_NAME#v}" ./scripts/make-app.sh release
 
       - name: Stage update archive
         run: |
@@ -54,6 +57,9 @@ jobs:
         with:
           # Publish both the app zip and the appcast; SUFeedURL points at
           # releases/latest/download/appcast.xml so the feed tracks the newest tag.
+          # NOTE: the release is drafted — GitHub's `latest` ignores drafts, so the
+          # appcast URL only resolves once the draft is published. Publishing the
+          # release is the step that actually ships the update to existing users.
           files: |
             teebe-*.zip
             appcast.xml
