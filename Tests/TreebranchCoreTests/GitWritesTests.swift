@@ -103,4 +103,42 @@ struct GitWriteGuardTests {
         #expect(monitor.isBusy(worktreePath: "/wt", within: 5, now: base.addingTimeInterval(10)) == false)
         #expect(monitor.isBusy(worktreePath: "/unknown", within: 5, now: base) == false)
     }
+
+    @Test("live window is half-open: live up to but not at the boundary")
+    func busyWindowBoundary() {
+        let monitor = WorktreeActivityMonitor()
+        let base = Date(timeIntervalSince1970: 1000)
+        monitor.recordActivity(worktreePath: "/wt", at: base)
+
+        // At the instant of activity it is live.
+        #expect(monitor.isBusy(worktreePath: "/wt", within: 5, now: base) == true)
+        // Just inside the window: still live.
+        #expect(monitor.isBusy(worktreePath: "/wt", within: 5, now: base.addingTimeInterval(4.999)) == true)
+        // Exactly at the window edge: no longer live (half-open interval).
+        #expect(monitor.isBusy(worktreePath: "/wt", within: 5, now: base.addingTimeInterval(5)) == false)
+    }
+
+    @Test("a fresh write re-lights an expired worktree")
+    func busyReactivates() {
+        let monitor = WorktreeActivityMonitor()
+        let base = Date(timeIntervalSince1970: 1000)
+        monitor.recordActivity(worktreePath: "/wt", at: base)
+        let expired = base.addingTimeInterval(10)
+        #expect(monitor.isBusy(worktreePath: "/wt", within: 5, now: expired) == false)
+
+        // A new write at `expired` restarts the window from that moment.
+        monitor.recordActivity(worktreePath: "/wt", at: expired)
+        #expect(monitor.isBusy(worktreePath: "/wt", within: 5, now: expired.addingTimeInterval(2)) == true)
+    }
+
+    @Test("activity tracking is keyed per worktree")
+    func busyPerWorktree() {
+        let monitor = WorktreeActivityMonitor()
+        let base = Date(timeIntervalSince1970: 1000)
+        monitor.recordActivity(worktreePath: "/repo/wt-a", at: base)
+
+        // Only the written-to worktree is live; a sibling with no writes is not.
+        #expect(monitor.isBusy(worktreePath: "/repo/wt-a", within: 5, now: base.addingTimeInterval(1)) == true)
+        #expect(monitor.isBusy(worktreePath: "/repo/wt-b", within: 5, now: base.addingTimeInterval(1)) == false)
+    }
 }
