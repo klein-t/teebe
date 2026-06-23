@@ -13,6 +13,10 @@ struct FilesSection: View {
             SectionHeader(title: "FILES", isOpen: isOpen, onToggle: { isOpen.toggle() }) {
                 if isOpen {
                     Menu {
+                        Picker("Show", selection: $worktree.filter) {
+                            Text("All files").tag(ChangeFilter.all)
+                            Text("Changed only").tag(ChangeFilter.changed)
+                        }
                         Picker("Sort", selection: $worktree.sortOrder) {
                             Text("Name").tag(FileSortOrder.name)
                             Text("Recently changed").tag(FileSortOrder.recent)
@@ -134,7 +138,7 @@ struct FileRow: View {
         worktree.selectionSource = .files
         if node.isDirectory { worktree.toggleExpand(node) }
         if preview.isVisible, !node.isDirectory, let wt = worktree.worktreePath {
-            Task { await preview.update(for: node, worktreePath: wt, snapshot: worktree) }
+            Task { await preview.update(for: node, worktreePath: wt) }
         }
     }
 
@@ -148,6 +152,7 @@ struct FileContextMenu: View {
     let node: FileNode
     @Bindable var app: AppModel
     @Bindable var preview: PreviewModel
+    @Environment(\.openWindow) private var openWindow
 
     private var worktree: WorktreeModel { app.selector.worktree }
 
@@ -158,7 +163,16 @@ struct FileContextMenu: View {
         if !node.isDirectory {
             Button("Quick Look") {
                 guard let wt = worktree.worktreePath else { return }
-                Task { await preview.toggle(for: node, worktreePath: wt, snapshot: worktree) }
+                // Resolve content AND surface the floating preview window — the
+                // "preview" scene only appears via openWindow.
+                Task {
+                    if preview.isVisible {
+                        await preview.update(for: node, worktreePath: wt)
+                    } else {
+                        await preview.toggle(for: node, worktreePath: wt)
+                    }
+                    openWindow(id: "preview")
+                }
             }
         }
         Divider()

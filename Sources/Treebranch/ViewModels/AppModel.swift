@@ -18,18 +18,25 @@ final class AppModel {
         self.environment = environment
         self.selector = SelectorModel(environment: environment)
         self.floatOnTop = false
+        // Persist whenever the selection changes so the app reopens where it was left.
+        self.selector.onSelectionChange = { [weak self] in self?.persist() }
     }
 
     /// Load persisted state and hydrate repositories + selection.
     func bootstrap() async {
         let state = environment.store.load()
         floatOnTop = state.floatOnTop
-        repositories = state.repositories.map { Repository(path: $0.path, baseBranch: $0.baseBranch) }
+        repositories = state.repositories.map { Repository(path: $0.path) }
         selector.setRepositories(repositories)
-        if let last = state.lastSelectedRepoPath, let repo = repositories.first(where: { $0.path == last }) {
-            await selector.selectRepo(repo)
-        } else if let first = repositories.first {
-            await selector.selectRepo(first)
+        let target = state.lastSelectedRepoPath.flatMap { last in repositories.first { $0.path == last } }
+            ?? repositories.first
+        guard let target else { return }
+        await selector.selectRepo(target)   // focuses the primary worktree
+        // Restore the last selected worktree if it still exists (else keep primary).
+        if let wtPath = state.lastSelectedWorktreePath,
+           selector.selectedWorktree?.path != wtPath,
+           let saved = selector.worktrees.first(where: { $0.path == wtPath }) {
+            await selector.selectWorktree(saved)
         }
     }
 
@@ -61,13 +68,6 @@ final class AppModel {
         if selector.selectedRepo?.path == repo.path {
             selector.clearSelection()
         }
-        persist()
-    }
-
-    func setBaseBranch(_ base: String?, for repo: Repository) {
-        guard let index = repositories.firstIndex(where: { $0.path == repo.path }) else { return }
-        repositories[index].baseBranch = base
-        selector.setRepositories(repositories)
         persist()
     }
 
@@ -134,9 +134,12 @@ final class AppModel {
     private func runFileOp(_ operation: @escaping () throws -> Void) {
         do {
             try operation()
+            // This was teebe's own write — don't let the resulting file-watch event
+            // read as external agent activity.
+            selector.worktree.noteSelfWrite()
             Task { await selector.worktree.refresh() }
         } catch {
-            errorMessage = "File operation failed: \(error)"
+            errorMessage = "File operation failed: \(WorktreeModel.describe(error))"
         }
     }
 
@@ -189,7 +192,7 @@ final class AppModel {
                 try await environment.worktreeService.removeWorktree(in: repo, worktree: worktree, force: false)
                 await selector.selectRepo(repo)
             } catch {
-                errorMessage = "Couldn't remove worktree: \(error)"
+                errorMessage = "Couldn't remove worktree: \(WorktreeModel.describe(error))"
             }
         }
     }
@@ -208,7 +211,7 @@ final class AppModel {
 
     func persist() {
         var state = environment.store.load()
-        state.repositories = repositories.map { PersistedRepository(path: $0.path, baseBranch: $0.baseBranch) }
+        state.repositories = repositories.map { PersistedRepository(path: $0.path) }
         state.floatOnTop = floatOnTop
         state.lastSelectedRepoPath = selector.selectedRepo?.path
         state.lastSelectedWorktreePath = selector.selectedWorktree?.path

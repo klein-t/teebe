@@ -8,15 +8,12 @@ public struct Repository: Identifiable, Hashable, Sendable {
     public var path: String
     /// Display name (defaults to the last path component).
     public var name: String
-    /// Configured base branch (`nil` = auto-detect `main` then `master`).
-    public var baseBranch: String?
 
     public var id: String { path }
 
-    public init(path: String, name: String? = nil, baseBranch: String? = nil) {
+    public init(path: String, name: String? = nil) {
         self.path = path
         self.name = name ?? (path as NSString).lastPathComponent
-        self.baseBranch = baseBranch
     }
 }
 

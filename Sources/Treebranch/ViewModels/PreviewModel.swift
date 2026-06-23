@@ -24,34 +24,22 @@ final class PreviewModel {
         self.environment = environment
     }
 
-    /// Spacebar: toggle the panel. Opening resolves content for `node`. When
-    /// `snapshot` is provided (read-only branch browse), text/Quick Look content is
-    /// read from the committed ref via `git show`, never the working directory (D2).
-    func toggle(for node: FileNode?, worktreePath: String, snapshot: WorktreeModel? = nil) async {
+    /// Spacebar: toggle the panel. Opening resolves content for `node`.
+    func toggle(for node: FileNode?, worktreePath: String) async {
         if isVisible {
             close()
             return
         }
         guard let node, !node.isDirectory else { return }
-        await update(for: node, worktreePath: worktreePath, snapshot: snapshot)
+        await update(for: node, worktreePath: worktreePath)
         isVisible = true
     }
 
     /// Arrow keys while open: live-update the preview to a new selection.
-    func update(for node: FileNode, worktreePath: String, snapshot: WorktreeModel? = nil) async {
+    func update(for node: FileNode, worktreePath: String) async {
         guard !node.isDirectory else { return }
         currentPath = node.path
         let url = URL(fileURLWithPath: node.path)
-
-        // Branch-snapshot browse: committed content via git show, not disk (D2).
-        if let snapshot, snapshot.isBrowsingSnapshot {
-            if let text = await snapshot.snapshotContent(forNodePath: node.path) {
-                content = .text(text)
-            } else {
-                content = .quickLook(url)
-            }
-            return
-        }
 
         switch PreviewResolver.kind(forFileName: node.name, change: node.change) {
         case .diff:

@@ -8,11 +8,7 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     var worktreesResult: [Worktree] = []
     var branchesResult: [Branch] = []
     var statusResult = StatusResult()
-    var nameStatusResult: [NameStatusEntry] = []
-    var committedDiffResult: DiffFile?
     var workingDiffResult: DiffFile?
-    var listTreeResult: [String] = []
-    var showFileResult = Data()
     /// If set, the next call throws this error.
     var errorToThrow: GitError?
     /// Number of times the next write should throw `.lockedIndex` before succeeding
@@ -25,7 +21,6 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     private(set) var discardedWorking: [[String]] = []
     private(set) var discardedUntracked: [[String]] = []
     private(set) var commitMessages: [String] = []
-    private(set) var checkouts: [String] = []
     private(set) var addedWorktrees: [(path: String, branch: String?, createBranch: Bool)] = []
     private(set) var removedWorktrees: [(path: String, force: Bool)] = []
     private(set) var runInvocations: [[String]] = []
@@ -46,27 +41,15 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     func branches(repoPath: String) async throws -> [Branch] { try throwIfNeeded(); return branchesResult }
     func status(worktreePath: String) async throws -> StatusResult { try throwIfNeeded(); return statusResult }
 
-    func changedFilesVsBase(worktreePath: String, base: String) async throws -> [NameStatusEntry] {
-        try throwIfNeeded(); return nameStatusResult
-    }
-
-    func committedDiff(worktreePath: String, base: String, path: String) async throws -> DiffFile? {
-        try throwIfNeeded(); return committedDiffResult
-    }
-
     func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? {
         try throwIfNeeded(); workingDiffStagedFlags.append(staged); return workingDiffResult
     }
-
-    func listTree(repoPath: String, ref: String) async throws -> [String] { try throwIfNeeded(); return listTreeResult }
-    func showFile(repoPath: String, ref: String, path: String) async throws -> Data { try throwIfNeeded(); return showFileResult }
 
     func stage(worktreePath: String, paths: [String]) async throws { try throwLockIfNeeded(); try throwIfNeeded(); stagedPaths.append(paths) }
     func unstage(worktreePath: String, paths: [String]) async throws { try throwLockIfNeeded(); try throwIfNeeded(); unstagedPaths.append(paths) }
     func discardWorking(worktreePath: String, paths: [String]) async throws { try throwLockIfNeeded(); try throwIfNeeded(); discardedWorking.append(paths) }
     func discardUntracked(worktreePath: String, paths: [String]) async throws { try throwLockIfNeeded(); try throwIfNeeded(); discardedUntracked.append(paths) }
     func commit(worktreePath: String, message: String) async throws { try throwLockIfNeeded(); try throwIfNeeded(); commitMessages.append(message) }
-    func checkout(worktreePath: String, branch: String) async throws { try throwLockIfNeeded(); try throwIfNeeded(); checkouts.append(branch) }
 
     func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool) async throws {
         try throwIfNeeded(); addedWorktrees.append((path, branch, createBranch))

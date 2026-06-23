@@ -32,17 +32,7 @@ public struct ProcessGitClient: GitClient {
         return StatusParser.parse(result.stdoutString)
     }
 
-    public func changedFilesVsBase(worktreePath: String, base: String) async throws -> [NameStatusEntry] {
-        let result = try await runChecked(["diff", "--name-status", "-z", "\(base)...HEAD"], in: worktreePath)
-        return Self.parseNameStatus(result.stdoutString)
-    }
-
     // MARK: - Diffs
-
-    public func committedDiff(worktreePath: String, base: String, path: String) async throws -> DiffFile? {
-        let result = try await runChecked(["diff", "\(base)...HEAD", "--", path], in: worktreePath)
-        return DiffParser.parse(result.stdoutString).first
-    }
 
     public func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? {
         var args = ["diff"]
@@ -50,20 +40,6 @@ public struct ProcessGitClient: GitClient {
         args.append(contentsOf: ["--", path])
         let result = try await runChecked(args, in: worktreePath)
         return DiffParser.parse(result.stdoutString).first
-    }
-
-    // MARK: - Branch snapshot browse
-
-    public func listTree(repoPath: String, ref: String) async throws -> [String] {
-        let result = try await runChecked(["ls-tree", "-r", "--name-only", "-z", ref], in: repoPath)
-        return result.stdoutString
-            .split(separator: "\u{0}", omittingEmptySubsequences: true)
-            .map(String.init)
-    }
-
-    public func showFile(repoPath: String, ref: String, path: String) async throws -> Data {
-        let result = try await runChecked(["show", "\(ref):\(path)"], in: repoPath)
-        return result.standardOutput
     }
 
     // MARK: - Writes
@@ -90,10 +66,6 @@ public struct ProcessGitClient: GitClient {
 
     public func commit(worktreePath: String, message: String) async throws {
         _ = try await runChecked(["commit", "-m", message], in: worktreePath)
-    }
-
-    public func checkout(worktreePath: String, branch: String) async throws {
-        _ = try await runChecked(["checkout", branch], in: worktreePath)
     }
 
     // MARK: - Worktree management
@@ -195,34 +167,5 @@ public struct ProcessGitClient: GitClient {
             return .lockedIndex(path: directory)
         }
         return .commandFailed(command: ["git"] + arguments, exitCode: result.exitCode, stderr: result.standardError)
-    }
-
-    // MARK: - name-status (-z) parsing
-
-    /// Parse `git diff --name-status -z` output. Records are NUL-separated; R/C
-    /// statuses carry a score and are followed by old- and new-path tokens.
-    static func parseNameStatus(_ output: String) -> [NameStatusEntry] {
-        let tokens = output.split(separator: "\u{0}", omittingEmptySubsequences: true).map(String.init)
-        var entries: [NameStatusEntry] = []
-        var index = 0
-        while index < tokens.count {
-            let statusToken = tokens[index]
-            index += 1
-            guard let first = statusToken.first else { continue }
-            let status = ChangeStatus(porcelainCode: first) ?? .modified
-            if first == "R" || first == "C" {
-                guard index + 1 < tokens.count else { break }
-                let original = tokens[index]
-                let newPath = tokens[index + 1]
-                index += 2
-                entries.append(NameStatusEntry(status: status, path: newPath, originalPath: original))
-            } else {
-                guard index < tokens.count else { break }
-                let path = tokens[index]
-                index += 1
-                entries.append(NameStatusEntry(status: status, path: path))
-            }
-        }
-        return entries
     }
 }

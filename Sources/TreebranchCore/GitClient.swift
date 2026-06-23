@@ -30,8 +30,6 @@ public enum GitError: Error, Sendable, Equatable {
     case notAGitRepository(path: String)
     /// `index.lock` is held and did not clear within the retry budget.
     case lockedIndex(path: String)
-    /// No base branch could be resolved for the repo.
-    case missingBaseBranch(repo: String)
     /// The worktree was recently written by an agent; a guarded op refused.
     case worktreeBusy(path: String)
     /// `git` executable could not be located.
@@ -72,26 +70,13 @@ public struct StatusResult: Equatable, Sendable {
     }
 }
 
-/// A `git diff --name-status` entry (status letter + path, plus source for R/C).
-public struct NameStatusEntry: Equatable, Hashable, Sendable {
-    public var status: ChangeStatus
-    public var path: String
-    public var originalPath: String?
-
-    public init(status: ChangeStatus, path: String, originalPath: String? = nil) {
-        self.status = status
-        self.path = path
-        self.originalPath = originalPath
-    }
-}
-
 // MARK: - GitClient protocol
 
 /// Typed, async access to git. `ProcessGitClient` implements it by shelling out to
 /// the system `git`; `FakeGitClient` provides scripted results for tests.
 ///
-/// Write methods (`stage`/`unstage`/`discard*`/`commit`/`checkout`/worktree
-/// management) MUST be serialized per repo by the caller (see `RepoGitQueue`).
+/// Write methods (`stage`/`unstage`/`discard*`/`commit`/worktree management) MUST
+/// be serialized per repo by the caller (see `RepoGitQueue`).
 public protocol GitClient: Sendable {
     // Discovery
     func worktrees(repoPath: String) async throws -> [Worktree]
@@ -99,15 +84,9 @@ public protocol GitClient: Sendable {
 
     // Status & changes
     func status(worktreePath: String) async throws -> StatusResult
-    func changedFilesVsBase(worktreePath: String, base: String) async throws -> [NameStatusEntry]
 
     // Diffs
-    func committedDiff(worktreePath: String, base: String, path: String) async throws -> DiffFile?
     func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile?
-
-    // Branch snapshot browse (read-only, no checkout)
-    func listTree(repoPath: String, ref: String) async throws -> [String]
-    func showFile(repoPath: String, ref: String, path: String) async throws -> Data
 
     // Writes (serialize per repo)
     func stage(worktreePath: String, paths: [String]) async throws
@@ -115,7 +94,6 @@ public protocol GitClient: Sendable {
     func discardWorking(worktreePath: String, paths: [String]) async throws
     func discardUntracked(worktreePath: String, paths: [String]) async throws
     func commit(worktreePath: String, message: String) async throws
-    func checkout(worktreePath: String, branch: String) async throws
 
     // Worktree management
     func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool) async throws

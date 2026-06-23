@@ -50,44 +50,12 @@ struct ServicesTests {
         #expect(fake.workingDiffStagedFlags == [false])
     }
 
-    @Test("BranchService resolves configured base when present")
-    func resolveConfiguredBase() async throws {
+    @Test("BranchService lists a repo's branches")
+    func branchesList() async throws {
         let fake = FakeGitClient()
         fake.branchesResult = [Branch(name: "main"), Branch(name: "develop")]
         let service = BranchService(git: fake)
-        let configured = Repository(path: "/repo", baseBranch: "develop")
-        let base = try await service.resolveBaseBranch(for: configured)
-        #expect(base == "develop")
-    }
-
-    @Test("BranchService falls back to main")
-    func resolveDefaultBase() async throws {
-        let fake = FakeGitClient()
-        fake.branchesResult = [Branch(name: "master"), Branch(name: "main"), Branch(name: "topic")]
-        let service = BranchService(git: fake)
-        let base = try await service.resolveBaseBranch(for: repo)
-        #expect(base == "main")
-    }
-
-    @Test("BranchService throws missingBaseBranch when none match")
-    func resolveMissingBase() async throws {
-        let fake = FakeGitClient()
-        fake.branchesResult = [Branch(name: "topic")]
-        let service = BranchService(git: fake)
-        await #expect(throws: GitError.self) {
-            _ = try await service.resolveBaseBranch(for: repo)
-        }
-    }
-
-    @Test("BranchService filters remotes from local names")
-    func localNamesOnly() async throws {
-        let fake = FakeGitClient()
-        fake.branchesResult = [
-            Branch(name: "main"),
-            Branch(name: "origin/main", isRemote: true),
-        ]
-        let service = BranchService(git: fake)
-        let names = try await service.localBranchNames(for: repo)
-        #expect(names == ["main"])
+        let names = try await service.branches(for: repo).map(\.name)
+        #expect(names == ["main", "develop"])
     }
 }
