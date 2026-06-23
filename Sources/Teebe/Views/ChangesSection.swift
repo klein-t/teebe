@@ -24,12 +24,12 @@ struct ChangesSection: View {
 
             if isOpen {
                 VStack(spacing: 0) {
-                    commitBox
                     ScrollView {
                         changeList
                     }
                     .scrollBounceBehavior(.basedOnSize)
                 }
+                .padding(.top, 8)
                 .padding(.bottom, 6)
                 .transition(.opacity)
             }
@@ -38,68 +38,10 @@ struct ChangesSection: View {
         .clipped()
     }
 
-    private var commitBox: some View {
-        VStack(spacing: 7) {
-            TextField(
-                "Message (⌘↩ to commit on \(app.selector.selectedWorktree?.branch ?? "—"))",
-                text: $worktree.commitMessage,
-                axis: .vertical
-            )
-            .textFieldStyle(.plain)
-            .font(.system(size: 12))
-            .lineLimit(1...3)
-            .padding(.horizontal, 9).padding(.vertical, 7)
-            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
-            .onSubmit { Task { await worktree.commitPending() } }
-
-            Button {
-                Task { await worktree.commitPending() }
-            } label: {
-                Text(commitLabel)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 30)
-                    .foregroundStyle(commitEnabled ? .white : Palette.secondaryText)
-                    .background(commitEnabled ? Palette.accent : Color.primary.opacity(0.05),
-                                in: RoundedRectangle(cornerRadius: 6))
-                    .contentShape(RoundedRectangle(cornerRadius: 6))
-            }
-            .buttonStyle(PressableButtonStyle())
-            .disabled(!commitEnabled)
-            .keyboardShortcut(.return, modifiers: .command)   // ⌘↩ (matches the field's placeholder)
-            .animation(.easeOut(duration: 0.2), value: commitEnabled)
-            .animation(.snappy(duration: 0.22), value: worktree.changeCount)
-        }
-        .padding(.horizontal, 11).padding(.top, 8).padding(.bottom, 6)
-    }
-
-    private var commitEnabled: Bool {
-        worktree.changeCount > 0 && !worktree.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var commitLabel: String {
-        if worktree.changeCount == 0 { return "✓ Nothing to commit" }
-        if worktree.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Enter a message to commit" }
-        return "Commit \(worktree.changeCount) change\(worktree.changeCount == 1 ? "" : "s")"
-    }
-
     private var changeList: some View {
         VStack(spacing: 0) {
-            ForEach(worktree.changeGroups) { group in
-                if !group.folder.isEmpty {
-                    HStack(spacing: 6) {
-                        Text("▾").font(.system(size: 13)).foregroundStyle(Palette.secondaryText).frame(width: 13)
-                        Text(group.folder).font(.system(size: 12.5)).foregroundStyle(.primary)
-                        Spacer()
-                        Circle().fill(Palette.amber).frame(width: 6, height: 6)
-                    }
-                    .padding(.horizontal, 11).padding(.leading, 14).frame(height: 24)
-                }
-                ForEach(group.changes) { change in
-                    changeRow(change, indented: !group.folder.isEmpty)
-                }
+            ForEach(worktree.changes) { change in
+                changeRow(change, indented: false)
             }
             if worktree.changeCount == 0 {
                 Text("No changes")

@@ -161,11 +161,25 @@ struct SectionHeader<Trailing: View>: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Text("▸")
-                .font(.system(size: 15))
+            // The native macOS DisclosureGroup glyph: a `chevron.right` is a thin,
+            // doubly-symmetric stroke whose ink centroid coincides with its
+            // bounding-box center, so rotating it about the default `.center` anchor
+            // is a true spin-in-place. A *filled* `arrowtriangle.right.fill` has its
+            // area-centroid 1/3 from the base, NOT at the bbox center, so rotating it
+            // swept the visual mass through an arc — a left/down lurch read as a
+            // "bounce" that survives any easing curve and any glyph SOURCE swap
+            // (text→symbol) because it is geometric, not temporal. A square frame +
+            // explicit `.center` anchor pins the pivot to the glyph's visual center.
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(Palette.secondaryText)
-                .frame(width: 13)
-                .rotationEffect(.degrees(isOpen ? 90 : 0))
+                .frame(width: 13, height: 13)
+                .rotationEffect(.degrees(isOpen ? 90 : 0), anchor: .center)
+                // Linear, not eased: everything else on a toggle snaps, so the
+                // arrow was the lone element with an ease-out landing — that soft
+                // settle read as a "bounce". A short constant-speed flip with a hard
+                // stop has no accel/decel and nothing to settle.
+                .animation(.linear(duration: 0.1), value: isOpen)
             Text(title)
                 .font(.system(size: 11, weight: .bold))
                 .tracking(0.5)
@@ -178,7 +192,10 @@ struct SectionHeader<Trailing: View>: View {
         .padding(.horizontal, 9)
         .frame(height: 32)
         .contentShape(Rectangle())
-        .onTapGesture { withAnimation(.snappy(duration: 0.26)) { onToggle() } }
+        // The layout/window resize is animated by RootView.setOpen (it eases on
+        // open but snaps on close, so the window and content never desync and
+        // bounce). The header just reports the toggle.
+        .onTapGesture { onToggle() }
     }
 }
 

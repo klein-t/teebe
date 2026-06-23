@@ -159,6 +159,9 @@ struct RootView: View {
     private func setOpen(_ section: Section, _ open: Bool) {
         // Remember the free-resize height before leaving a scrollable layout.
         if heightLocked == false, let window { expandedHeight = window.frame.height }
+        // Snap the content state — the *window* owns the open/close motion (see
+        // applyWindowSizing). Animating the content here would race the window's
+        // content-pinned min-size and bounce.
         switch section {
         case .worktrees: openWorktrees = open
         case .changes: openChanges = open
@@ -230,11 +233,15 @@ struct RootView: View {
         guard let window else { return }
         let target = targetHeight()
         setHeightLocked(heightLocked, height: target)
-        // Animate growth, but snap any shrink: the content is top-anchored, so an
-        // animated window lags behind the instantly-collapsed headers and flashes
-        // an empty "chin" below the last header until it catches up.
+        // Animate only a grow into a *free* (scrollable) layout — the window glides
+        // open to reveal CHANGES / FILES. Everything else snaps:
+        //  • Shrinks snap, or the top-anchored content flashes an empty "chin" while
+        //    the window lags behind the collapsed headers.
+        //  • Height-locked states are content-pinned (windowResizability is
+        //    .contentMinSize), so an animated frame races the content's min-size and
+        //    bounces. Snapping keeps the window and content in lockstep.
         let shrinking = target < window.frame.height
-        setWindowHeight(target, animated: animated && !shrinking)
+        setWindowHeight(target, animated: animated && !shrinking && !heightLocked)
     }
 
     /// User finished dragging the window edge → remember the new height, but only

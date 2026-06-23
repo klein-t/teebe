@@ -101,11 +101,8 @@ struct WorktreesSection: View {
             Image(systemName: "shippingbox").font(.system(size: 11)).foregroundStyle(Palette.secondaryText)
             Text(repo.name).font(.system(size: 12.5, weight: .semibold)).lineLimit(1)
             Spacer(minLength: 6)
-            if let active = selector.selectedWorktree {
-                Text(selector.info(for: active).syncText)
-                    .font(.system(size: 11)).monospacedDigit().foregroundStyle(Palette.secondaryText)
-                    .fixedSize()
-            }
+            // The sync indicator belongs on individual worktree rows, not the repo
+            // root — the root isn't itself a branch with an ahead/behind count.
         }
         .padding(.horizontal, 11).frame(height: 25)
     }
