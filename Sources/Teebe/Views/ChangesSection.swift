@@ -23,19 +23,29 @@ struct ChangesSection: View {
             }
 
             if isOpen {
+                // Hug the rows when there's room (like WORKTREES) rather than
+                // grabbing the flexible space FILES should own; cap at the content
+                // height and scroll inside only when the window is too short.
                 VStack(spacing: 0) {
                     ScrollView {
                         changeList
                     }
                     .scrollBounceBehavior(.basedOnSize)
+                    .frame(maxHeight: listContentHeight)
                 }
                 .padding(.top, 8)
                 .padding(.bottom, 6)
                 .transition(.opacity)
             }
         }
-        .frame(maxHeight: isOpen ? .infinity : nil)
         .clipped()
+    }
+
+    /// Estimated natural height of the change list, used to cap the section so it
+    /// hugs its rows yet can shrink-and-scroll when space is tight.
+    private var listContentHeight: CGFloat {
+        let count = worktree.changeCount
+        return count == 0 ? 24 : CGFloat(count) * 24   // rows are 24pt tall
     }
 
     private var changeList: some View {
