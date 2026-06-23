@@ -95,8 +95,10 @@ struct WorktreesSection: View {
 
     private func repoSubheader(_ repo: Repository) -> some View {
         HStack(spacing: 7) {
-            Text("▾").font(.system(size: 13)).foregroundStyle(Palette.secondaryText).frame(width: 13)
-            Image(systemName: "square.dashed").font(.system(size: 11)).foregroundStyle(Palette.secondaryText)
+            // No disclosure triangle: there's only ever one repo root to show, so a
+            // collapse affordance would be a no-op. Reintroduce it if/when the
+            // workspace can hold multiple repos.
+            Image(systemName: "shippingbox").font(.system(size: 11)).foregroundStyle(Palette.secondaryText)
             Text(repo.name).font(.system(size: 12.5, weight: .semibold)).lineLimit(1)
             Spacer(minLength: 6)
             if let active = selector.selectedWorktree {

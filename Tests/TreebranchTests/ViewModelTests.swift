@@ -65,6 +65,43 @@ struct SelectorModelTests {
         #expect(selector.worktree.worktreePath == "/repo")
     }
 
+    @Test("live dot lights for a worktree written to within the window, off after it")
+    func liveDotWindow() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [
+            Worktree(path: "/repo", branch: "main", isPrimary: true),
+            Worktree(path: "/repo-wt", branch: "feature")
+        ]
+        let monitor = WorktreeActivityMonitor()
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git, monitor: monitor))
+        await selector.selectRepo(Repository(path: "/repo"))
+
+        let t = Date(timeIntervalSince1970: 1000)
+        monitor.recordActivity(worktreePath: "/repo-wt", at: t)
+
+        // Just after the write: only the written-to worktree's dot is live.
+        selector.refreshLiveState(now: t.addingTimeInterval(2))
+        #expect(selector.info(for: git.worktreesResult[1]).isLive == true)
+        #expect(selector.info(for: git.worktreesResult[0]).isLive == false)
+
+        // Once the window elapses, the dot goes idle again.
+        selector.refreshLiveState(now: t.addingTimeInterval(5))
+        #expect(selector.info(for: git.worktreesResult[1]).isLive == false)
+    }
+
+    @Test("refreshWorktreeInfo computes live state alongside sync counts")
+    func liveDotViaRefreshInfo() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        let monitor = WorktreeActivityMonitor()
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git, monitor: monitor))
+        await selector.selectRepo(Repository(path: "/repo"))
+
+        let t = Date(timeIntervalSince1970: 1000)
+        monitor.recordActivity(worktreePath: "/repo", at: t)
+        await selector.refreshWorktreeInfo(now: t.addingTimeInterval(1))
+        #expect(selector.info(for: git.worktreesResult[0]).isLive == true)
+    }
 }
 
 @MainActor
