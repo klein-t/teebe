@@ -52,6 +52,20 @@ swift run Teebe  # launches the app
 Requires macOS 14+ and a Swift 6 toolchain (built in Swift 5 language mode). Git
 integration tests shell out to the system `git` against throwaway temp repos.
 
+## Choosing a repository
+
+teebe is multi-repo. There's no hardcoded path — it simply reopens whatever you
+had selected last (state lives in
+`~/Library/Application Support/teebe/state.json`).
+
+- **Add a repo:** in the **WORKTREES** header, click **+**, or open the **···**
+  menu → **Add Repository…**, then pick the repo folder.
+- **Switch repos:** open the **···** menu and choose any repo you've added.
+- **Remove the current repo:** **···** menu → **Remove _name_**.
+
+If it keeps reopening the same repo, that's just the restored last selection —
+add or switch to another and it'll remember that one next launch.
+
 ## Project layout
 
 - `Sources/TeebeCore/` — pure, UI-independent core: models, `GitClient`
