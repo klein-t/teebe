@@ -8,9 +8,27 @@ enum Brand {
 
     /// The teebe logo, loaded once from the app bundle. Used for the empty state
     /// and the Dock / app icon.
-    static let logo: NSImage? = Bundle.module
+    static let logo: NSImage? = resourceBundle?
         .url(forResource: "teebe-logo", withExtension: "png")
         .flatMap(NSImage.init(contentsOf:))
+
+    /// Locate the SwiftPM resource bundle (`Teebe_Teebe.bundle`) across run modes.
+    /// We deliberately avoid `Bundle.module`: its generated accessor only checks
+    /// the app *root* (`Bundle.main.bundleURL/Teebe_Teebe.bundle`) plus a hardcoded
+    /// build path, and **fatal-errors** when neither exists. A code-signed `.app`
+    /// can't keep resources at its root (codesign requires everything under
+    /// `Contents/`), so in a packaged build the bundle lives in `Contents/Resources/`.
+    /// Probe both that and the dir next to the executable (`swift run`).
+    private static let resourceBundle: Bundle? = {
+        let bundleName = "Teebe_Teebe.bundle"
+        let roots = [Bundle.main.resourceURL, Bundle.main.bundleURL].compactMap { $0 }
+        for root in roots {
+            let candidate = root.appendingPathComponent(bundleName)
+            if let bundle = Bundle(url: candidate) { return bundle }
+        }
+        // Fall back to the main bundle itself (resources copied in flat).
+        return Bundle.main
+    }()
 }
 
 /// Shared color palette.
