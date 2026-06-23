@@ -92,10 +92,12 @@ struct FileRow: View {
     var body: some View {
         HStack(spacing: 6) {
             if node.isDirectory {
-                Text("▸")
-                    .font(.system(size: 13)).frame(width: 13)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .animation(.snappy(duration: 0.2), value: isExpanded)   // was an instant snap
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold)).frame(width: 13, height: 13)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0), anchor: .center)
+                    // Short constant-speed flip, hard stop — no spring, no ease-out
+                    // settle (which read as a "bounce" on the lone moving element).
+                    .animation(.linear(duration: 0.1), value: isExpanded)
                     .foregroundStyle(isSelected ? .white : Palette.secondaryText)
             } else {
                 Spacer().frame(width: 13)
