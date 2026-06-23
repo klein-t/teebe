@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Sources/Teebe/Resources/teebe-logo.png" alt="teebe" width="180">
+</p>
+
 # teebe
 
 A native macOS file browser built for the multi-agent era.
@@ -10,6 +14,10 @@ parallel across git worktrees, **teebe** is the calm control room that shows
 you — across all your repos and worktrees — what files exist and what's changing.
 It does not replace your editor: it's the navigator that launches files into
 whatever native app you already use.
+
+<p align="center">
+  <img src="assets/teebe-overview.png" alt="teebe showing a worktree's files alongside an inline diff" width="760">
+</p>
 
 > Status: in development. `TeebeCore` (git layer, parsers, services, file
 > watcher, file ops, write queue) and the app's view models are implemented and
@@ -93,6 +101,12 @@ touching right now.
 - **Multi-repo**: add several repos; an Overview shows all worktrees at once.
 - **Read-write** at the file-management level (rename/move/trash/new) and the git
   level (stage/discard/commit). Content editing is delegated to native apps.
+
+<p align="center">
+  <img src="assets/teebe-collapsed.png" alt="teebe collapsed to its WORKTREES, CHANGES and FILES sections" height="260">
+  &nbsp;&nbsp;
+  <img src="assets/teebe-worktrees.png" alt="the WORKTREES list expanded across a repo's branches" height="260">
+</p>
 
 ## What it is not (v1)
 
