@@ -32,17 +32,6 @@ struct RepoStoryTests {
         app.removeRepository(Repository(path: "/repo"))
         #expect(env.store.load().repositories.isEmpty)
     }
-
-    @Test("A6: setting a base branch persists it on the repo")
-    func a6SetBasePersists() async {
-        let git = FakeGitClient()
-        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
-        let env = makeTestEnvironment(git: git)
-        let app = AppModel(environment: env)
-        _ = await app.addRepository(path: "/repo")
-        app.setBaseBranch("develop", for: Repository(path: "/repo"))
-        #expect(env.store.load().repositories.first?.baseBranch == "develop")
-    }
 }
 
 @MainActor

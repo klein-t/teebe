@@ -2,9 +2,8 @@ import Foundation
 import Observation
 import TreebranchCore
 
-/// Drives the `Repo ▾ · Worktree ▾ · Branch ▾` selectors. Switching a selector
-/// repopulates downstream state and the worktree view. Branch selection defaults
-/// to read-only snapshot browse (D2).
+/// Drives the `Repo ▾ · Worktree ▾` selectors. Switching a selector repopulates
+/// downstream state and the worktree view.
 @MainActor
 @Observable
 final class SelectorModel {
@@ -21,8 +20,6 @@ final class SelectorModel {
     private(set) var worktrees: [Worktree] = []
     private(set) var selectedWorktree: Worktree?
     private(set) var branches: [Branch] = []
-    /// Branch chosen for read-only browse (nil = viewing the worktree's own branch).
-    private(set) var browseBranch: Branch?
     /// Sync/activity info keyed by worktree path.
     private(set) var worktreeInfo: [String: WorktreeInfo] = [:]
     var errorMessage: String?
@@ -62,7 +59,6 @@ final class SelectorModel {
         worktrees = []
         selectedWorktree = nil
         branches = []
-        browseBranch = nil
         worktree.clear()
         onSelectionChange?()
     }
@@ -71,7 +67,6 @@ final class SelectorModel {
     /// worktree.
     func selectRepo(_ repo: Repository) async {
         selectedRepo = repo
-        browseBranch = nil
         do {
             worktrees = try await environment.worktreeService.worktrees(for: repo)
             branches = try await environment.branchService.branches(for: repo)
@@ -111,23 +106,7 @@ final class SelectorModel {
 
     func selectWorktree(_ wt: Worktree) async {
         selectedWorktree = wt
-        browseBranch = nil
         await worktree.load(worktreePath: wt.path, repo: selectedRepo)
         onSelectionChange?()
-    }
-
-    /// Browse another branch read-only (snapshot), without checkout (D2).
-    func browse(branch: Branch) async {
-        browseBranch = branch
-        guard let repo = selectedRepo else { return }
-        await worktree.loadSnapshot(repo: repo, ref: branch.name)
-    }
-
-    /// Return to viewing the worktree's own working tree.
-    func stopBrowsing() async {
-        browseBranch = nil
-        if let wt = selectedWorktree {
-            await worktree.load(worktreePath: wt.path, repo: selectedRepo)
-        }
     }
 }

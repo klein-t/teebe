@@ -26,7 +26,7 @@ final class AppModel {
     func bootstrap() async {
         let state = environment.store.load()
         floatOnTop = state.floatOnTop
-        repositories = state.repositories.map { Repository(path: $0.path, baseBranch: $0.baseBranch) }
+        repositories = state.repositories.map { Repository(path: $0.path) }
         selector.setRepositories(repositories)
         let target = state.lastSelectedRepoPath.flatMap { last in repositories.first { $0.path == last } }
             ?? repositories.first
@@ -68,13 +68,6 @@ final class AppModel {
         if selector.selectedRepo?.path == repo.path {
             selector.clearSelection()
         }
-        persist()
-    }
-
-    func setBaseBranch(_ base: String?, for repo: Repository) {
-        guard let index = repositories.firstIndex(where: { $0.path == repo.path }) else { return }
-        repositories[index].baseBranch = base
-        selector.setRepositories(repositories)
         persist()
     }
 
@@ -218,7 +211,7 @@ final class AppModel {
 
     func persist() {
         var state = environment.store.load()
-        state.repositories = repositories.map { PersistedRepository(path: $0.path, baseBranch: $0.baseBranch) }
+        state.repositories = repositories.map { PersistedRepository(path: $0.path) }
         state.floatOnTop = floatOnTop
         state.lastSelectedRepoPath = selector.selectedRepo?.path
         state.lastSelectedWorktreePath = selector.selectedWorktree?.path

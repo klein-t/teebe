@@ -138,7 +138,7 @@ struct FileRow: View {
         worktree.selectionSource = .files
         if node.isDirectory { worktree.toggleExpand(node) }
         if preview.isVisible, !node.isDirectory, let wt = worktree.worktreePath {
-            Task { await preview.update(for: node, worktreePath: wt, snapshot: worktree) }
+            Task { await preview.update(for: node, worktreePath: wt) }
         }
     }
 
@@ -167,9 +167,9 @@ struct FileContextMenu: View {
                 // "preview" scene only appears via openWindow.
                 Task {
                     if preview.isVisible {
-                        await preview.update(for: node, worktreePath: wt, snapshot: worktree)
+                        await preview.update(for: node, worktreePath: wt)
                     } else {
-                        await preview.toggle(for: node, worktreePath: wt, snapshot: worktree)
+                        await preview.toggle(for: node, worktreePath: wt)
                     }
                     openWindow(id: "preview")
                 }

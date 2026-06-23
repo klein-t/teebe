@@ -53,17 +53,6 @@ struct GitWritesTests {
         #expect(log.contains("add feature"))
     }
 
-    @Test("checkout switches the worktree branch")
-    func checkout() async throws {
-        let fixture = try GitFixture(); defer { fixture.cleanup() }
-        fixture.commitFile("a.txt", "a\n")
-        fixture.createBranch("feature")
-
-        try await queue(fixture).checkout(worktreePath: fixture.repoPath, branch: "feature")
-        let status = try await git.status(worktreePath: fixture.repoPath)
-        #expect(status.branch == "feature")
-    }
-
     @Test("serialized concurrent stages all apply")
     func serializedConcurrency() async throws {
         let fixture = try GitFixture(); defer { fixture.cleanup() }

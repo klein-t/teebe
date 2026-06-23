@@ -8,7 +8,6 @@ struct PendingMutation: Equatable {
     enum Kind: Equatable {
         case discard
         case discardUntracked
-        case checkout(branch: String)
         case trash
     }
     var kind: Kind
@@ -37,9 +36,6 @@ final class WorktreeModel {
     /// Expanded directory paths in the FILES tree.
     var expandedPaths: Set<String> = []
     private(set) var worktreePath: String?
-    private(set) var isBrowsingSnapshot = false
-    /// The branch ref currently being browsed read-only (snapshot mode).
-    private(set) var browseRef: String?
     private(set) var errorMessage: String?
     private(set) var pendingMutation: PendingMutation?
 
@@ -66,9 +62,6 @@ final class WorktreeModel {
     init(environment: AppEnvironment) {
         self.environment = environment
     }
-
-    /// Repo path when browsing a read-only snapshot (else nil).
-    var snapshotRepoPath: String? { isBrowsingSnapshot ? worktreePath : nil }
 
     var changeCount: Int { changes.count }
 
@@ -118,8 +111,6 @@ final class WorktreeModel {
         status = nil
         changes = []
         worktreePath = nil
-        isBrowsingSnapshot = false
-        browseRef = nil
         errorMessage = nil
         pendingMutation = nil
         expandedPaths.removeAll()
@@ -131,8 +122,6 @@ final class WorktreeModel {
     func load(worktreePath: String, repo: Repository?) async {
         self.worktreePath = worktreePath
         self.repo = repo
-        self.isBrowsingSnapshot = false
-        self.browseRef = nil
         self.queue = repo.map { environment.makeQueue(repoPath: $0.path) }
         self.expandedPaths.removeAll()
         self.childrenCache.removeAll()
@@ -156,7 +145,7 @@ final class WorktreeModel {
     /// (skipping our own recent writes), notify the owner, then refresh. Synchronous
     /// and parameterized so it is unit-testable without real FSEvents.
     func handleFileSystemEvent(now: Date = Date()) async {
-        guard let worktreePath, !isBrowsingSnapshot else { return }
+        guard let worktreePath else { return }
         if !recentSelfWrite(now: now) {
             environment.activityMonitor.recordActivity(worktreePath: worktreePath, at: now)
             onActivity?(worktreePath)
@@ -176,7 +165,7 @@ final class WorktreeModel {
 
     /// Re-query status and rebuild the tree (called on watcher events).
     func refresh() async {
-        guard let worktreePath, !isBrowsingSnapshot else { return }
+        guard let worktreePath else { return }
         do {
             let result = try await environment.statusService.status(worktreePath: worktreePath)
             status = result
@@ -189,28 +178,8 @@ final class WorktreeModel {
         reloadExpandedChildren()
     }
 
-    /// Browse another branch's committed tree read-only (D2): files come from git,
-    /// the working directory is untouched.
-    func loadSnapshot(repo: Repository, ref: String) async {
-        watcher?.stop()
-        watcher = nil
-        isBrowsingSnapshot = true
-        browseRef = ref
-        worktreePath = repo.path
-        self.repo = repo
-        do {
-            let files = try await environment.branchService.snapshotFiles(for: repo, ref: ref)
-            changes = []
-            status = nil
-            root = FileTreeBuilder.tree(fromRelativePaths: files, rootPath: repo.path)
-            errorMessage = nil
-        } catch {
-            errorMessage = Self.describe(error)
-        }
-    }
-
     private func rebuildTree() {
-        guard let worktreePath, !isBrowsingSnapshot else { return }
+        guard let worktreePath else { return }
         let builder = makeBuilder(rootPath: worktreePath)
         guard let built = try? builder.buildRoot() else { root = nil; return }
         root = StatusOverlay.apply(changes, to: built, rootPath: worktreePath)
@@ -245,7 +214,7 @@ final class WorktreeModel {
     }
 
     private func loadChildrenIntoCache(_ path: String) {
-        guard let worktreePath, !isBrowsingSnapshot else { return }
+        guard let worktreePath else { return }
         let kids = (try? makeBuilder(rootPath: worktreePath).loadChildren(of: path)) ?? []
         childrenCache[path] = kids.map { StatusOverlay.apply(changes, to: $0, rootPath: worktreePath) }
     }
@@ -347,17 +316,6 @@ final class WorktreeModel {
         )
     }
 
-    /// Read-only content of a file at the browsed ref via `git show` (D2). Used by
-    /// the preview while browsing a branch snapshot, instead of reading disk.
-    func snapshotContent(forNodePath nodePath: String) async -> String? {
-        guard let repo, let ref = browseRef else { return nil }
-        let relative = PathUtil.relativePath(of: nodePath, under: PathUtil.standardized(repo.path))
-        guard let data = try? await environment.branchService.snapshotFileContents(for: repo, ref: ref, path: relative) else {
-            return nil
-        }
-        return String(decoding: data, as: UTF8.self)
-    }
-
     /// The tree to display given the current filter. `Changed` derives the tree
     /// directly from the change list so changed files always appear.
     var displayRoot: FileNode? {
@@ -365,7 +323,7 @@ final class WorktreeModel {
         case .all:
             return root
         case .changed:
-            guard let worktreePath, !isBrowsingSnapshot else { return root }
+            guard let worktreePath else { return root }
             let tree = FileTreeBuilder.tree(fromRelativePaths: changes.map(\.path), rootPath: worktreePath)
             return StatusOverlay.apply(changes, to: tree, rootPath: worktreePath)
         }
@@ -392,10 +350,6 @@ final class WorktreeModel {
         pendingMutation = PendingMutation(kind: kind, paths: [change.path], worktreeBusy: isBusy(now))
     }
 
-    func requestCheckout(branch: String, now: Date = Date()) {
-        pendingMutation = PendingMutation(kind: .checkout(branch: branch), paths: [], worktreeBusy: isBusy(now))
-    }
-
     func requestTrash(path: String, now: Date = Date()) {
         pendingMutation = PendingMutation(kind: .trash, paths: [path], worktreeBusy: isBusy(now))
     }
@@ -413,8 +367,6 @@ final class WorktreeModel {
                 try await self.queue?.discardWorking(worktreePath: worktreePath, paths: mutation.paths)
             case .discardUntracked:
                 try await self.queue?.discardUntracked(worktreePath: worktreePath, paths: mutation.paths)
-            case .checkout(let branch):
-                try await self.queue?.checkout(worktreePath: worktreePath, branch: branch)
             case .trash:
                 for path in mutation.paths {
                     _ = try self.environment.ops.moveToTrash(URL(fileURLWithPath: path))
@@ -451,7 +403,6 @@ final class WorktreeModel {
             case .commandFailed(_, _, let stderr): return stderr.isEmpty ? "git command failed" : stderr
             case .notAGitRepository(let path): return "Not a git repository: \(path)"
             case .lockedIndex: return "The git index is locked; try again."
-            case .missingBaseBranch: return "No base branch found."
             case .worktreeBusy(let path): return "Worktree busy: \(path)"
             case .executableNotFound: return "git executable not found."
             case .decodingFailed(let message): return message

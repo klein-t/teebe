@@ -52,20 +52,6 @@ struct GitIntegrationExtraTests {
         }
     }
 
-    @Test("renamed file appears as a rename vs base with original path")
-    func renamedDiff() async throws {
-        let fixture = try GitFixture(); defer { fixture.cleanup() }
-        fixture.commitFile("old.txt", "stable content here\nmore lines\n")
-        fixture.git(["checkout", "-q", "-b", "feature"])
-        fixture.git(["mv", "old.txt", "new.txt"])
-        fixture.commit("rename")
-
-        let entries = try await git.changedFilesVsBase(worktreePath: fixture.repoPath, base: "main")
-        let rename = entries.first { $0.status == .renamed }
-        #expect(rename?.path == "new.txt")
-        #expect(rename?.originalPath == "old.txt")
-    }
-
     @Test("binary file diff is flagged binary")
     func binaryDiff() async throws {
         let fixture = try GitFixture(); defer { fixture.cleanup() }
@@ -78,18 +64,6 @@ struct GitIntegrationExtraTests {
 
         let diff = try await git.workingDiff(worktreePath: fixture.repoPath, path: "blob.bin", staged: false)
         #expect(diff?.isBinary == true)
-    }
-
-    @Test("missing base branch throws missingBaseBranch")
-    func missingBase() async throws {
-        let fixture = try GitFixture(); defer { fixture.cleanup() }
-        fixture.commitFile("seed.txt", "seed\n")
-        fixture.git(["branch", "-m", "trunk"]) // no main/master
-
-        let service = BranchService(git: git)
-        await #expect(throws: GitError.self) {
-            _ = try await service.resolveBaseBranch(for: Repository(path: fixture.repoPath))
-        }
     }
 
     @Test("detached HEAD reported by status")

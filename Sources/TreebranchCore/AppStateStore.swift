@@ -1,13 +1,11 @@
 import Foundation
 
-/// A persisted repository entry (path + configured base branch). No secrets.
+/// A persisted repository entry (just its path). No secrets.
 public struct PersistedRepository: Codable, Equatable, Sendable {
     public var path: String
-    public var baseBranch: String?
 
-    public init(path: String, baseBranch: String? = nil) {
+    public init(path: String) {
         self.path = path
-        self.baseBranch = baseBranch
     }
 }
 

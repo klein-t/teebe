@@ -15,7 +15,7 @@ struct AppStateStoreTests {
         let (url, cleanup) = tempURL(); defer { cleanup() }
         let store = AppStateStore(url: url)
         let state = AppState(
-            repositories: [PersistedRepository(path: "/a", baseBranch: "main"),
+            repositories: [PersistedRepository(path: "/a"),
                            PersistedRepository(path: "/b")],
             showChangedOnly: true,
             floatOnTop: true,

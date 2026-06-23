@@ -290,7 +290,7 @@ struct RootView: View {
         delta < 0 ? worktree.selectPrevious() : worktree.selectNext()
         if preview.isVisible, let node = worktree.selectedNode, !node.isDirectory,
            let wt = worktree.worktreePath {
-            Task { await preview.update(for: node, worktreePath: wt, snapshot: worktree) }
+            Task { await preview.update(for: node, worktreePath: wt) }
         }
     }
 
@@ -319,7 +319,7 @@ struct RootView: View {
         guard let wt = worktree.worktreePath, let change = selectedChange else { return }
         let node = FileNode(path: wt + "/" + change.path, isDirectory: false, change: change)
         Task {
-            await preview.toggle(for: node, worktreePath: wt, snapshot: worktree)
+            await preview.toggle(for: node, worktreePath: wt)
             openWindow(id: "preview")
         }
     }
@@ -352,7 +352,6 @@ struct RootView: View {
     private var confirmTitle: String {
         switch worktree.pendingMutation?.kind {
         case .discard, .discardUntracked: return "Discard changes?"
-        case .checkout(let branch): return "Check out \(branch)?"
         case .trash: return "Move to Trash?"
         case .none: return ""
         }
