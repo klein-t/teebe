@@ -12,7 +12,7 @@ LOGO="Sources/Teebe/Resources/teebe-logo.png"
 # uses to decide whether an update is newer, so it MUST increase per release —
 # CI passes the release tag (e.g. APP_VERSION=0.2.0). A static value would make
 # every release look identical and Sparkle would never offer an update.
-APP_VERSION="${APP_VERSION:-0.2.1}"
+APP_VERSION="${APP_VERSION:-0.2.2}"
 BUILD_NUMBER="${BUILD_NUMBER:-$APP_VERSION}"
 
 # Sparkle auto-update config. Override via env in CI; the public key pairs with
@@ -31,6 +31,17 @@ echo "==> assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$BIN" "$APP/Contents/MacOS/teebe"
+
+# Copy the SwiftPM resource bundle(s) into the app. `Bundle.module` resolves via
+# Bundle.main.resourceURL (Contents/Resources) at runtime, so without this the
+# packaged app fatal-errors on launch ("could not load resource bundle"). SwiftPM
+# stages each as <Product>_<Target>.bundle next to the built binary.
+echo "==> copying SwiftPM resource bundles"
+shopt -s nullglob
+for b in "$BINDIR"/*.bundle; do
+  cp -R "$b" "$APP/Contents/Resources/"
+done
+shopt -u nullglob
 
 # Embed Sparkle.framework (SwiftPM stages it next to the binary) and point the
 # executable's runtime search path at the bundle's Frameworks dir.
