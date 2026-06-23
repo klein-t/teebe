@@ -16,6 +16,34 @@ whatever native app you already use.
   <img src="assets/teebe-overview.png" alt="teebe showing a worktree's files alongside an inline diff" width="760">
 </p>
 
+## What it is
+
+- **Worktree-aware browsing** — pick any worktree of any repo and explore its
+  full file tree; switch between trees instantly.
+- **Live as your agents work** — files badge and the tree updates the moment
+  something changes on disk, so you watch edits land in real time.
+- **Sneak-peek diffs** — select a changed file to peek its diff inline, in the
+  window, without opening it or switching apps.
+- **One Changes view** — everything modified in the current worktree gathered in
+  a single list, with ahead/behind counts for the branch.
+- **Every repo at once** — add multiple repos and see all their worktrees
+  together in one overview.
+- **Opens into your tools** — click a file and it launches in the native app you
+  already use. teebe is the navigator; your editor stays the editor.
+
+<p align="center">
+  <img src="assets/teebe-collapsed.png" alt="teebe collapsed to its WORKTREES, CHANGES and FILES sections" height="260">
+  &nbsp;&nbsp;
+  <img src="assets/teebe-worktrees.png" alt="the WORKTREES list expanded across a repo's branches" height="260">
+</p>
+
+## What it is not
+
+- Not a code editor — content editing happens in your native apps, not here.
+- Not a full git client — no rebase, cherry-pick, or merge-conflict resolution.
+- Not cross-platform — macOS only.
+- Not an agent orchestrator — mapping agents to worktrees is a later integration.
+
 ## Install
 
 Download the latest `teebe.app` from the
@@ -83,30 +111,6 @@ Existing tools are either git clients centered on a single repo (Fork, Sublime
 Merge), terminal TUIs (lazygit), or agent-session managers (Crystal, Conductor).
 None give you a live, cross-worktree "mission control" of what your agents are
 touching right now.
-
-## What it is (v1)
-
-- A **tree navigator**, not an editor. Click a file → it opens in its native app.
-- **Worktree-aware**: pick any worktree of any repo and see its files.
-- **Git-aware**: changed files are badged; a Changes view shows working changes
-  with inline read-only diffs.
-- **Live**: the tree and badges update in real time (FSEvents) as agents write.
-- **Multi-repo**: add several repos; an Overview shows all worktrees at once.
-- **Read-write** at the file-management level (rename/move/trash/new) and the git
-  level (stage/discard/commit). Content editing is delegated to native apps.
-
-<p align="center">
-  <img src="assets/teebe-collapsed.png" alt="teebe collapsed to its WORKTREES, CHANGES and FILES sections" height="260">
-  &nbsp;&nbsp;
-  <img src="assets/teebe-worktrees.png" alt="the WORKTREES list expanded across a repo's branches" height="260">
-</p>
-
-## What it is not (v1)
-
-- Not a code editor (no in-app content editing).
-- Not a full git client (no rebase / cherry-pick / merge-conflict UI).
-- Not cross-platform (macOS only).
-- Not an agent orchestrator (agent ↔ worktree mapping is a v2 integration).
 
 ## License
 
