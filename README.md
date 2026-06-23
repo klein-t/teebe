@@ -16,10 +16,6 @@ whatever native app you already use.
   <img src="assets/teebe-overview.png" alt="teebe showing a worktree's files alongside an inline diff" width="760">
 </p>
 
-> Status: in development. `TeebeCore` (git layer, parsers, services, file
-> watcher, file ops, write queue) and the app's view models are implemented and
-> tested; the SwiftUI shell is functional and wired (visual design in progress).
-
 ## Install
 
 Download the latest `teebe.app` from the
