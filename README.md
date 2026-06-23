@@ -63,4 +63,13 @@ touching right now.
 
 ## License
 
-MIT (proposed).
+Teebe is **dual-licensed**:
+
+- **GPL-3.0-or-later** for open-source use — see [`LICENSE`](LICENSE). You may use,
+  modify, and redistribute it freely, but any distributed derivative must also be
+  GPL with full source. You cannot build a closed-source product on top of it.
+- **Commercial license** for embedding Teebe in a proprietary product without the
+  GPL's obligations — available from the author.
+
+See [`LICENSING.md`](LICENSING.md) for details and contact. Contributions are
+accepted under the [Contributor License Agreement](CLA.md).

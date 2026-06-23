@@ -49,6 +49,15 @@ into a single commit where it makes sense.
 `TeebeCore` stays pure and UI-independent; the app target holds thin views
 + `@Observable` view models.
 
+## Contributor License Agreement
+
+Teebe is dual-licensed (GPL-3.0-or-later and a commercial license). Before your
+first contribution is merged, you must agree to the
+[Contributor License Agreement](CLA.md). In practice: include a
+`Signed-off-by:` line in your commits (`git commit -s`) and state in your first
+PR that you agree to the CLA. This lets the project stay offerable under both
+licenses.
+
 ## Security
 
 Never commit secrets. See [`SECURITY.md`](SECURITY.md) for the reporting policy
