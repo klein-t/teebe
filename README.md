@@ -3,7 +3,7 @@
 A native macOS file browser built for the multi-agent era.
 
 > The product name is **teebe**. The Swift package and modules keep the
-> `Treebranch` / `TreebranchCore` identifiers for now.
+> `Teebe` / `TeebeCore` identifiers for now.
 
 When you have several AI coding agents (Claude Code, Codex/CMAX, etc.) working in
 parallel across git worktrees, **teebe** is the calm control room that shows
@@ -11,16 +11,16 @@ you — across all your repos and worktrees — what files exist and what's chan
 It does not replace your editor: it's the navigator that launches files into
 whatever native app you already use.
 
-> Status: in development. `TreebranchCore` (git layer, parsers, services, file
+> Status: in development. `TeebeCore` (git layer, parsers, services, file
 > watcher, file ops, write queue) and the app's view models are implemented and
 > tested; the SwiftUI shell is functional and wired (visual design in progress).
 
 ## Build & test
 
 ```sh
-swift build           # builds TreebranchCore + the Treebranch app
+swift build           # builds TeebeCore + the Teebe app
 swift test            # runs the Swift Testing suite (unit + git integration)
-swift run Treebranch  # launches the app
+swift run Teebe  # launches the app
 ```
 
 Requires macOS 14+ and a Swift 6 toolchain (built in Swift 5 language mode). Git
@@ -28,11 +28,11 @@ integration tests shell out to the system `git` against throwaway temp repos.
 
 ## Project layout
 
-- `Sources/TreebranchCore/` — pure, UI-independent core: models, `GitClient`
+- `Sources/TeebeCore/` — pure, UI-independent core: models, `GitClient`
   (+ `ProcessGitClient`), porcelain/diff/worktree/branch parsers, services,
   `FileTreeBuilder`, `FSEventsWatcher`, file ops, `RepoGitQueue`.
-- `Sources/Treebranch/` — SwiftUI app: `@Observable` view models + thin views.
-- `Tests/` — Swift Testing suites (`TreebranchCoreTests`, `TreebranchTests`),
+- `Sources/Teebe/` — SwiftUI app: `@Observable` view models + thin views.
+- `Tests/` — Swift Testing suites (`TeebeCoreTests`, `TeebeTests`),
   protocol fakes, and a `GitFixture` real-git harness.
 
 ## Why

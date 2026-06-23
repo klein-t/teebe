@@ -2,34 +2,34 @@
 import PackageDescription
 
 let package = Package(
-    name: "Treebranch",
+    name: "Teebe",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .library(name: "TreebranchCore", targets: ["TreebranchCore"]),
-        .executable(name: "Treebranch", targets: ["Treebranch"]),
+        .library(name: "TeebeCore", targets: ["TeebeCore"]),
+        .executable(name: "Teebe", targets: ["Teebe"]),
     ],
     targets: [
         // Pure, UI-independent core: models, git layer, parsers, services.
         .target(
-            name: "TreebranchCore"
+            name: "TeebeCore"
         ),
         // SwiftUI app: thin views + @Observable view models. Depends on Core.
         .executableTarget(
-            name: "Treebranch",
-            dependencies: ["TreebranchCore"],
+            name: "Teebe",
+            dependencies: ["TeebeCore"],
             resources: [.process("Resources")]
         ),
         // Core unit + integration tests (Swift Testing).
         .testTarget(
-            name: "TreebranchCoreTests",
-            dependencies: ["TreebranchCore"]
+            name: "TeebeCoreTests",
+            dependencies: ["TeebeCore"]
         ),
         // View-model tests (Swift Testing) against the app target.
         .testTarget(
-            name: "TreebranchTests",
-            dependencies: ["Treebranch"]
+            name: "TeebeTests",
+            dependencies: ["Teebe"]
         ),
     ],
     // Build in Swift 5 language mode (spec: "Swift 5.9+"). Keeps actor/Sendable

@@ -1,4 +1,4 @@
-# Contributing to treebranch
+# Contributing to teebe
 
 Thanks for your interest. This is an early-stage, test-driven macOS project.
 
@@ -11,9 +11,9 @@ Thanks for your interest. This is an early-stage, test-driven macOS project.
 ## Build & test
 
 ```sh
-swift build           # builds TreebranchCore + the Treebranch app
+swift build           # builds TeebeCore + the Teebe app
 swift test            # runs the Swift Testing suite (unit + git integration)
-swift run Treebranch  # launches the app
+swift run Teebe  # launches the app
 swiftlint lint        # lint (CI runs this too)
 ```
 
@@ -29,10 +29,10 @@ in **git worktrees**. In short:
    prefix: `feat/…`, `fix/…`, `chore/…`, `docs/…`, `test/…`:
    ```sh
    git switch dev && git pull
-   git worktree add ../treebranch-<name> -b feat/<name> dev
+   git worktree add ../teebe-<name> -b feat/<name> dev
    ```
 2. Keep changes focused. This codebase is test-first — add or update tests for
-   any behavior change in `TreebranchCore` or the view models.
+   any behavior change in `TeebeCore` or the view models.
 3. Run `swift test` and `swiftlint lint` locally before pushing.
 4. Open a pull request into **`dev`** (never directly into `main`). CI (build,
    test, lint, CodeQL) must be green before merge.
@@ -46,7 +46,7 @@ into a single commit where it makes sense.
 
 ## Architecture
 
-`TreebranchCore` stays pure and UI-independent; the app target holds thin views
+`TeebeCore` stays pure and UI-independent; the app target holds thin views
 + `@Observable` view models.
 
 ## Security
