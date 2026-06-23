@@ -175,11 +175,12 @@ struct SectionHeader<Trailing: View>: View {
                 .foregroundStyle(Palette.secondaryText)
                 .frame(width: 13, height: 13)
                 .rotationEffect(.degrees(isOpen ? 90 : 0), anchor: .center)
-                // Linear, not eased: everything else on a toggle snaps, so the
-                // arrow was the lone element with an ease-out landing — that soft
-                // settle read as a "bounce". A short constant-speed flip with a hard
-                // stop has no accel/decel and nothing to settle.
-                .animation(.linear(duration: 0.1), value: isOpen)
+                // No animation — snap in lockstep with the window. A section toggle
+                // resizes the window, which SNAPS (setFrame display:true) on close
+                // and on the worktree-only grow; a chevron animating its rotation
+                // against that synchronous snap hitches, and THAT was the residual
+                // "bounce". Snapping the arrow removes it. (Opening CHANGES/FILES
+                // glides the window open; an already-flipped arrow rides along fine.)
             Text(title)
                 .font(.system(size: 11, weight: .bold))
                 .tracking(0.5)
