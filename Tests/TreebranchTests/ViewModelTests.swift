@@ -65,19 +65,6 @@ struct SelectorModelTests {
         #expect(selector.worktree.worktreePath == "/repo")
     }
 
-    @Test("browsing a branch loads a read-only snapshot")
-    func browseBranch() async {
-        let git = FakeGitClient()
-        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
-        git.listTreeResult = ["a.txt", "src/b.swift"]
-        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
-        await selector.selectRepo(Repository(path: "/repo"))
-
-        await selector.browse(branch: Branch(name: "feature"))
-        #expect(selector.browseBranch?.name == "feature")
-        #expect(selector.worktree.isBrowsingSnapshot == true)
-        #expect(selector.worktree.root?.children?.isEmpty == false)
-    }
 }
 
 @MainActor
@@ -258,21 +245,6 @@ struct PreviewModelTests {
         await model.toggle(for: node, worktreePath: "/repo")
         #expect(model.isVisible == false)
         #expect(model.content == .empty)
-    }
-
-    @Test("snapshot browse previews committed content via git show, not disk (D2)")
-    func snapshotPreviewUsesGitShow() async {
-        let git = FakeGitClient()
-        git.listTreeResult = ["a.txt"]
-        git.showFileResult = Data("committed snapshot content".utf8)
-        let env = makeTestEnvironment(git: git)
-        let worktree = WorktreeModel(environment: env)
-        await worktree.loadSnapshot(repo: Repository(path: "/repo"), ref: "feature")
-        let node = worktree.root?.children?.first { $0.name == "a.txt" }
-
-        let preview = PreviewModel(environment: env)
-        await preview.toggle(for: node, worktreePath: "/repo", snapshot: worktree)
-        #expect(preview.content == .text("committed snapshot content"))
     }
 
     @Test("unchanged text file previews its content")

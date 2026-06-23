@@ -27,11 +27,6 @@ struct WorktreesSection: View {
                             Button("Add Repository…") { app.presentAddRepositoryPanel() }
                             if let selected = selector.selectedRepo {
                                 Button("New Worktree…") { app.presentNewWorktreePanel() }
-                                Menu("Set Base Branch") {
-                                    ForEach(selector.branches.filter { !$0.isRemote }) { branch in
-                                        Button(branch.name) { app.setBaseBranch(branch.name, for: selected) }
-                                    }
-                                }
                                 Button("Remove \(selected.name)", role: .destructive) { app.removeRepository(selected) }
                             }
                         } label: {

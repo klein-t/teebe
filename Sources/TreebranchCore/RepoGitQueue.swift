@@ -40,10 +40,6 @@ public actor RepoGitQueue {
         try await run { try await self.git.commit(worktreePath: worktreePath, message: message) }
     }
 
-    public func checkout(worktreePath: String, branch: String) async throws {
-        try await run { try await self.git.checkout(worktreePath: worktreePath, branch: branch) }
-    }
-
     public func addWorktree(path: String, branch: String?, createBranch: Bool) async throws {
         try await run {
             try await self.git.addWorktree(repoPath: self.repoPath, path: path, branch: branch, createBranch: createBranch)

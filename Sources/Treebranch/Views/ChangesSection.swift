@@ -62,6 +62,7 @@ struct ChangesSection: View {
             .foregroundStyle(commitEnabled ? .white : Palette.secondaryText)
             .background(commitEnabled ? Palette.accent : Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
             .disabled(!commitEnabled)
+            .keyboardShortcut(.return, modifiers: .command)   // ⌘↩ (matches the field's placeholder)
         }
         .padding(.horizontal, 11).padding(.top, 8).padding(.bottom, 6)
     }

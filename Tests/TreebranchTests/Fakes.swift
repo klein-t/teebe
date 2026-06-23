@@ -8,11 +8,7 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     var worktreesResult: [Worktree] = []
     var branchesResult: [Branch] = []
     var statusResult = StatusResult()
-    var nameStatusResult: [NameStatusEntry] = []
-    var committedDiffResult: DiffFile?
     var workingDiffResult: DiffFile?
-    var listTreeResult: [String] = []
-    var showFileResult = Data()
     var worktreesError: GitError?
 
     private(set) var stagedPaths: [[String]] = []
@@ -20,7 +16,6 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     private(set) var discardedWorking: [[String]] = []
     private(set) var discardedUntracked: [[String]] = []
     private(set) var commitMessages: [String] = []
-    private(set) var checkouts: [String] = []
 
     func worktrees(repoPath: String) async throws -> [Worktree] {
         if let worktreesError { throw worktreesError }
@@ -28,17 +23,12 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     }
     func branches(repoPath: String) async throws -> [Branch] { branchesResult }
     func status(worktreePath: String) async throws -> StatusResult { statusResult }
-    func changedFilesVsBase(worktreePath: String, base: String) async throws -> [NameStatusEntry] { nameStatusResult }
-    func committedDiff(worktreePath: String, base: String, path: String) async throws -> DiffFile? { committedDiffResult }
     func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? { workingDiffResult }
-    func listTree(repoPath: String, ref: String) async throws -> [String] { listTreeResult }
-    func showFile(repoPath: String, ref: String, path: String) async throws -> Data { showFileResult }
     func stage(worktreePath: String, paths: [String]) async throws { stagedPaths.append(paths) }
     func unstage(worktreePath: String, paths: [String]) async throws { unstagedPaths.append(paths) }
     func discardWorking(worktreePath: String, paths: [String]) async throws { discardedWorking.append(paths) }
     func discardUntracked(worktreePath: String, paths: [String]) async throws { discardedUntracked.append(paths) }
     func commit(worktreePath: String, message: String) async throws { commitMessages.append(message) }
-    func checkout(worktreePath: String, branch: String) async throws { checkouts.append(branch) }
     func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool) async throws {}
     func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws {}
     @discardableResult
