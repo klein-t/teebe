@@ -32,14 +32,15 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 cp "$BIN" "$APP/Contents/MacOS/teebe"
 
-# Copy the SwiftPM resource bundle(s) into the app. `Bundle.module` resolves via
-# Bundle.main.resourceURL (Contents/Resources) at runtime, so without this the
-# packaged app fatal-errors on launch ("could not load resource bundle"). SwiftPM
-# stages each as <Product>_<Target>.bundle next to the built binary.
-echo "==> copying SwiftPM resource bundles"
+# Copy the SwiftPM resource bundle(s) into the app. The generated accessor
+# resolves `Bundle.module` from `Bundle.main.bundleURL/<Product>_<Target>.bundle`
+# — which for a wrapped .app is the bundle ROOT (teebe.app/Teebe_Teebe.bundle),
+# NOT Contents/Resources. Without it here the packaged app fatal-errors on launch
+# ("could not load resource bundle"). SwiftPM stages each bundle next to the binary.
+echo "==> copying SwiftPM resource bundles to app root"
 shopt -s nullglob
 for b in "$BINDIR"/*.bundle; do
-  cp -R "$b" "$APP/Contents/Resources/"
+  cp -R "$b" "$APP/"
 done
 shopt -u nullglob
 
