@@ -6,9 +6,6 @@
 
 A native macOS file browser built for the multi-agent era.
 
-> The product name is **teebe**. The Swift package and modules keep the
-> `Teebe` / `TeebeCore` identifiers for now.
-
 When you have several AI coding agents (Claude Code, Codex/CMAX, etc.) working in
 parallel across git worktrees, **teebe** is the calm control room that shows
 you — across all your repos and worktrees — what files exist and what's changing.
