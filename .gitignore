@@ -51,3 +51,7 @@ CLAUDE.md
 *_FINDINGS.md
 .agents/
 skills-lock.json
+
+# Local screenshots / scratch captures — never committed (assets/ is tracked).
+Screenshot*.png
+Screenshot*.jpeg
