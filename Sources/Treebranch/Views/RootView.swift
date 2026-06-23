@@ -104,34 +104,7 @@ struct RootView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 14) {
-            if let logo = Brand.logo {
-                Image(nsImage: logo)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-                    .frame(width: 84, height: 84)
-            } else {
-                Image(systemName: "point.3.connected.trianglepath.dotted")
-                    .font(.system(size: 38))
-                    .foregroundStyle(Palette.secondaryText)
-            }
-            Text("No repositories yet")
-                .font(.headline)
-            Text("Add a git repository to browse its worktrees,\nchanges, and files.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            Button {
-                app.presentAddRepositoryPanel()
-            } label: {
-                Label("Add Repository…", systemImage: "plus")
-            }
-            .controlSize(.large)
-            .buttonStyle(.borderedProminent)
-        }
-        .frame(maxWidth: .infinity, minHeight: 300)
-        .padding(40)
+        EmptyStateView(app: app)
     }
 
     private var titleBar: some View {
@@ -145,9 +118,11 @@ struct RootView: View {
                     Image(systemName: app.floatOnTop ? "pin.fill" : "pin")
                         .font(.system(size: 13))
                         .foregroundStyle(app.floatOnTop ? Palette.accent : Palette.secondaryText)
+                        .contentTransition(.symbolEffect(.replace))   // animated pin ↔ pin.fill swap
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(IconButtonStyle(size: CGSize(width: 26, height: 22)))
                 .help("Float on top")
+                .animation(.snappy(duration: 0.25), value: app.floatOnTop)
             }
             .padding(.horizontal, 11)
         }
@@ -363,5 +338,69 @@ struct RootView: View {
         if lines.isEmpty { lines = "the worktree" }
         let busy = mutation.worktreeBusy ? "\n⚠︎ This worktree was written to recently (an agent may be active)." : ""
         return "Affects: \(lines)\(busy)"
+    }
+}
+
+/// The "no repositories" hero. Its four chunks fade/rise/de-blur in sequence on
+/// appear (split-and-stagger enter) instead of popping in as one block.
+private struct EmptyStateView: View {
+    @Bindable var app: AppModel
+    @State private var revealed = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            logo
+                .modifier(StaggeredReveal(revealed: revealed, step: 0))
+            Text("No repositories yet")
+                .font(.headline)
+                .modifier(StaggeredReveal(revealed: revealed, step: 1))
+            Text("Add a git repository to browse its worktrees,\nchanges, and files.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .modifier(StaggeredReveal(revealed: revealed, step: 2))
+            Button {
+                app.presentAddRepositoryPanel()
+            } label: {
+                Label("Add Repository…", systemImage: "plus")
+            }
+            .controlSize(.large)
+            .buttonStyle(.borderedProminent)
+            .modifier(StaggeredReveal(revealed: revealed, step: 3))
+        }
+        .frame(maxWidth: .infinity, minHeight: 300)
+        .padding(40)
+        .onAppear { revealed = true }
+    }
+
+    @ViewBuilder
+    private var logo: some View {
+        if let logo = Brand.logo {
+            Image(nsImage: logo)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 84, height: 84)
+        } else {
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .font(.system(size: 38))
+                .foregroundStyle(Palette.secondaryText)
+        }
+    }
+}
+
+/// One chunk of a staggered enter: opacity + a small rise + a 4pt deblur, each
+/// chunk delayed `step × 90ms`. Matches the skill's split-and-stagger pattern
+/// (translateY/opacity/blur) without a motion dependency.
+private struct StaggeredReveal: ViewModifier {
+    let revealed: Bool
+    let step: Int
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(revealed ? 1 : 0)
+            .offset(y: revealed ? 0 : 10)
+            .blur(radius: revealed ? 0 : 4)
+            .animation(.smooth(duration: 0.5).delay(Double(step) * 0.09), value: revealed)
     }
 }

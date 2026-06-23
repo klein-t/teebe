@@ -15,7 +15,9 @@ struct ChangesSection: View {
                     countBadge(worktree.changeCount)
                     if let active = app.selector.selectedWorktree {
                         let info = app.selector.info(for: active)
-                        Text(info.syncText).font(.system(size: 11)).foregroundStyle(Palette.secondaryText)
+                        Text(info.syncText)
+                            .font(.system(size: 11)).monospacedDigit()
+                            .foregroundStyle(Palette.secondaryText)
                     }
                 }
             }
@@ -47,7 +49,7 @@ struct ChangesSection: View {
             .font(.system(size: 12))
             .lineLimit(1...3)
             .padding(.horizontal, 9).padding(.vertical, 7)
-            .background(.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
             .onSubmit { Task { await worktree.commitPending() } }
 
             Button {
@@ -55,14 +57,20 @@ struct ChangesSection: View {
             } label: {
                 Text(commitLabel)
                     .font(.system(size: 12.5, weight: .semibold))
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
                     .frame(maxWidth: .infinity)
                     .frame(height: 30)
+                    .foregroundStyle(commitEnabled ? .white : Palette.secondaryText)
+                    .background(commitEnabled ? Palette.accent : Color.primary.opacity(0.05),
+                                in: RoundedRectangle(cornerRadius: 6))
+                    .contentShape(RoundedRectangle(cornerRadius: 6))
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(commitEnabled ? .white : Palette.secondaryText)
-            .background(commitEnabled ? Palette.accent : Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+            .buttonStyle(PressableButtonStyle())
             .disabled(!commitEnabled)
             .keyboardShortcut(.return, modifiers: .command)   // ⌘↩ (matches the field's placeholder)
+            .animation(.easeOut(duration: 0.2), value: commitEnabled)
+            .animation(.snappy(duration: 0.22), value: worktree.changeCount)
         }
         .padding(.horizontal, 11).padding(.top, 8).padding(.bottom, 6)
     }
@@ -153,8 +161,11 @@ struct ChangesSection: View {
     private func countBadge(_ count: Int) -> some View {
         Text("\(count)")
             .font(.system(size: 10, weight: .semibold))
+            .monospacedDigit()
+            .contentTransition(.numericText())
             .foregroundStyle(Palette.headerLabel)
             .padding(.horizontal, 5).frame(minWidth: 18, minHeight: 16)
-            .background(.black.opacity(0.07), in: Capsule())
+            .background(Color.primary.opacity(0.07), in: Capsule())
+            .animation(.snappy(duration: 0.22), value: count)
     }
 }

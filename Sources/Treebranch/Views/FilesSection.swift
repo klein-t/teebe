@@ -23,9 +23,10 @@ struct FilesSection: View {
                         }
                         Toggle("Show ignored", isOn: $worktree.showIgnored)
                     } label: {
-                        Text("···").font(.system(size: 13)).foregroundStyle(Palette.secondaryText)
+                        Text("···").font(.system(size: 13)).foregroundStyle(Palette.secondaryText).hoverChip()
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("Sort & filter")
                 } else if let active = app.selector.selectedWorktree {
                     Text("\(active.branch ?? active.name)")
                         .font(.system(size: 11, design: .monospaced))
@@ -86,13 +87,15 @@ struct FileRow: View {
     private var worktree: WorktreeModel { app.selector.worktree }
     private var node: FileNode { row.node }
     private var isSelected: Bool { worktree.selectedPath == node.path }
+    private var isExpanded: Bool { worktree.isExpanded(node) }
 
     var body: some View {
         HStack(spacing: 6) {
             if node.isDirectory {
                 Text("▸")
                     .font(.system(size: 13)).frame(width: 13)
-                    .rotationEffect(.degrees(worktree.isExpanded(node) ? 90 : 0))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .animation(.snappy(duration: 0.2), value: isExpanded)   // was an instant snap
                     .foregroundStyle(isSelected ? .white : Palette.secondaryText)
             } else {
                 Spacer().frame(width: 13)

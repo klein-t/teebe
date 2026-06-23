@@ -13,11 +13,11 @@ struct WorktreesSection: View {
         VStack(spacing: 0) {
             SectionHeader(title: "WORKTREES", isOpen: isOpen, onToggle: { isOpen.toggle() }) {
                 if isOpen {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 2) {
                         Button { app.presentAddRepositoryPanel() } label: {
                             Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
                         }
-                        .buttonStyle(.plain).foregroundStyle(Palette.secondaryText)
+                        .buttonStyle(IconButtonStyle()).foregroundStyle(Palette.secondaryText)
                         .help("Add Repository")
                         Menu {
                             ForEach(app.repositories) { repo in
@@ -30,13 +30,15 @@ struct WorktreesSection: View {
                                 Button("Remove \(selected.name)", role: .destructive) { app.removeRepository(selected) }
                             }
                         } label: {
-                            Text("···").font(.system(size: 13)).foregroundStyle(Palette.secondaryText)
+                            Text("···").font(.system(size: 13)).foregroundStyle(Palette.secondaryText).hoverChip()
                         }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                        .help("Repository actions")
                         Button { Task { await selector.refreshWorktreeInfo() } } label: {
                             Image(systemName: "arrow.clockwise").font(.system(size: 11))
                         }
-                        .buttonStyle(.plain).foregroundStyle(Palette.secondaryText)
+                        .buttonStyle(IconButtonStyle()).foregroundStyle(Palette.secondaryText)
+                        .help("Refresh")
                     }
                 } else if let active = selector.selectedWorktree {
                     HStack(spacing: 5) {
@@ -99,7 +101,7 @@ struct WorktreesSection: View {
             Spacer(minLength: 6)
             if let active = selector.selectedWorktree {
                 Text(selector.info(for: active).syncText)
-                    .font(.system(size: 11)).foregroundStyle(Palette.secondaryText)
+                    .font(.system(size: 11)).monospacedDigit().foregroundStyle(Palette.secondaryText)
                     .fixedSize()
             }
         }
@@ -120,6 +122,7 @@ struct WorktreesSection: View {
             Spacer(minLength: 4)
             Text(info.syncText)
                 .font(.system(size: 11))
+                .monospacedDigit()
                 .foregroundStyle(isActive ? .white.opacity(0.85) : Palette.secondaryText)
         }
         .padding(.leading, 25).padding(.trailing, 11).frame(height: 26)
