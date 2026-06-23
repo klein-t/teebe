@@ -10,7 +10,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if let logo = Brand.logo { NSApp.applicationIconImage = logo }   // Dock / app-switcher icon
+        // A bare SPM executable (`swift run`) has no bundle icon, so give the
+        // Dock something from the bundled logo. When launched from the .app,
+        // leave the Dock/app-switcher icon to AppIcon.icns so the running tile
+        // matches the Finder icon exactly — otherwise the raw full-bleed logo
+        // replaces the macOS squircle the moment the app opens.
+        let launchedFromBundle = Bundle.main.bundleURL.pathExtension == "app"
+        if !launchedFromBundle, let logo = Brand.logo {
+            NSApp.applicationIconImage = logo
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
