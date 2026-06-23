@@ -1,0 +1,41 @@
+name: CodeQL
+
+# CodeQL code scanning requires GitHub Advanced Security, which isn't available
+# on this repo's plan (free private): the results-upload step fails with "Code
+# scanning is not enabled for this repository" on every run, even though the
+# build/extract succeeds. Until the repo is public or GHAS is enabled, run it
+# manually only so it doesn't red-flag every PR and push. To re-enable, restore
+# the push / pull_request / schedule triggers below.
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main, dev]
+  # pull_request:
+  #   branches: [main, dev]
+  # schedule:
+  #   - cron: "0 6 * * 1"   # Weekly, Mondays 06:00 UTC.
+
+jobs:
+  analyze:
+    name: Analyze (Swift)
+    runs-on: macos-15
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          queries: security-and-quality
+
+      - name: Build
+        uses: github/codeql-action/autobuild@v4
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:swift"

@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  build-test:
+    name: Build & Test (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Build
+        run: swift build -v
+
+      # The app is an SPM executable target (no .xcodeproj yet — XcodeGen is the
+      # planned default, TECH_SPEC §1/§11). `swift test` builds and tests both the
+      # TreebranchCore library and the Treebranch app target, including the
+      # @testable view-model suites, so a separate `xcodebuild test` is not needed
+      # at this stage.
+      - name: Test (with coverage)
+        run: swift test -v --enable-code-coverage
+
+  lint:
+    name: SwiftLint
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint
+        run: swiftlint lint --quiet

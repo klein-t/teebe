@@ -1,0 +1,45 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# macOS
+.DS_Store
+
+# Local agent/session workspace (scheduled-task locks, etc.)
+.claude/
+**/.claude/
+CLAUDE.local.md
+
+# Generated project (XcodeGen)
+Treebranch.xcodeproj/
+
+# Built app bundle (scripts/make-app.sh)
+Treebranch.app/
+*.app/
+
+# Secrets / credentials — never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.key
+*.keystore
+*.mobileprovision
+*.cer
+*.certSigningRequest
+secrets.*
+**/secrets.*
+.infisical.json.local
+
+# Internal planning docs & agent instructions — kept local, never published
+docs/
+CLAUDE.md
