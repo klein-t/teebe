@@ -50,10 +50,11 @@ struct RootView: View {
                     WorktreesSection(app: app, isOpen: sectionBinding(.worktrees, openWorktrees))
                     Divider()
                     ChangesSection(app: app, worktree: worktree, preview: preview, isOpen: sectionBinding(.changes, openChanges))
-                    // Only when WORKTREES alone is open does nothing fill the space —
-                    // push FILES to the bottom then. Otherwise an open CHANGES/FILES
-                    // fills it, and when all are closed the headers must stay tight.
-                    if openWorktrees && !openChanges && !openFiles {
+                    // WORKTREES and CHANGES both hug their content; only FILES fills
+                    // the slack. So whenever FILES is closed, nothing claims the
+                    // leftover height — push FILES to the bottom. When all are closed
+                    // the headers must stay tight, so no spacer then.
+                    if !openFiles && !allClosed {
                         Spacer(minLength: 0)
                     }
                     Divider()
@@ -87,7 +88,10 @@ struct RootView: View {
         ))
         .onChange(of: app.selector.selectedRepo?.path) { _, path in applyLayout(for: path) }
         .onChange(of: app.selector.worktrees.count) { _, _ in
-            if heightLocked && !allClosed { applyWindowSizing() }   // only-WORKTREES is content-sized
+            if heightLocked && !allClosed { applyWindowSizing() }   // content-sized while FILES closed
+        }
+        .onChange(of: worktree.changeCount) { _, _ in
+            if heightLocked && !allClosed { applyWindowSizing() }   // CHANGES hugs its rows
         }
         .background(QuickLookBridge(controller: quickLook))
         .focusable()
@@ -188,9 +192,10 @@ struct RootView: View {
         applyWindowSizing(animated: false)
     }
 
-    /// `true` when no scrollable section (CHANGES/FILES) is open — the window is
-    /// then sized to its content and its height is pinned (width stays free).
-    private var heightLocked: Bool { !openChanges && !openFiles }
+    /// `true` when FILES (the only space-filling section) is closed — WORKTREES and
+    /// CHANGES both hug their rows, so the window is sized to its content and its
+    /// height is pinned (width stays free).
+    private var heightLocked: Bool { !openFiles }
 
     /// When no scrollable section is open the window is content-pinned: drive the
     /// SwiftUI frame to that exact height so `windowResizability` reports the same
@@ -212,11 +217,11 @@ struct RootView: View {
     /// The height the window should be for the current open/closed state.
     private func targetHeight() -> CGFloat {
         if allClosed { return collapsedHeight }
-        if heightLocked {                                   // only WORKTREES open
+        if heightLocked {                                   // FILES closed → hug content
             let cap = (window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
-            return min(collapsedHeight + worktreesContentHeight + 4, cap)
+            return min(collapsedHeight + worktreesContentHeight + changesContentHeight + 4, cap)
         }
-        return expandedHeight                               // CHANGES/FILES open → free height
+        return expandedHeight                               // FILES open → free height
     }
 
     /// Estimated natural height of the open worktree list (mirrors WorktreesSection).
@@ -226,6 +231,14 @@ struct RootView: View {
         let repoRow: CGFloat = s.selectedRepo != nil ? 25 : 0
         let rows: CGFloat = s.worktrees.isEmpty ? 26 : CGFloat(s.worktrees.count) * 26
         return 8 + repoRow + rows
+    }
+
+    /// Estimated natural height of the open change list (mirrors ChangesSection:
+    /// 24pt rows plus the section's 8pt top / 6pt bottom padding).
+    private var changesContentHeight: CGFloat {
+        guard openChanges else { return 0 }
+        let count = app.selector.worktree.changeCount
+        return 14 + (count == 0 ? 24 : CGFloat(count) * 24)
     }
 
     /// Size the window to the current state and lock/free its height accordingly.
