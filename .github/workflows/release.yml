@@ -26,11 +26,11 @@ jobs:
         run: ./scripts/make-app.sh release
 
       - name: Zip the app
-        run: ditto -c -k --keepParent Treebranch.app "Treebranch-${GITHUB_REF_NAME}.zip"
+        run: ditto -c -k --keepParent teebe.app "teebe-${GITHUB_REF_NAME}.zip"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: Treebranch-*.zip
+          files: teebe-*.zip
           generate_release_notes: true
           draft: true
