@@ -23,7 +23,12 @@ HERE="$(cd "$(dirname "$0")/dmg" && pwd)"
 [ -d "$APP" ] || { echo "error: app bundle not found: $APP" >&2; exit 1; }
 
 # dmgbuild is pure-Python; install on demand so this works locally and on CI.
-python3 -c 'import dmgbuild' 2>/dev/null || pip3 install --user --quiet dmgbuild
+# --break-system-packages is needed on PEP 668 "externally managed" Pythons (the
+# Homebrew python3 on GitHub's macOS runners); combined with --user it installs
+# into the user site without touching the system env, and is a harmless no-op on
+# non-managed Pythons.
+python3 -c 'import dmgbuild' 2>/dev/null \
+  || pip3 install --user --quiet --break-system-packages dmgbuild
 
 APP_ABS="$(cd "$(dirname "$APP")" && pwd)/$(basename "$APP")"
 rm -f "$OUT"
