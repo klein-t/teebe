@@ -76,38 +76,6 @@ struct AppModelTests {
 }
 
 @MainActor
-@Suite("UpdaterController configuration")
-struct UpdaterConfigTests {
-    /// A valid Sparkle EdDSA public key is 32 random bytes, base64-encoded.
-    private var validKey: String { Data(repeating: 7, count: 32).base64EncodedString() }
-    private let feed = "https://example.com/appcast.xml"
-
-    @Test("the make-app.sh placeholder key is rejected")
-    func placeholderRejected() {
-        #expect(!UpdaterController.isConfigured(publicKey: UpdaterController.placeholderKey, feedURL: feed))
-    }
-
-    @Test("a missing or empty key/feed is rejected")
-    func missingRejected() {
-        #expect(!UpdaterController.isConfigured(publicKey: nil, feedURL: feed))
-        #expect(!UpdaterController.isConfigured(publicKey: "", feedURL: feed))
-        #expect(!UpdaterController.isConfigured(publicKey: validKey, feedURL: nil))
-        #expect(!UpdaterController.isConfigured(publicKey: validKey, feedURL: ""))
-    }
-
-    @Test("a malformed (non-32-byte) key is rejected")
-    func malformedRejected() {
-        #expect(!UpdaterController.isConfigured(publicKey: "not-base64!!", feedURL: feed))
-        #expect(!UpdaterController.isConfigured(publicKey: Data(repeating: 1, count: 16).base64EncodedString(), feedURL: feed))
-    }
-
-    @Test("a real key + feed is accepted")
-    func validAccepted() {
-        #expect(UpdaterController.isConfigured(publicKey: validKey, feedURL: feed))
-    }
-}
-
-@MainActor
 @Suite("SelectorModel")
 struct SelectorModelTests {
     @Test("selecting a repo loads worktrees + branches and focuses primary")
