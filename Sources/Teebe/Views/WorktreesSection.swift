@@ -54,10 +54,9 @@ struct WorktreesSection: View {
             }
 
             if isOpen {
-                // Hug the rows when there's room (so we don't grab flexible space
-                // CHANGES / FILES could use), but cap at the content height and
-                // scroll inside when the window is too short — the other headers
-                // must never get pushed off-screen.
+                // Hug the rows (the window wraps content), but cap at the content
+                // height and scroll inside when the window is dragged too short — the
+                // other headers must never get pushed off-screen.
                 ScrollView { worktreeListBody }
                     .scrollBounceBehavior(.basedOnSize)
                     .frame(maxHeight: listContentHeight)
