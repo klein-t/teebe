@@ -1,10 +1,10 @@
 import AppKit
 
 // Renders the DMG background: a plain neutral grey (subtle vertical gradient),
-// no decoration. The two app icons (teebe + Applications) are placed on top by
-// the saved .DS_Store. Window is 600x380; image is 2x (1200x760).
+// no decoration. The two icons are placed on top by dmgbuild. Window is
+// 600x440; image is 2x (1200x880).
 
-let W = 1200, H = 760
+let W = 1200, H = 880
 let outPath = CommandLine.arguments[1]
 
 let img = NSImage(size: NSSize(width: W, height: H))
