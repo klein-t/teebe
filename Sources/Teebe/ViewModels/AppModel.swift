@@ -9,7 +9,11 @@ import TeebeCore
 final class AppModel {
     private(set) var repositories: [Repository] = []
     var floatOnTop: Bool { didSet { persist() } }
-    var errorMessage: String?
+    private(set) var errorMessage: String?
+
+    /// Auto-dismiss timer for the current error banner, so a transient failure
+    /// (e.g. "Not a git repository") never sticks around indefinitely.
+    @ObservationIgnored private var errorClearTask: Task<Void, Never>?
 
     let environment: AppEnvironment
     let selector: SelectorModel
@@ -18,8 +22,25 @@ final class AppModel {
         self.environment = environment
         self.selector = SelectorModel(environment: environment)
         self.floatOnTop = false
-        // Persist whenever the selection changes so the app reopens where it was left.
-        self.selector.onSelectionChange = { [weak self] in self?.persist() }
+        // Persist whenever the selection changes, and clear any stale global error —
+        // navigating to a different repo/worktree should dismiss the banner.
+        self.selector.onSelectionChange = { [weak self] in
+            self?.persist()
+            self?.setError(nil)
+        }
+    }
+
+    /// Single entry point for the global error banner. Replaces any existing
+    /// message and (re)arms a timer that clears it, so it can't get stuck.
+    func setError(_ message: String?) {
+        errorMessage = message
+        errorClearTask?.cancel()
+        guard message != nil else { return }
+        errorClearTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled else { return }
+            self?.errorMessage = nil
+        }
     }
 
     /// Load persisted state and hydrate repositories + selection.
@@ -47,11 +68,12 @@ final class AppModel {
         // Canonicalize (tilde + realpath) so it matches the paths git reports for
         // worktrees (firmlink /var → /private/var), avoiding duplicate/mismatched entries.
         let standardized = PathUtil.standardized((path as NSString).expandingTildeInPath)
+        setError(nil)   // a fresh attempt clears any stale banner
         guard !repositories.contains(where: { $0.path == standardized }) else { return false }
         do {
             _ = try await environment.git.worktrees(repoPath: standardized)
         } catch {
-            errorMessage = "Not a git repository: \(standardized)"
+            setError("Not a git repository: \(standardized)")
             return false
         }
         let repo = Repository(path: standardized)
@@ -78,9 +100,9 @@ final class AppModel {
         guard !node.isDirectory else { return }
         do {
             try environment.opener.open(URL(fileURLWithPath: node.path))
-            errorMessage = nil
+            setError(nil)
         } catch {
-            errorMessage = "Couldn't open \(node.name)"
+            setError("Couldn't open \(node.name)")
         }
     }
 
@@ -139,7 +161,7 @@ final class AppModel {
             selector.worktree.noteSelfWrite()
             Task { await selector.worktree.refresh() }
         } catch {
-            errorMessage = "File operation failed: \(WorktreeModel.describe(error))"
+            setError("File operation failed: \(WorktreeModel.describe(error))")
         }
     }
 

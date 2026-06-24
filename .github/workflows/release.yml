@@ -52,16 +52,28 @@ jobs:
           cp sparkle-updates/teebe-*.zip .
           cp sparkle-updates/appcast.xml .
 
+      - name: Build drag-install DMG for the website download
+        run: |
+          # Sparkle auto-updates use the signed zip above; this DMG is only the
+          # first-time download linked from teebe.io. Simple grey layout (big
+          # icons: teebe left, Applications right), built with dmgbuild which
+          # writes the window settings directly — no Finder/AppleScript, so it
+          # works on CI. Stable, version-independent filename so the teebe.io
+          # link stays valid across every release. App inside is already signed.
+          ./scripts/make-dmg.sh teebe.app teebe-macos.dmg
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          # Publish both the app zip and the appcast; SUFeedURL points at
-          # releases/latest/download/appcast.xml so the feed tracks the newest tag.
-          # NOTE: the release is drafted — GitHub's `latest` ignores drafts, so the
-          # appcast URL only resolves once the draft is published. Publishing the
-          # release is the step that actually ships the update to existing users.
+          # Attach both the app zip and the signed appcast to the release. The zip
+          # is the update enclosure (stays on GitHub Releases); the appcast.xml is
+          # the source the publish-appcast workflow copies to teebe.io on publish.
+          # NOTE: the release is drafted. SUFeedURL points at https://teebe.io/
+          # appcast.xml, which is only updated when the draft is published (that
+          # fires publish-appcast). Publishing is what actually ships the update.
           files: |
             teebe-*.zip
+            teebe-macos.dmg
             appcast.xml
           generate_release_notes: true
           draft: true

@@ -43,6 +43,36 @@ struct AppModelTests {
         #expect(app.repositories.isEmpty)
         #expect(app.selector.selectedRepo == nil)
     }
+
+    @Test("a stale error clears when a fresh add attempt succeeds")
+    func errorClearsOnNewAdd() async {
+        let git = FakeGitClient()
+        git.worktreesError = .notAGitRepository(path: "/x")
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+
+        _ = await app.addRepository(path: "/x")
+        #expect(app.errorMessage != nil)
+
+        git.worktreesError = nil
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        _ = await app.addRepository(path: "/repo")
+        #expect(app.errorMessage == nil)
+    }
+
+    @Test("selecting a repo dismisses a stale global error")
+    func errorClearsOnSelection() async {
+        let git = FakeGitClient()
+        git.worktreesError = .notAGitRepository(path: "/x")
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+
+        _ = await app.addRepository(path: "/x")
+        #expect(app.errorMessage != nil)
+
+        git.worktreesError = nil
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        await app.selector.selectRepo(Repository(path: "/repo"))
+        #expect(app.errorMessage == nil)
+    }
 }
 
 @MainActor

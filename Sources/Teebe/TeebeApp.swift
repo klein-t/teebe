@@ -10,7 +10,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if let logo = Brand.logo { NSApp.applicationIconImage = logo }   // Dock / app-switcher icon
+        // Don't override `applicationIconImage`: that replaces the bundle's
+        // `AppIcon.icns` (which macOS masks into the rounded squircle with depth)
+        // with the raw full-bleed PNG, so the running app's Dock icon goes flat.
+        // Leaving it unset lets the system icon render correctly while running too.
         NSApp.activate(ignoringOtherApps: true)
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

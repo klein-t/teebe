@@ -1,0 +1,56 @@
+name: Publish appcast
+
+# When a GitHub Release is published (the manual draft -> publish step that ships
+# an update), copy that release's signed appcast.xml into the teebe-site repo so
+# Sparkle's feed at https://teebe.io/appcast.xml tracks the newest published
+# version. The .app zip enclosures the appcast points at stay on GitHub Releases;
+# only the feed XML lives on our domain.
+#
+# Requires a repo secret SITE_DEPLOY_KEY: the private half of an SSH deploy key
+# whose public half is installed on klein-t/teebe-site with write access. A
+# deploy key is scoped to that one repo and is not tied to a user account, so its
+# blast radius is exactly "can push to teebe-site" and nothing else.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Push appcast.xml to teebe-site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download appcast.xml from the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'appcast.xml' --output appcast.xml --clobber
+          echo "Downloaded appcast.xml for $TAG:"
+          cat appcast.xml
+
+      - name: Check out teebe-site
+        uses: actions/checkout@v7
+        with:
+          repository: klein-t/teebe-site
+          ssh-key: ${{ secrets.SITE_DEPLOY_KEY }}
+          path: site
+
+      - name: Commit appcast if changed
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          cp appcast.xml site/appcast.xml
+          cd site
+          if git diff --quiet -- appcast.xml; then
+            echo "appcast.xml unchanged; nothing to publish."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add appcast.xml
+          git commit -m "Publish Sparkle appcast for ${TAG}"
+          git push

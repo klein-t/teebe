@@ -61,11 +61,12 @@ licenses.
 ## Shipping updates (Sparkle)
 
 teebe self-updates via [Sparkle](https://sparkle-project.org). Updates are
-delivered through an **appcast** (`appcast.xml`) published as an asset on each
-GitHub Release; the app's `SUFeedURL` points at
-`releases/latest/download/appcast.xml`, so the feed always reflects the newest
-tag. Each update is integrity-signed with an **EdDSA key** — this is Sparkle's
-own signature and is independent of Apple notarization (which governs
+delivered through an **appcast** (`appcast.xml`). The app's `SUFeedURL` points at
+**`https://teebe.io/appcast.xml`** — hosted on our own domain (the `teebe-site`
+GitHub Pages repo) so the feed URL baked into shipped binaries is
+host-independent. The appcast's `.app` zip enclosures still live on GitHub
+Releases. Each update is integrity-signed with an **EdDSA key** — this is
+Sparkle's own signature and is independent of Apple notarization (which governs
 first-launch Gatekeeper trust, not updates).
 
 ### One-time signing-key setup (maintainer)
@@ -97,11 +98,21 @@ which is what Sparkle compares to detect a newer version), zips it, runs
 `generate_appcast` (signing each update with the private key), and uploads both
 the zip and `appcast.xml` to a **draft** release.
 
-**Publishing the draft is what ships the update.** `SUFeedURL` points at
-`releases/latest/download/appcast.xml`, and GitHub's `latest` ignores drafts —
-so until you publish the release, existing apps won't see the new `appcast.xml`.
-Once published, existing users get an in-app "Update available" prompt; the menu
-also has **Check for Updates…**.
+**Publishing the draft is what ships the update.** Publishing fires the
+`publish-appcast` workflow, which pushes that release's signed `appcast.xml` into
+the `teebe-site` repo so it's served at `https://teebe.io/appcast.xml` (where
+`SUFeedURL` points). Until you publish, the appcast on teebe.io still points at
+the previous release, so existing apps see nothing new. Once published, existing
+users get an in-app "Update available" prompt; the menu also has **Check for
+Updates…**.
+
+> The `publish-appcast` workflow needs a repo secret **`SITE_DEPLOY_KEY`** — the
+> private half of an SSH **deploy key** whose public half is installed on
+> `klein-t/teebe-site` with write access. A deploy key is scoped to that single
+> repo and isn't tied to a personal account, so a leak can only push to
+> teebe-site and nothing else. To rotate: delete the deploy key on teebe-site,
+> generate a new `ed25519` keypair, add the public half as a write deploy key,
+> and replace the `SITE_DEPLOY_KEY` secret with the new private half.
 
 > Note: until the app is Developer ID-signed and **notarized**, first-time
 > downloads still hit Gatekeeper (right-click → Open). Notarization is separate
