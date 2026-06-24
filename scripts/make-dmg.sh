@@ -1,46 +1,36 @@
 #!/usr/bin/env bash
 #
-# Build the branded, drag-to-install DMG that teebe.io links to
+# Build the drag-to-install DMG that teebe.io links to
 # (releases/latest/download/teebe-macos.dmg).
 #
-# The styled look — plain grey background, big icons (teebe left, Applications
-# right), icon size and positions — is carried by a prebuilt .DS_Store
-# (scripts/dmg/DS_Store) captured once on a Mac with a Finder GUI. We deliberately
-# do NOT run create-dmg here: it drives Finder over AppleScript, which is
-# flaky/unavailable on headless CI runners. Instead we reassemble a volume
-# named exactly "teebe" with the same files, so Finder reapplies the saved
-# layout on mount. This is fully deterministic and needs no GUI.
+# Uses `dmgbuild`, which writes the window's .DS_Store settings directly
+# (background, icon positions/size, and the hide-chrome flags) without driving
+# Finder over AppleScript — so it builds deterministically on headless CI.
+# The layout lives in scripts/dmg/settings.py; the grey background is rendered
+# by scripts/dmg/make-bg.swift into scripts/dmg/dmg-background.png.
 #
-# To restyle: edit scripts/dmg/make-bg.swift, regenerate the background, then
-# re-capture scripts/dmg/DS_Store from a `create-dmg` build (see make-bg.swift
-# header). The committed DS_Store is named without a leading dot so .gitignore
-# rules for .DS_Store don't drop it; we rename it on the volume at build time.
+# Heads-up: on macOS 26 (Tahoe) Finder shows its toolbar/status bar on dmg
+# windows regardless of the hide flags — an OS limitation. Older macOS honors
+# them and shows a clean, chrome-less window.
 #
 # Usage: scripts/make-dmg.sh [path/to/teebe.app] [output.dmg]
 set -euo pipefail
 
 APP="${1:-teebe.app}"
 OUT="${2:-teebe-macos.dmg}"
-VOLNAME="teebe"
 HERE="$(cd "$(dirname "$0")/dmg" && pwd)"
 
 [ -d "$APP" ] || { echo "error: app bundle not found: $APP" >&2; exit 1; }
 
-STAGE="$(mktemp -d)/stage"
-mkdir -p "$STAGE/.background"
-cp -R "$APP" "$STAGE/$(basename "$APP")"
-ln -s /Applications "$STAGE/Applications"
-cp "$HERE/dmg-background.png" "$STAGE/.background/dmg-background.png"
-cp "$HERE/DS_Store" "$STAGE/.DS_Store"
+# dmgbuild is pure-Python; install on demand so this works locally and on CI.
+python3 -c 'import dmgbuild' 2>/dev/null || pip3 install --user --quiet dmgbuild
 
-# Read-write volume from the staged tree (carries our .DS_Store), then convert
-# to a compressed, read-only image for distribution.
-SIZE_MB=$(( $(du -sm "$STAGE" | cut -f1) + 20 ))
-RW="$(mktemp -u).dmg"
-hdiutil create -volname "$VOLNAME" -srcfolder "$STAGE" \
-  -fs HFS+ -format UDRW -size "${SIZE_MB}m" -ov "$RW" >/dev/null
+APP_ABS="$(cd "$(dirname "$APP")" && pwd)/$(basename "$APP")"
 rm -f "$OUT"
-hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -o "$OUT" >/dev/null
-rm -f "$RW"
+python3 -m dmgbuild \
+  -s "$HERE/settings.py" \
+  -D app="$APP_ABS" \
+  -D bg="$HERE/dmg-background.png" \
+  "teebe" "$OUT"
 
 echo "built $OUT"
