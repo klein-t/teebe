@@ -51,6 +51,11 @@ jobs:
             sparkle-updates
           cp sparkle-updates/teebe-*.zip .
           cp sparkle-updates/appcast.xml .
+          # Also publish a stable, version-independent filename so the website's
+          # download link (releases/latest/download/teebe-macos.zip) stays valid
+          # across every release. Sparkle's appcast still references the versioned
+          # zip in sparkle-updates/; this is just an extra alias for humans.
+          cp "teebe-${GITHUB_REF_NAME}.zip" teebe-macos.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
