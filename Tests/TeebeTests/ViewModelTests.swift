@@ -43,6 +43,68 @@ struct AppModelTests {
         #expect(app.repositories.isEmpty)
         #expect(app.selector.selectedRepo == nil)
     }
+
+    @Test("a stale error clears when a fresh add attempt succeeds")
+    func errorClearsOnNewAdd() async {
+        let git = FakeGitClient()
+        git.worktreesError = .notAGitRepository(path: "/x")
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+
+        _ = await app.addRepository(path: "/x")
+        #expect(app.errorMessage != nil)
+
+        git.worktreesError = nil
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        _ = await app.addRepository(path: "/repo")
+        #expect(app.errorMessage == nil)
+    }
+
+    @Test("selecting a repo dismisses a stale global error")
+    func errorClearsOnSelection() async {
+        let git = FakeGitClient()
+        git.worktreesError = .notAGitRepository(path: "/x")
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+
+        _ = await app.addRepository(path: "/x")
+        #expect(app.errorMessage != nil)
+
+        git.worktreesError = nil
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        await app.selector.selectRepo(Repository(path: "/repo"))
+        #expect(app.errorMessage == nil)
+    }
+}
+
+@MainActor
+@Suite("UpdaterController configuration")
+struct UpdaterConfigTests {
+    /// A valid Sparkle EdDSA public key is 32 random bytes, base64-encoded.
+    private var validKey: String { Data(repeating: 7, count: 32).base64EncodedString() }
+    private let feed = "https://example.com/appcast.xml"
+
+    @Test("the make-app.sh placeholder key is rejected")
+    func placeholderRejected() {
+        #expect(!UpdaterController.isConfigured(publicKey: UpdaterController.placeholderKey, feedURL: feed))
+    }
+
+    @Test("a missing or empty key/feed is rejected")
+    func missingRejected() {
+        #expect(!UpdaterController.isConfigured(publicKey: nil, feedURL: feed))
+        #expect(!UpdaterController.isConfigured(publicKey: "", feedURL: feed))
+        #expect(!UpdaterController.isConfigured(publicKey: validKey, feedURL: nil))
+        #expect(!UpdaterController.isConfigured(publicKey: validKey, feedURL: ""))
+    }
+
+    @Test("a malformed (non-32-byte) key is rejected")
+    func malformedRejected() {
+        #expect(!UpdaterController.isConfigured(publicKey: "not-base64!!", feedURL: feed))
+        #expect(!UpdaterController.isConfigured(publicKey: Data(repeating: 1, count: 16).base64EncodedString(), feedURL: feed))
+    }
+
+    @Test("a real key + feed is accepted")
+    func validAccepted() {
+        #expect(UpdaterController.isConfigured(publicKey: validKey, feedURL: feed))
+    }
 }
 
 @MainActor
