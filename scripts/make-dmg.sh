@@ -3,9 +3,9 @@
 # Build the branded, drag-to-install DMG that teebe.io links to
 # (releases/latest/download/teebe-macos.dmg).
 #
-# The styled look — dark background, icon positions, hidden toolbar, icon
-# size — is carried by a prebuilt .DS_Store (scripts/dmg/DS_Store) that was
-# captured once with `create-dmg` on a Mac with a Finder GUI. We deliberately
+# The styled look — plain grey background, big icons (teebe left, Applications
+# right), icon size and positions — is carried by a prebuilt .DS_Store
+# (scripts/dmg/DS_Store) captured once on a Mac with a Finder GUI. We deliberately
 # do NOT run create-dmg here: it drives Finder over AppleScript, which is
 # flaky/unavailable on headless CI runners. Instead we reassemble a volume
 # named exactly "teebe" with the same files, so Finder reapplies the saved

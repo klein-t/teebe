@@ -55,8 +55,9 @@ jobs:
       - name: Build branded drag-install DMG for the website download
         run: |
           # Sparkle auto-updates use the signed zip above; this DMG is only the
-          # first-time download linked from teebe.io. It carries a dark, branded
-          # layout (background + icon positions) from a prebuilt .DS_Store and is
+          # first-time download linked from teebe.io. It carries a simple grey
+          # layout (big icons: teebe left, Applications right) from a prebuilt
+          # .DS_Store and is
           # assembled deterministically — no Finder/AppleScript, so it works on CI.
           # Stable, version-independent filename so the teebe.io link stays valid
           # across every release. App inside is already code-signed.
