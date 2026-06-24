@@ -51,11 +51,19 @@ jobs:
             sparkle-updates
           cp sparkle-updates/teebe-*.zip .
           cp sparkle-updates/appcast.xml .
-          # Also publish a stable, version-independent filename so the website's
-          # download link (releases/latest/download/teebe-macos.zip) stays valid
-          # across every release. Sparkle's appcast still references the versioned
-          # zip in sparkle-updates/; this is just an extra alias for humans.
-          cp "teebe-${GITHUB_REF_NAME}.zip" teebe-macos.zip
+
+      - name: Build drag-install DMG for the website download
+        run: |
+          # Sparkle auto-updates use the signed zip above; this DMG is only the
+          # first-time download linked from teebe.io. Standard macOS layout: the
+          # app plus an /Applications symlink to drag it onto. Stable, version-
+          # independent filename so releases/latest/download/teebe-macos.dmg stays
+          # valid across every release. App inside is already code-signed.
+          STAGE="$(mktemp -d)"
+          cp -R teebe.app "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "teebe" -srcfolder "$STAGE" \
+            -ov -format UDZO teebe-macos.dmg
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -68,6 +76,7 @@ jobs:
           # fires publish-appcast). Publishing is what actually ships the update.
           files: |
             teebe-*.zip
+            teebe-macos.dmg
             appcast.xml
           generate_release_notes: true
           draft: true
