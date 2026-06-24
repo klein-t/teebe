@@ -23,9 +23,8 @@ struct ChangesSection: View {
             }
 
             if isOpen {
-                // Hug the rows when there's room (like WORKTREES) rather than
-                // grabbing the flexible space FILES should own; cap at the content
-                // height and scroll inside only when the window is too short.
+                // Hug the rows (the window wraps content); cap at the content height
+                // and scroll inside only when the window is dragged too short.
                 VStack(spacing: 0) {
                     ScrollView {
                         changeList

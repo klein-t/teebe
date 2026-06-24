@@ -13,8 +13,11 @@ struct RootView: View {
     @State private var openFiles = true
     @State private var quickLook = QuickLookController()
     @State private var window: NSWindow?
-    /// Height to restore to when a section is reopened from the fully-collapsed state.
-    @State private var expandedHeight: CGFloat = 640
+    /// Height of the FILES area (the tree below its header). WORKTREES/CHANGES wrap
+    /// their rows, but FILES is unbounded, so opening it reveals this much and the tree
+    /// scrolls; dragging the window's bottom edge while FILES is open updates it, and
+    /// it's remembered per repo.
+    @State private var filesReveal: CGFloat = 300
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
 
@@ -30,6 +33,8 @@ struct RootView: View {
     /// Shortest the window may be dragged while a section is open — always tall
     /// enough to keep all three headers visible.
     private let minWindowHeight: CGFloat = 150
+    /// Smallest the FILES reveal may shrink to (search field + a few rows).
+    private let minFilesReveal: CGFloat = 140
 
     private enum Section { case worktrees, changes, files }
 
@@ -42,21 +47,14 @@ struct RootView: View {
             if app.repositories.isEmpty {
                 emptyState
             } else {
-                // Pinned-header accordion: every section header stays visible.
-                // Open sections share the remaining height and scroll internally;
-                // closed sections shrink to just their header. All-closed ⇒ three
-                // headers stacked.
+                // Pinned-header accordion: every section header stays visible. The
+                // window wraps its content (see targetHeight), so WORKTREES and CHANGES
+                // simply hug their rows; only FILES — whose tree is unbounded — fills
+                // the remaining height and scrolls.
                 VStack(spacing: 0) {
                     WorktreesSection(app: app, isOpen: sectionBinding(.worktrees, openWorktrees))
                     Divider()
                     ChangesSection(app: app, worktree: worktree, preview: preview, isOpen: sectionBinding(.changes, openChanges))
-                    // WORKTREES and CHANGES both hug their content; only FILES fills
-                    // the slack. So whenever FILES is closed, nothing claims the
-                    // leftover height — push FILES to the bottom. When all are closed
-                    // the headers must stay tight, so no spacer then.
-                    if !openFiles && !allClosed {
-                        Spacer(minLength: 0)
-                    }
                     Divider()
                     FilesSection(app: app, worktree: worktree, preview: preview, isOpen: sectionBinding(.files, openFiles))
                 }
@@ -83,15 +81,18 @@ struct RootView: View {
                 setTrafficLights(visible: false, animated: false, window: resolved)
                 applyLayout(for: app.selector.selectedRepo?.path)
             },
-            onLiveResizeStart: { setHeightLocked(heightLocked, height: targetHeight()) },
+            onLiveResizeStart: { setHeightLocked(heightPinned, height: targetHeight()) },
             onLiveResizeEnd: { handleLiveResizeEnd($0) }
         ))
         .onChange(of: app.selector.selectedRepo?.path) { _, path in applyLayout(for: path) }
+        // Keep WORKTREES/CHANGES wrapped to their rows as the lists change (preserving
+        // the FILES reveal below them). The file tree itself just scrolls, so its row
+        // count doesn't resize the window.
         .onChange(of: app.selector.worktrees.count) { _, _ in
-            if heightLocked && !allClosed { applyWindowSizing() }   // content-sized while FILES closed
+            if !allClosed { applyWindowSizing(animated: false) }
         }
         .onChange(of: worktree.changeCount) { _, _ in
-            if heightLocked && !allClosed { applyWindowSizing() }   // CHANGES hugs its rows
+            if !allClosed { applyWindowSizing(animated: false) }
         }
         .background(QuickLookBridge(controller: quickLook))
         .focusable()
@@ -161,17 +162,16 @@ struct RootView: View {
     }
 
     private func setOpen(_ section: Section, _ open: Bool) {
-        // Remember the free-resize height before leaving a scrollable layout.
-        if heightLocked == false, let window { expandedHeight = window.frame.height }
-        // Snap the content state — the *window* owns the open/close motion (see
-        // applyWindowSizing). Animating the content here would race the window's
-        // content-pinned min-size and bounce.
         switch section {
         case .worktrees: openWorktrees = open
         case .changes: openChanges = open
         case .files: openFiles = open
         }
-        applyWindowSizing()
+        // Opening a section grows the window *downward* to make room for it; closing
+        // shrinks it back up. Snap rather than animate: animating the NSWindow frame
+        // while SwiftUI relays out the content instantly desyncs them and the content
+        // visibly stretches/bounces.
+        applyWindowSizing(animated: false)
         persistLayout()
     }
 
@@ -184,47 +184,52 @@ struct RootView: View {
             setWindowHeight(emptyStateHeight, animated: false)   // no project → empty state
             return
         }
-        let layout = app.layout(forRepo: repoPath) ?? SectionLayout()   // default: all open, 640
-        openWorktrees = layout.worktreesOpen
-        openChanges = layout.changesOpen
-        openFiles = layout.filesOpen
-        expandedHeight = max(CGFloat(layout.windowHeight), minWindowHeight)
+        let layout = app.layout(forRepo: repoPath)
+        openWorktrees = layout?.worktreesOpen ?? true
+        openChanges = layout?.changesOpen ?? true
+        openFiles = layout?.filesOpen ?? true
+        if let saved = layout.map({ CGFloat($0.windowHeight) }) {
+            filesReveal = min(max(saved, minFilesReveal), screenHeight - collapsedHeight)
+        }
         applyWindowSizing(animated: false)
     }
 
-    /// `true` when FILES (the only space-filling section) is closed — WORKTREES and
-    /// CHANGES both hug their rows, so the window is sized to its content and its
-    /// height is pinned (width stays free).
-    private var heightLocked: Bool { !openFiles }
+    /// `true` only when every section is collapsed: the window then shrinks to the
+    /// three stacked headers and its height is pinned.
+    private var heightPinned: Bool { allClosed }
 
-    /// When no scrollable section is open the window is content-pinned: drive the
-    /// SwiftUI frame to that exact height so `windowResizability` reports the same
-    /// min/ideal/max we set on the `NSWindow`. Otherwise SwiftUI's content-min
-    /// re-clamps the window a frame later and leaves an empty "chin" below the
-    /// last header.
+    /// When the window is pinned (all-collapsed) drive the SwiftUI frame to that exact
+    /// height so `windowResizability` reports the same min/ideal/max we set on the
+    /// `NSWindow`; otherwise SwiftUI's content-min re-clamps the window a frame later
+    /// and leaves an empty "chin" below the last header. `nil` (free height) whenever a
+    /// section is open.
     ///
-    /// `targetHeight()` is a *window* height; SwiftUI's `.frame` sizes the
-    /// *content* (`contentLayoutRect`) and the window is that plus a constant
-    /// title-bar inset. We draw the title row into that inset (`ignoresSafeArea`),
-    /// so subtract it here — otherwise the window ends up one title-bar taller than
-    /// the target and the surplus shows as the chin.
+    /// `targetHeight()` is a *window* height; SwiftUI's `.frame` sizes the *content*
+    /// (`contentLayoutRect`) and the window is that plus a constant title-bar inset. We
+    /// draw the title row into that inset (`ignoresSafeArea`), so subtract it here.
     private var lockedFrameHeight: CGFloat? {
-        guard heightLocked else { return nil }
+        guard heightPinned else { return nil }
         let inset = window.map { max(0, $0.frame.height - $0.contentLayoutRect.height) } ?? 0
         return max(targetHeight() - inset, 0)
     }
 
-    /// The height the window should be for the current open/closed state.
+    /// The window height for the current state: headers-only when collapsed; otherwise
+    /// the headers plus WORKTREES/CHANGES wrapped to their rows, plus (when FILES is
+    /// open) its reveal area. Capped at the visible screen.
     private func targetHeight() -> CGFloat {
-        if allClosed { return collapsedHeight }
-        if heightLocked {                                   // FILES closed → hug content
-            let cap = (window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
-            return min(collapsedHeight + worktreesContentHeight + changesContentHeight + 4, cap)
-        }
-        return expandedHeight                               // FILES open → free height
+        guard !allClosed else { return collapsedHeight }
+        var height = collapsedHeight + worktreesContentHeight + changesContentHeight
+        if openFiles { height += filesReveal }
+        return min(height, screenHeight)
     }
 
-    /// Estimated natural height of the open worktree list (mirrors WorktreesSection).
+    /// Visible screen height (the resize/reveal ceiling).
+    private var screenHeight: CGFloat {
+        (window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
+    }
+
+    /// Estimated natural height of the open worktree list (mirrors WorktreesSection);
+    /// 0 when closed.
     private var worktreesContentHeight: CGFloat {
         guard openWorktrees else { return 0 }
         let s = app.selector
@@ -233,47 +238,45 @@ struct RootView: View {
         return 8 + repoRow + rows
     }
 
-    /// Estimated natural height of the open change list (mirrors ChangesSection:
-    /// 24pt rows plus the section's 8pt top / 6pt bottom padding).
+    /// Estimated natural height of the open change list (mirrors ChangesSection); 0
+    /// when closed.
     private var changesContentHeight: CGFloat {
         guard openChanges else { return 0 }
         let count = app.selector.worktree.changeCount
         return 14 + (count == 0 ? 24 : CGFloat(count) * 24)
     }
 
-    /// Size the window to the current state and lock/free its height accordingly.
+    /// Size the window to the current state, anchored at the top so it grows and
+    /// shrinks downward. Width stays freely resizable throughout.
     private func applyWindowSizing(animated: Bool = true) {
         guard let window else { return }
         let target = targetHeight()
-        setHeightLocked(heightLocked, height: target)
-        // Animate only a grow into a *free* (scrollable) layout — the window glides
-        // open to reveal CHANGES / FILES. Everything else snaps:
-        //  • Shrinks snap, or the top-anchored content flashes an empty "chin" while
-        //    the window lags behind the collapsed headers.
-        //  • Height-locked states are content-pinned (windowResizability is
-        //    .contentMinSize), so an animated frame races the content's min-size and
-        //    bounces. Snapping keeps the window and content in lockstep.
+        setHeightLocked(heightPinned, height: target)
         let shrinking = target < window.frame.height
-        setWindowHeight(target, animated: animated && !shrinking && !heightLocked)
+        setWindowHeight(target, animated: animated && !shrinking)
     }
 
-    /// User finished dragging the window edge → remember the new height, but only
-    /// while a scrollable section is open (otherwise height is content-pinned).
+    /// User finished dragging the window edge. Height is derived from content (wrap),
+    /// so there's nothing to remember — just persist the open/closed flags.
     private func handleLiveResizeEnd(_ height: CGFloat) {
-        guard !heightLocked else { return }
-        expandedHeight = height
+        // Dragging the edge resizes the FILES area (the only thing that can grow past
+        // its content); record it so the reveal persists. With FILES closed the window
+        // already wraps WORKTREES/CHANGES, so there's nothing to remember.
+        if openFiles {
+            let nonFiles = collapsedHeight + worktreesContentHeight + changesContentHeight
+            filesReveal = min(max(height - nonFiles, minFilesReveal), screenHeight - nonFiles)
+        }
         persistLayout()
     }
 
     private func persistLayout() {
         guard let repo = app.selector.selectedRepo?.path else { return }
-        let height = heightLocked ? expandedHeight : (window?.frame.height ?? expandedHeight)
         app.saveLayout(
             SectionLayout(
                 worktreesOpen: openWorktrees,
                 changesOpen: openChanges,
                 filesOpen: openFiles,
-                windowHeight: Double(height)
+                windowHeight: Double(filesReveal)
             ),
             forRepo: repo
         )
@@ -289,12 +292,20 @@ struct RootView: View {
         window.setFrame(frame, display: true, animate: animated)
     }
 
-    /// Pin the window *height* (content-sized when locked) while keeping width
-    /// freely resizable. Re-asserted on every resize-drag start.
+    /// Constrain the window's height for the current state. Collapsed → pinned to the
+    /// headers bar. FILES open → resizable from `minWindowHeight` up to the screen
+    /// (dragging adjusts the FILES reveal). FILES closed → wraps WORKTREES/CHANGES:
+    /// can't grow past their rows (no gap), but can shrink to scroll. Width stays free.
+    /// Re-asserted on every resize-drag start (SwiftUI keeps re-enabling free resize).
     private func setHeightLocked(_ locked: Bool, height: CGFloat) {
         guard let window else { return }
-        window.minSize = NSSize(width: minWindowWidth, height: locked ? height : minWindowHeight)
-        window.maxSize = NSSize(width: 100_000, height: locked ? height : 100_000)
+        if locked {
+            window.minSize = NSSize(width: minWindowWidth, height: height)
+            window.maxSize = NSSize(width: 100_000, height: height)
+        } else {
+            window.minSize = NSSize(width: minWindowWidth, height: minWindowHeight)
+            window.maxSize = NSSize(width: 100_000, height: openFiles ? screenHeight : height)
+        }
     }
 
     // MARK: - Keyboard
