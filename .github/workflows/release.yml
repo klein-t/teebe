@@ -55,11 +55,12 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          # Publish both the app zip and the appcast; SUFeedURL points at
-          # releases/latest/download/appcast.xml so the feed tracks the newest tag.
-          # NOTE: the release is drafted — GitHub's `latest` ignores drafts, so the
-          # appcast URL only resolves once the draft is published. Publishing the
-          # release is the step that actually ships the update to existing users.
+          # Attach both the app zip and the signed appcast to the release. The zip
+          # is the update enclosure (stays on GitHub Releases); the appcast.xml is
+          # the source the publish-appcast workflow copies to teebe.io on publish.
+          # NOTE: the release is drafted. SUFeedURL points at https://teebe.io/
+          # appcast.xml, which is only updated when the draft is published (that
+          # fires publish-appcast). Publishing is what actually ships the update.
           files: |
             teebe-*.zip
             appcast.xml

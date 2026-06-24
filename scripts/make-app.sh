@@ -16,9 +16,12 @@ APP_VERSION="${APP_VERSION:-0.2.2}"
 BUILD_NUMBER="${BUILD_NUMBER:-$APP_VERSION}"
 
 # Sparkle auto-update config. Override via env in CI; the public key pairs with
-# the EdDSA private key used to sign updates (see CONTRIBUTING.md). The feed
-# points at the appcast published alongside each GitHub Release.
-SU_FEED_URL="${SU_FEED_URL:-https://github.com/klein-t/teebe/releases/latest/download/appcast.xml}"
+# the EdDSA private key used to sign updates (see CONTRIBUTING.md). The feed is
+# hosted on our own domain (teebe.io, served by the teebe-site GitHub Pages repo)
+# so the URL baked into shipped binaries is host-independent. The .app zip
+# enclosures it references still live on GitHub Releases. The publish-appcast
+# workflow pushes each published release's appcast.xml to teebe-site.
+SU_FEED_URL="${SU_FEED_URL:-https://teebe.io/appcast.xml}"
 SU_PUBLIC_ED_KEY="${SU_PUBLIC_ED_KEY:-REPLACE_WITH_SPARKLE_PUBLIC_ED_KEY}"
 
 echo "==> swift build -c $CONFIG"
