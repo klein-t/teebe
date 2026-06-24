@@ -106,9 +106,13 @@ the previous release, so existing apps see nothing new. Once published, existing
 users get an in-app "Update available" prompt; the menu also has **Check for
 Updates…**.
 
-> The `publish-appcast` workflow needs a repo secret **`SITE_DEPLOY_TOKEN`** — a
-> fine-grained PAT scoped to `klein-t/teebe-site` with *Contents: read and write*
-> — so CI can commit the appcast to that repo.
+> The `publish-appcast` workflow needs a repo secret **`SITE_DEPLOY_KEY`** — the
+> private half of an SSH **deploy key** whose public half is installed on
+> `klein-t/teebe-site` with write access. A deploy key is scoped to that single
+> repo and isn't tied to a personal account, so a leak can only push to
+> teebe-site and nothing else. To rotate: delete the deploy key on teebe-site,
+> generate a new `ed25519` keypair, add the public half as a write deploy key,
+> and replace the `SITE_DEPLOY_KEY` secret with the new private half.
 
 > Note: until the app is Developer ID-signed and **notarized**, first-time
 > downloads still hit Gatekeeper (right-click → Open). Notarization is separate

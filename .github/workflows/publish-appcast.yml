@@ -6,8 +6,10 @@ name: Publish appcast
 # version. The .app zip enclosures the appcast points at stay on GitHub Releases;
 # only the feed XML lives on our domain.
 #
-# Requires a repo secret SITE_DEPLOY_TOKEN: a fine-grained PAT scoped to the
-# klein-t/teebe-site repo with Contents: read and write.
+# Requires a repo secret SITE_DEPLOY_KEY: the private half of an SSH deploy key
+# whose public half is installed on klein-t/teebe-site with write access. A
+# deploy key is scoped to that one repo and is not tied to a user account, so its
+# blast radius is exactly "can push to teebe-site" and nothing else.
 on:
   release:
     types: [published]
@@ -34,7 +36,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: klein-t/teebe-site
-          token: ${{ secrets.SITE_DEPLOY_TOKEN }}
+          ssh-key: ${{ secrets.SITE_DEPLOY_KEY }}
           path: site
 
       - name: Commit appcast if changed
