@@ -32,6 +32,17 @@ jobs:
           echo "Downloaded appcast.xml for $TAG:"
           cat appcast.xml
 
+      - name: Fetch CHANGELOG.md at the released tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          # Mirror the changelog onto the site so the changelog page can read it
+          # same-origin. CHANGELOG.md in the app repo stays the single source.
+          gh api "repos/$GITHUB_REPOSITORY/contents/CHANGELOG.md?ref=$TAG" \
+            -H "Accept: application/vnd.github.raw" > CHANGELOG.md || true
+          head -5 CHANGELOG.md || true
+
       - name: Check out teebe-site
         uses: actions/checkout@v7
         with:
@@ -39,18 +50,19 @@ jobs:
           ssh-key: ${{ secrets.SITE_DEPLOY_KEY }}
           path: site
 
-      - name: Commit appcast if changed
+      - name: Commit appcast + changelog if changed
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           cp appcast.xml site/appcast.xml
+          [ -s CHANGELOG.md ] && cp CHANGELOG.md site/CHANGELOG.md
           cd site
-          if git diff --quiet -- appcast.xml; then
-            echo "appcast.xml unchanged; nothing to publish."
+          if git diff --quiet -- appcast.xml CHANGELOG.md; then
+            echo "appcast.xml and CHANGELOG.md unchanged; nothing to publish."
             exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add appcast.xml
-          git commit -m "Publish Sparkle appcast for ${TAG}"
+          git add appcast.xml CHANGELOG.md
+          git commit -m "Publish appcast + changelog for ${TAG}"
           git push

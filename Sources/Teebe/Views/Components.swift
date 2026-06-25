@@ -12,6 +12,29 @@ enum Brand {
         .url(forResource: "teebe-logo", withExtension: "png")
         .flatMap(NSImage.init(contentsOf:))
 
+    /// The packaged `CHANGELOG.md`, drives the "What's New" window. In a release the
+    /// `.app` carries it in `Contents/Resources/` (copied by `make-app.sh`); under
+    /// `swift run`/tests there's no bundle copy, so fall back to walking up from the
+    /// executable to the repo-root `CHANGELOG.md` so the window still works in dev.
+    static let changelogMarkdown: String? = {
+        if let url = Bundle.main.url(forResource: "CHANGELOG", withExtension: "md"),
+           let text = try? String(contentsOf: url, encoding: .utf8) {
+            return text
+        }
+        var dir = URL(fileURLWithPath: Bundle.main.bundlePath)
+        for _ in 0..<10 {
+            let candidate = dir.appendingPathComponent("CHANGELOG.md")
+            if let text = try? String(contentsOf: candidate, encoding: .utf8) { return text }
+            dir.deleteLastPathComponent()
+        }
+        return nil
+    }()
+
+    /// User-facing version string from the bundle's `Info.plist`, or `nil` in dev.
+    static var appVersion: String? {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+    }
+
     /// Locate the SwiftPM resource bundle (`Teebe_Teebe.bundle`) across run modes.
     /// We deliberately avoid `Bundle.module`: its generated accessor only checks
     /// the app *root* (`Bundle.main.bundleURL/Teebe_Teebe.bundle`) plus a hardcoded

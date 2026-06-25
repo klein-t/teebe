@@ -417,6 +417,12 @@ private struct EmptyStateView: View {
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
             .modifier(StaggeredReveal(revealed: revealed, step: 3))
+            if let version = Brand.appVersion {
+                Text("\(Brand.name) v\(version)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.secondaryText)
+                    .modifier(StaggeredReveal(revealed: revealed, step: 4))
+            }
         }
         .frame(maxWidth: .infinity, minHeight: 300)
         .padding(40)
