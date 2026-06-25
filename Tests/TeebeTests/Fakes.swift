@@ -44,9 +44,16 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     func commit(worktreePath: String, message: String) async throws { commitMessages.append(message) }
     func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool) async throws {}
     func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws {}
+    /// Scripted stdout for `git rev-parse --git-common-dir` (the repo's git common
+    /// dir). When nil, `run` returns empty stdout and callers fall back to `.git`.
+    var gitCommonDirOutput: String?
     @discardableResult
     func run(_ arguments: [String], in directory: String) async throws -> GitInvocationResult {
-        GitInvocationResult(arguments: arguments, exitCode: 0, standardOutput: Data(), standardError: "")
+        var stdout = Data()
+        if arguments == ["rev-parse", "--git-common-dir"], let gitCommonDirOutput {
+            stdout = Data(gitCommonDirOutput.utf8)
+        }
+        return GitInvocationResult(arguments: arguments, exitCode: 0, standardOutput: stdout, standardError: "")
     }
 }
 

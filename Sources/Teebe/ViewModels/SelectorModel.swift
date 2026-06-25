@@ -38,6 +38,10 @@ final class SelectorModel {
     /// of `.git/worktrees` events collapses into at most one queued follow-up.
     private var isRescanning = false
     private var rescanQueued = false
+    /// Absolute path to the repo's `worktrees` admin dir (inside the git *common*
+    /// dir), used to filter watcher events. Resolved via `git rev-parse` so it's
+    /// correct even when `<repo>/.git` is a gitlink file rather than a directory.
+    private var worktreesAdminDir: String?
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -64,6 +68,7 @@ final class SelectorModel {
     func clearSelection() {
         repoWatcher?.stop()
         repoWatcher = nil
+        worktreesAdminDir = nil
         selectedRepo = nil
         worktrees = []
         selectedWorktree = nil
@@ -76,7 +81,7 @@ final class SelectorModel {
     /// worktree.
     func selectRepo(_ repo: Repository) async {
         selectedRepo = repo
-        startRepoWatching(repo)
+        await startRepoWatching(repo)
         do {
             worktrees = try await environment.worktreeService.worktrees(for: repo)
             branches = try await environment.branchService.branches(for: repo)
@@ -95,25 +100,37 @@ final class SelectorModel {
 
     // MARK: - Auto-detecting worktree add/remove
 
-    /// Watch the selected repo's git dir. A `git worktree add`/`remove` (or `prune`)
-    /// rewrites `.git/worktrees/…`, which `handleRepoWatchEvent` filters for; routine
-    /// index/ref writes in the primary checkout are ignored.
-    private func startRepoWatching(_ repo: Repository) {
+    /// Watch the selected repo's git common dir. A `git worktree add`/`remove` (or
+    /// `prune`) rewrites `worktrees/…` there, which `handleRepoWatchEvent` filters
+    /// for; routine index/ref writes in the primary checkout are ignored.
+    private func startRepoWatching(_ repo: Repository) async {
         repoWatcher?.stop()
+        let commonDir = await resolveGitCommonDir(for: repo)
+        worktreesAdminDir = (commonDir as NSString).appendingPathComponent("worktrees")
         let watcher = environment.makeWatcher()
-        let gitDir = (repo.path as NSString).appendingPathComponent(".git")
-        watcher.start(paths: [gitDir], debounce: 0.5) { [weak self] paths in
+        watcher.start(paths: [commonDir], debounce: 0.5) { [weak self] paths in
             Task { @MainActor in await self?.handleRepoWatchEvent(paths) }
         }
         repoWatcher = watcher
     }
 
-    /// FSEvents on the repo's git dir: re-scan only when the change touched the
-    /// worktree admin area (`.git/worktrees/…`). Internal + async so it is unit-
-    /// testable without real FSEvents.
+    /// The repo's git *common* dir — where worktree admin data lives regardless of
+    /// whether `<repo>/.git` is a real directory or a gitlink. Falls back to
+    /// `<repo>/.git` if `git rev-parse` can't answer.
+    private func resolveGitCommonDir(for repo: Repository) async -> String {
+        let fallback = (repo.path as NSString).appendingPathComponent(".git")
+        guard let result = try? await environment.git.run(["rev-parse", "--git-common-dir"], in: repo.path),
+              result.succeeded else { return fallback }
+        let raw = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return fallback }
+        return (raw as NSString).isAbsolutePath ? raw : (repo.path as NSString).appendingPathComponent(raw)
+    }
+
+    /// FSEvents on the repo's git common dir: re-scan only when the change touched the
+    /// worktree admin area (`worktrees/…`). Internal + async so it is unit-testable
+    /// without real FSEvents.
     func handleRepoWatchEvent(_ changedPaths: [String]) async {
-        guard let repo = selectedRepo else { return }
-        let adminDir = (repo.path as NSString).appendingPathComponent(".git/worktrees")
+        guard selectedRepo != nil, let adminDir = worktreesAdminDir else { return }
         guard changedPaths.contains(where: { $0.hasPrefix(adminDir) }) else { return }
         await refreshWorktrees()
     }

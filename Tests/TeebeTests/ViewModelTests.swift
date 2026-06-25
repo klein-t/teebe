@@ -171,6 +171,27 @@ struct SelectorModelTests {
         #expect(repoWatcher?.isWatching == false)
     }
 
+    @Test("the watcher follows the git common dir when <repo>/.git is a gitlink")
+    func repoWatcherResolvesGitCommonDir() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/wt-root", branch: "feature", isPrimary: true)]
+        git.gitCommonDirOutput = "/main/.git"   // <repo>/.git is a gitlink → real data lives here
+        let box = WatcherBox()
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git, makeWatcher: { box.make() }))
+        await selector.selectRepo(Repository(path: "/wt-root"))
+
+        // It watches the resolved common dir, not /wt-root/.git.
+        #expect(box.watching("/main/.git")?.watchedPaths == ["/main/.git"])
+
+        // An add under the common dir's worktrees admin area is detected.
+        git.worktreesResult = [
+            Worktree(path: "/wt-root", branch: "feature", isPrimary: true),
+            Worktree(path: "/wt-2", branch: "feature-2"),
+        ]
+        await selector.handleRepoWatchEvent(["/main/.git/worktrees/wt-2/HEAD"])
+        #expect(selector.worktrees.count == 2)
+    }
+
     @Test("an external git worktree add is auto-detected via the repo .git watcher")
     func autoDetectAdd() async {
         let git = FakeGitClient()
