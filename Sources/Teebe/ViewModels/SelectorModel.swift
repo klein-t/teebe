@@ -31,6 +31,17 @@ final class SelectorModel {
     var onSelectionChange: (() -> Void)?
 
     private let environment: AppEnvironment
+    /// Watches the selected repo's git dir so an external `git worktree add`/`remove`
+    /// shows up without a manual refresh.
+    private var repoWatcher: FileSystemWatcher?
+    /// Coalescing flags for watcher-driven re-scans (mirrors `WorktreeModel`): a burst
+    /// of `.git/worktrees` events collapses into at most one queued follow-up.
+    private var isRescanning = false
+    private var rescanQueued = false
+    /// Absolute path to the repo's `worktrees` admin dir (inside the git *common*
+    /// dir), used to filter watcher events. Resolved via `git rev-parse` so it's
+    /// correct even when `<repo>/.git` is a gitlink file rather than a directory.
+    private var worktreesAdminDir: String?
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -55,6 +66,9 @@ final class SelectorModel {
     }
 
     func clearSelection() {
+        repoWatcher?.stop()
+        repoWatcher = nil
+        worktreesAdminDir = nil
         selectedRepo = nil
         worktrees = []
         selectedWorktree = nil
@@ -67,6 +81,7 @@ final class SelectorModel {
     /// worktree.
     func selectRepo(_ repo: Repository) async {
         selectedRepo = repo
+        await startRepoWatching(repo)
         do {
             worktrees = try await environment.worktreeService.worktrees(for: repo)
             branches = try await environment.branchService.branches(for: repo)
@@ -81,6 +96,87 @@ final class SelectorModel {
             await selectWorktree(primary)
         }
         onSelectionChange?()
+    }
+
+    // MARK: - Auto-detecting worktree add/remove
+
+    /// Watch the selected repo's git common dir. A `git worktree add`/`remove` (or
+    /// `prune`) rewrites `worktrees/…` there, which `handleRepoWatchEvent` filters
+    /// for; routine index/ref writes in the primary checkout are ignored.
+    private func startRepoWatching(_ repo: Repository) async {
+        repoWatcher?.stop()
+        let commonDir = await resolveGitCommonDir(for: repo)
+        worktreesAdminDir = (commonDir as NSString).appendingPathComponent("worktrees")
+        let watcher = environment.makeWatcher()
+        watcher.start(paths: [commonDir], debounce: 0.5) { [weak self] paths in
+            Task { @MainActor in await self?.handleRepoWatchEvent(paths) }
+        }
+        repoWatcher = watcher
+    }
+
+    /// The repo's git *common* dir — where worktree admin data lives regardless of
+    /// whether `<repo>/.git` is a real directory or a gitlink. Falls back to
+    /// `<repo>/.git` if `git rev-parse` can't answer.
+    private func resolveGitCommonDir(for repo: Repository) async -> String {
+        let fallback = (repo.path as NSString).appendingPathComponent(".git")
+        guard let result = try? await environment.git.run(["rev-parse", "--git-common-dir"], in: repo.path),
+              result.succeeded else { return fallback }
+        let raw = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return fallback }
+        return (raw as NSString).isAbsolutePath ? raw : (repo.path as NSString).appendingPathComponent(raw)
+    }
+
+    /// FSEvents on the repo's git common dir: re-scan only when the change touched the
+    /// worktree admin area (`worktrees/…`). Internal + async so it is unit-testable
+    /// without real FSEvents.
+    func handleRepoWatchEvent(_ changedPaths: [String]) async {
+        guard selectedRepo != nil, let adminDir = worktreesAdminDir else { return }
+        guard changedPaths.contains(where: { $0.hasPrefix(adminDir) }) else { return }
+        await refreshWorktrees()
+    }
+
+    /// Re-discover the repo's worktrees + branches in place — the manual Refresh
+    /// button and the auto-detect watcher both land here. Unlike `selectRepo` it
+    /// preserves the current selection (only falling back to the primary if the
+    /// selected worktree has vanished), so a refresh never yanks the user off their
+    /// worktree. Concurrent calls coalesce into a single queued follow-up.
+    func refreshWorktrees() async {
+        if isRescanning { rescanQueued = true; return }
+        isRescanning = true
+        defer { isRescanning = false }
+        repeat {
+            rescanQueued = false
+            await rescanWorktrees()
+        } while rescanQueued
+    }
+
+    private func rescanWorktrees() async {
+        guard let repo = selectedRepo else { return }
+        let discovered: [Worktree]
+        let discoveredBranches: [Branch]
+        do {
+            discovered = try await environment.worktreeService.worktrees(for: repo)
+            discoveredBranches = try await environment.branchService.branches(for: repo)
+            errorMessage = nil
+        } catch {
+            // A transient failure shouldn't blank the list — keep what we have.
+            errorMessage = "\(error)"
+            return
+        }
+        worktrees = discovered
+        branches = discoveredBranches
+        await refreshWorktreeInfo()
+        // Keep the current selection if it still exists; only re-focus when it's gone.
+        if let current = selectedWorktree, discovered.contains(where: { $0.path == current.path }) {
+            return
+        }
+        if let fallback = discovered.first(where: { $0.isPrimary }) ?? discovered.first {
+            await selectWorktree(fallback)
+        } else {
+            selectedWorktree = nil
+            worktree.clear()
+            onSelectionChange?()
+        }
     }
 
     /// Load per-worktree ahead/behind + change count + live state for the

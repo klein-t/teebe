@@ -154,6 +154,132 @@ struct SelectorModelTests {
         await selector.refreshWorktreeInfo(now: t.addingTimeInterval(1))
         #expect(selector.info(for: git.worktreesResult[0]).isLive == true)
     }
+
+    @Test("repo watcher watches the repo's .git dir and stops when the selection clears")
+    func repoWatcherLifecycle() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        let box = WatcherBox()
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git, makeWatcher: { box.make() }))
+        await selector.selectRepo(Repository(path: "/repo"))
+
+        let repoWatcher = box.watching("/repo/.git")
+        #expect(repoWatcher?.watchedPaths == ["/repo/.git"])
+        #expect(repoWatcher?.isWatching == true)
+
+        selector.clearSelection()
+        #expect(repoWatcher?.isWatching == false)
+    }
+
+    @Test("the watcher follows the git common dir when <repo>/.git is a gitlink")
+    func repoWatcherResolvesGitCommonDir() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/wt-root", branch: "feature", isPrimary: true)]
+        git.gitCommonDirOutput = "/main/.git"   // <repo>/.git is a gitlink → real data lives here
+        let box = WatcherBox()
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git, makeWatcher: { box.make() }))
+        await selector.selectRepo(Repository(path: "/wt-root"))
+
+        // It watches the resolved common dir, not /wt-root/.git.
+        #expect(box.watching("/main/.git")?.watchedPaths == ["/main/.git"])
+
+        // An add under the common dir's worktrees admin area is detected.
+        git.worktreesResult = [
+            Worktree(path: "/wt-root", branch: "feature", isPrimary: true),
+            Worktree(path: "/wt-2", branch: "feature-2"),
+        ]
+        await selector.handleRepoWatchEvent(["/main/.git/worktrees/wt-2/HEAD"])
+        #expect(selector.worktrees.count == 2)
+    }
+
+    @Test("an external git worktree add is auto-detected via the repo .git watcher")
+    func autoDetectAdd() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        let box = WatcherBox()
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git, makeWatcher: { box.make() }))
+        await selector.selectRepo(Repository(path: "/repo"))
+        #expect(selector.worktrees.count == 1)
+
+        // `git worktree add ../wt feature` lands a new admin dir under .git/worktrees.
+        git.worktreesResult = [
+            Worktree(path: "/repo", branch: "main", isPrimary: true),
+            Worktree(path: "/wt", branch: "feature"),
+        ]
+        await selector.handleRepoWatchEvent(["/repo/.git/worktrees/wt/HEAD"])
+        #expect(selector.worktrees.map(\.path) == ["/repo", "/wt"])
+    }
+
+    @Test("a non-worktree .git write does not trigger a re-scan")
+    func ignoresNonWorktreeGitWrites() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
+        await selector.selectRepo(Repository(path: "/repo"))
+
+        // The set changes underneath, but an index write in the primary checkout is
+        // not under .git/worktrees, so the list must stay put.
+        git.worktreesResult = [
+            Worktree(path: "/repo", branch: "main", isPrimary: true),
+            Worktree(path: "/wt", branch: "feature"),
+        ]
+        await selector.handleRepoWatchEvent(["/repo/.git/index"])
+        #expect(selector.worktrees.count == 1)
+    }
+
+    @Test("refreshWorktrees picks up a new worktree without yanking the selection")
+    func refreshPreservesSelection() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [
+            Worktree(path: "/repo", branch: "main", isPrimary: true),
+            Worktree(path: "/wt-a", branch: "feature-a"),
+        ]
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
+        await selector.selectRepo(Repository(path: "/repo"))
+        await selector.selectWorktree(git.worktreesResult[1])   // focus feature-a
+        #expect(selector.selectedWorktree?.path == "/wt-a")
+
+        git.worktreesResult.append(Worktree(path: "/wt-b", branch: "feature-b"))
+        await selector.refreshWorktrees()
+        #expect(selector.worktrees.count == 3)
+        #expect(selector.selectedWorktree?.path == "/wt-a")
+    }
+
+    @Test("refreshWorktrees falls back to primary when the selected worktree disappears")
+    func refreshFallsBackWhenSelectionRemoved() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [
+            Worktree(path: "/repo", branch: "main", isPrimary: true),
+            Worktree(path: "/wt-a", branch: "feature-a"),
+        ]
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
+        await selector.selectRepo(Repository(path: "/repo"))
+        await selector.selectWorktree(git.worktreesResult[1])
+        #expect(selector.selectedWorktree?.path == "/wt-a")
+
+        // feature-a is removed externally.
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        await selector.refreshWorktrees()
+        #expect(selector.worktrees.map(\.path) == ["/repo"])
+        #expect(selector.selectedWorktree?.path == "/repo")
+    }
+
+    @Test("a transient discovery failure keeps the existing worktree list")
+    func refreshKeepsListOnError() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [
+            Worktree(path: "/repo", branch: "main", isPrimary: true),
+            Worktree(path: "/wt-a", branch: "feature-a"),
+        ]
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
+        await selector.selectRepo(Repository(path: "/repo"))
+        #expect(selector.worktrees.count == 2)
+
+        git.worktreesError = .notAGitRepository(path: "/repo")
+        await selector.refreshWorktrees()
+        #expect(selector.worktrees.count == 2)   // unchanged — not blanked
+        #expect(selector.selectedWorktree?.path == "/repo")
+    }
 }
 
 @MainActor
