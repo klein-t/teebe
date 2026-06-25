@@ -73,6 +73,28 @@ struct AppModelTests {
         await app.selector.selectRepo(Repository(path: "/repo"))
         #expect(app.errorMessage == nil)
     }
+
+    @Test("a repo's layout persists, survives unrelated state writes, and reloads")
+    func layoutPersistence() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        let env = makeTestEnvironment(git: git)
+        let app = AppModel(environment: env)
+        _ = await app.addRepository(path: "/repo")   // triggers persist()
+
+        let layout = SectionLayout(worktreesOpen: false, changesOpen: true, filesOpen: false, windowHeight: 720)
+        app.saveLayout(layout, forRepo: "/repo")
+
+        // A later persist() (here via floatOnTop) must not clobber the saved layout —
+        // both now mutate one in-memory AppState rather than reloading from disk.
+        app.floatOnTop = true
+        #expect(app.layout(forRepo: "/repo") == layout)
+
+        // And it round-trips through disk to a freshly constructed model.
+        let reopened = AppModel(environment: env)
+        #expect(reopened.layout(forRepo: "/repo") == layout)
+        #expect(reopened.layout(forRepo: "/unknown") == nil)
+    }
 }
 
 @MainActor
@@ -206,6 +228,38 @@ struct WorktreeModelTests {
         await model.confirmPendingMutation()
         #expect(model.pendingMutation == nil)
         #expect(git.discardedWorking == [["a.txt"]])
+    }
+
+    @Test("watcher events coalesce: a burst behind a slow refresh runs one follow-up")
+    func refreshCoalesces() async {
+        let (dir, cleanup) = tempDir(); defer { cleanup() }
+        let git = FakeGitClient()
+        let model = WorktreeModel(environment: makeTestEnvironment(git: git))
+        await model.load(worktreePath: dir, repo: Repository(path: dir))
+        #expect(git.statusCallCount == 1)   // initial refresh from load()
+
+        // Gate status so the next refresh blocks until we release it.
+        let gate = Gate()
+        git.statusGate = { await gate.wait() }
+
+        // First watcher event enters status (call #2) and blocks in flight.
+        let inFlight = Task { await model.handleFileSystemEvent(now: Date(timeIntervalSince1970: 1)) }
+        while git.statusCallCount < 2 { await Task.yield() }
+
+        // Five more events while #2 is in flight must collapse into a single queued
+        // follow-up rather than each spawning its own status call.
+        let burst = (0..<5).map { i in
+            Task { await model.handleFileSystemEvent(now: Date(timeIntervalSince1970: Double(2 + i))) }
+        }
+        for _ in 0..<50 { await Task.yield() }
+        #expect(git.statusCallCount == 2)   // still only the in-flight call
+
+        await gate.open()
+        await inFlight.value
+        for task in burst { await task.value }
+
+        // In-flight refresh + exactly one coalesced follow-up == one more status call.
+        #expect(git.statusCallCount == 3)
     }
 }
 

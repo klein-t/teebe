@@ -86,15 +86,30 @@ final class SelectorModel {
     /// Load per-worktree ahead/behind + change count + live state for the
     /// WORKTREES list (drives the sync arrows and pulse dot).
     func refreshWorktreeInfo(now: Date = Date()) async {
+        let statusService = environment.statusService
+        let worktrees = self.worktrees
+        // Fetch each worktree's status concurrently — these are independent git
+        // reads, so a repo with many worktrees shouldn't serialize N `git status`
+        // calls on every repo switch.
+        let statuses = await withTaskGroup(of: (String, StatusResult?).self) { group in
+            for worktree in worktrees {
+                let path = worktree.path
+                group.addTask { (path, try? await statusService.status(worktreePath: path)) }
+            }
+            var byPath: [String: StatusResult] = [:]
+            for await (path, status) in group {
+                if let status { byPath[path] = status }
+            }
+            return byPath
+        }
         var info: [String: WorktreeInfo] = [:]
         for worktree in worktrees {
-            let status = try? await environment.statusService.status(worktreePath: worktree.path)
-            let live = environment.activityMonitor.isBusy(worktreePath: worktree.path, within: 5, now: now)
+            let status = statuses[worktree.path]
             info[worktree.path] = WorktreeInfo(
                 ahead: status?.ahead ?? 0,
                 behind: status?.behind ?? 0,
                 changeCount: status?.changes.count ?? 0,
-                isLive: live
+                isLive: environment.activityMonitor.isBusy(worktreePath: worktree.path, within: 5, now: now)
             )
         }
         worktreeInfo = info

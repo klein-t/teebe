@@ -58,6 +58,11 @@ final class WorktreeModel {
     private var ignoredPaths: Set<String> = []
     /// Overlaid children of expanded directories (path → children).
     private var childrenCache: [String: [FileNode]] = [:]
+    /// Coalesces watcher-driven refreshes: while one is running, further events
+    /// collapse into a single queued follow-up, so a burst of file-watch events
+    /// can't stack a backlog of `git status` calls behind one slow refresh.
+    private var isRefreshing = false
+    private var refreshQueued = false
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -150,7 +155,20 @@ final class WorktreeModel {
             environment.activityMonitor.recordActivity(worktreePath: worktreePath, at: now)
             onActivity?(worktreePath)
         }
-        await refresh()
+        await coalescedRefresh()
+    }
+
+    /// Run `refresh()`, collapsing concurrent watcher events into at most one
+    /// queued follow-up rather than one `git status` per event. Safe because the
+    /// model is `@MainActor`-isolated: the flag checks never interleave.
+    private func coalescedRefresh() async {
+        if isRefreshing { refreshQueued = true; return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        repeat {
+            refreshQueued = false
+            await refresh()
+        } while refreshQueued
     }
 
     /// Mark that teebe just wrote into the worktree, so the imminent file-watch

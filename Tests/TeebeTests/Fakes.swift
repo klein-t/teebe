@@ -17,12 +17,25 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     private(set) var discardedUntracked: [[String]] = []
     private(set) var commitMessages: [String] = []
 
+    // Instrumentation for refresh tests. The counter is lock-guarded because
+    // `refreshWorktreeInfo` now fetches statuses concurrently.
+    private let statusLock = NSLock()
+    private var statusCalls = 0
+    var statusCallCount: Int { statusLock.lock(); defer { statusLock.unlock() }; return statusCalls }
+    /// When set, each `status` call awaits this before returning — lets a test hold a
+    /// refresh "in flight" to exercise coalescing of watcher events.
+    var statusGate: (@Sendable () async -> Void)?
+
     func worktrees(repoPath: String) async throws -> [Worktree] {
         if let worktreesError { throw worktreesError }
         return worktreesResult
     }
     func branches(repoPath: String) async throws -> [Branch] { branchesResult }
-    func status(worktreePath: String) async throws -> StatusResult { statusResult }
+    func status(worktreePath: String) async throws -> StatusResult {
+        statusLock.lock(); statusCalls += 1; statusLock.unlock()
+        if let statusGate { await statusGate() }
+        return statusResult
+    }
     func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? { workingDiffResult }
     func stage(worktreePath: String, paths: [String]) async throws { stagedPaths.append(paths) }
     func unstage(worktreePath: String, paths: [String]) async throws { unstagedPaths.append(paths) }
@@ -34,6 +47,26 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     @discardableResult
     func run(_ arguments: [String], in directory: String) async throws -> GitInvocationResult {
         GitInvocationResult(arguments: arguments, exitCode: 0, standardOutput: Data(), standardError: "")
+    }
+}
+
+/// A one-shot async gate: `wait()` suspends until `open()` is called, after which it
+/// returns immediately. Lets a test hold a faked `git status` in flight while it
+/// fires further events.
+actor Gate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        let resume = waiters
+        waiters.removeAll()
+        for continuation in resume { continuation.resume() }
     }
 }
 

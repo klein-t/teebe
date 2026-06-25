@@ -18,8 +18,18 @@ final class AppModel {
     let environment: AppEnvironment
     let selector: SelectorModel
 
+    /// In-memory copy of the persisted state, loaded once at init and written back
+    /// on change. Avoids a disk read-modify-write on every persist/layout update,
+    /// and lets `persist()` and `saveLayout()` mutate disjoint fields of one value
+    /// without reloading to avoid clobbering each other.
+    @ObservationIgnored private var state: AppState
+    /// True only while `bootstrap()` hydrates the model from `state`; suppresses the
+    /// `persist()` that property assignments would otherwise trigger during load.
+    @ObservationIgnored private var isHydrating = false
+
     init(environment: AppEnvironment) {
         self.environment = environment
+        self.state = environment.store.load()
         self.selector = SelectorModel(environment: environment)
         self.floatOnTop = false
         // Persist whenever the selection changes, and clear any stale global error —
@@ -45,16 +55,23 @@ final class AppModel {
 
     /// Load persisted state and hydrate repositories + selection.
     func bootstrap() async {
-        let state = environment.store.load()
+        // Hydrate from the in-memory state without letting the assignments below
+        // persist a half-built state back over what we just loaded.
+        isHydrating = true
         floatOnTop = state.floatOnTop
         repositories = state.repositories.map { Repository(path: $0.path) }
         selector.setRepositories(repositories)
-        let target = state.lastSelectedRepoPath.flatMap { last in repositories.first { $0.path == last } }
+        // Snapshot the restore targets before selecting anything: selection triggers
+        // persist(), which overwrites these fields of the shared `state`.
+        let lastRepoPath = state.lastSelectedRepoPath
+        let lastWorktreePath = state.lastSelectedWorktreePath
+        let target = lastRepoPath.flatMap { last in repositories.first { $0.path == last } }
             ?? repositories.first
+        isHydrating = false
         guard let target else { return }
         await selector.selectRepo(target)   // focuses the primary worktree
         // Restore the last selected worktree if it still exists (else keep primary).
-        if let wtPath = state.lastSelectedWorktreePath,
+        if let wtPath = lastWorktreePath,
            selector.selectedWorktree?.path != wtPath,
            let saved = selector.worktrees.first(where: { $0.path == wtPath }) {
             await selector.selectWorktree(saved)
@@ -232,7 +249,7 @@ final class AppModel {
     }
 
     func persist() {
-        var state = environment.store.load()
+        guard !isHydrating else { return }
         state.repositories = repositories.map { PersistedRepository(path: $0.path) }
         state.floatOnTop = floatOnTop
         state.lastSelectedRepoPath = selector.selectedRepo?.path
@@ -245,13 +262,12 @@ final class AppModel {
     /// The saved accordion layout for a repository, or nil if it's never been opened.
     func layout(forRepo path: String?) -> SectionLayout? {
         guard let path else { return nil }
-        return environment.store.load().layoutByRepo?[path]
+        return state.layoutByRepo?[path]
     }
 
     /// Remember a repository's accordion layout (open sections + window height).
     func saveLayout(_ layout: SectionLayout, forRepo path: String?) {
         guard let path else { return }
-        var state = environment.store.load()
         var byRepo = state.layoutByRepo ?? [:]
         byRepo[path] = layout
         state.layoutByRepo = byRepo
