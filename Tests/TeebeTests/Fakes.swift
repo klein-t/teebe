@@ -91,8 +91,38 @@ final class FakeFileOps: FileOps, @unchecked Sendable {
 
 final class FakeWatcher: FileSystemWatcher, @unchecked Sendable {
     private(set) var isWatching = false
-    func start(paths: [String], debounce: TimeInterval, onChange: @escaping @Sendable ([String]) -> Void) { isWatching = true }
-    func stop() { isWatching = false }
+    private(set) var watchedPaths: [String] = []
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
+    private var handler: (@Sendable ([String]) -> Void)?
+
+    func start(paths: [String], debounce: TimeInterval, onChange: @escaping @Sendable ([String]) -> Void) {
+        isWatching = true
+        watchedPaths = paths
+        startCount += 1
+        handler = onChange
+    }
+
+    func stop() {
+        isWatching = false
+        stopCount += 1
+        handler = nil
+    }
+
+    /// Simulate a coalesced FSEvents change batch.
+    func fire(_ paths: [String]) { handler?(paths) }
+}
+
+/// Hands out and records every `FakeWatcher` the test environment creates, so a test
+/// can grab a specific one (e.g. the repo `.git` watcher) and fire events at it.
+@MainActor
+final class WatcherBox {
+    private(set) var watchers: [FakeWatcher] = []
+    func make() -> FakeWatcher { let watcher = FakeWatcher(); watchers.append(watcher); return watcher }
+    /// The most recently started watcher whose watched paths contain `needle`.
+    func watching(_ needle: String) -> FakeWatcher? {
+        watchers.last { $0.watchedPaths.contains { $0.contains(needle) } }
+    }
 }
 
 // MARK: - Test environment
@@ -103,7 +133,8 @@ func makeTestEnvironment(
     opener: FakeFileOpener = FakeFileOpener(),
     ops: FakeFileOps = FakeFileOps(),
     store: AppStateStore? = nil,
-    monitor: WorktreeActivityMonitor = WorktreeActivityMonitor()
+    monitor: WorktreeActivityMonitor = WorktreeActivityMonitor(),
+    makeWatcher: (@MainActor () -> FileSystemWatcher)? = nil
 ) -> AppEnvironment {
     let storeURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("tb-test-\(UUID().uuidString)")
@@ -114,6 +145,6 @@ func makeTestEnvironment(
         ops: ops,
         store: store ?? AppStateStore(url: storeURL),
         activityMonitor: monitor,
-        makeWatcher: { FakeWatcher() }
+        makeWatcher: makeWatcher ?? { FakeWatcher() }
     )
 }

@@ -34,11 +34,11 @@ struct WorktreesSection: View {
                         }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                         .help("Repository actions")
-                        Button { Task { await selector.refreshWorktreeInfo() } } label: {
+                        Button { Task { await selector.refreshWorktrees() } } label: {
                             Image(systemName: "arrow.clockwise").font(.system(size: 11))
                         }
                         .buttonStyle(IconButtonStyle()).foregroundStyle(Palette.secondaryText)
-                        .help("Refresh")
+                        .help("Refresh worktrees")
                     }
                 } else if let active = selector.selectedWorktree {
                     HStack(spacing: 5) {
