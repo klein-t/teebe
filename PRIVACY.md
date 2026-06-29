@@ -1,8 +1,9 @@
 # Privacy
 
-teebe is a local macOS app. Short version: we count downloads in aggregate so we
-know roughly how many people use teebe, and that's it. No accounts, no personal
-data, no tracking of what you do inside the app.
+teebe is a local macOS app. Short version: we count downloads and website page
+views in aggregate so we know roughly how many people are interested in teebe,
+and that's it. No accounts, no personal data, no tracking of what you do inside
+the app.
 
 The canonical, always-current version of this notice lives at
 **https://teebe.io/privacy.html**.
@@ -16,8 +17,14 @@ records one anonymous, aggregate event:
 - your **country** (derived at the edge, not stored as a precise location), and
 - the **user-agent** string your downloader sends.
 
-We use this only to gauge interest and adoption. It is not tied to your identity
-and is not sold or shared.
+When you open a page on `teebe.io`, a small script records one anonymous,
+aggregate page-view event: the **page** you viewed, the **referring site** (if
+any), and your **country**. To tell a fresh visit from a page-to-page click we
+keep a single per-tab flag in your browser's `sessionStorage` — it holds no
+identifier and is gone when you close the tab.
+
+We use all of this only to gauge interest and adoption. It is not tied to your
+identity and is not sold or shared.
 
 ## What we don't collect
 
