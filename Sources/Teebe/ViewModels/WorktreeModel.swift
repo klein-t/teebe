@@ -35,6 +35,12 @@ final class WorktreeModel {
     var selectionSource: SelectionSource = .files
     /// Expanded directory paths in the FILES tree.
     var expandedPaths: Set<String> = []
+    /// Multi-selection set for the FILES tree (absolute paths). `selectedPath` is the
+    /// active cursor and is always a member while a file selection exists; batch ops
+    /// (trash, copy-as-refs) act on this set.
+    var selectedPaths: Set<String> = []
+    /// Anchor row for range (⇧) selection; the fixed end as the cursor moves.
+    private var selectionAnchor: String?
     private(set) var worktreePath: String?
     private(set) var errorMessage: String?
     private(set) var pendingMutation: PendingMutation?
@@ -304,11 +310,168 @@ final class WorktreeModel {
         let rows = visibleRows
         guard !rows.isEmpty else { return }
         guard let current = selectedPath, let index = rows.firstIndex(where: { $0.node.path == current }) else {
-            selectedPath = rows.first?.node.path
+            select(rows[0].node.path)
             return
         }
         let next = max(0, min(rows.count - 1, index + delta))
-        selectedPath = rows[next].node.path
+        select(rows[next].node.path)
+    }
+
+    // MARK: - Multi-selection (FILES)
+
+    /// Single-select `path` (plain click / plain arrow): collapses any multi-selection
+    /// to just this row and re-anchors range selection here.
+    func select(_ path: String) {
+        selectionSource = .files
+        selectedPath = path
+        selectedPaths = [path]
+        selectionAnchor = path
+    }
+
+    /// ⌘-click: toggle `path` in/out of the selection, leaving the rest intact.
+    func toggleSelection(_ path: String) {
+        selectionSource = .files
+        if selectedPaths.contains(path) {
+            selectedPaths.remove(path)
+            if selectedPath == path { selectedPath = selectedPaths.first }
+        } else {
+            selectedPaths.insert(path)
+            selectedPath = path
+        }
+        selectionAnchor = path
+    }
+
+    /// ⇧-click / range select: select the contiguous visible run from the anchor to
+    /// `path` inclusive, moving the cursor to `path` (the anchor stays put).
+    func extendSelection(to path: String) {
+        let order = visibleRows.map(\.node.path)
+        guard let anchor = selectionAnchor ?? selectedPath,
+              let a = order.firstIndex(of: anchor),
+              let b = order.firstIndex(of: path) else { select(path); return }
+        selectionSource = .files
+        selectedPaths = Set(order[min(a, b)...max(a, b)])
+        selectedPath = path
+    }
+
+    /// ⇧↑ / ⇧↓: move the cursor one row and extend the range selection to it.
+    func extendSelection(by delta: Int) {
+        let rows = visibleRows
+        guard !rows.isEmpty else { return }
+        guard let current = selectedPath, let index = rows.firstIndex(where: { $0.node.path == current }) else {
+            select(rows[0].node.path); return
+        }
+        if selectionAnchor == nil { selectionAnchor = current }
+        let next = max(0, min(rows.count - 1, index + delta))
+        extendSelection(to: rows[next].node.path)
+    }
+
+    /// ⌘A: select every visible row.
+    func selectAllVisible() {
+        let order = visibleRows.map(\.node.path)
+        guard !order.isEmpty else { return }
+        selectionSource = .files
+        selectedPaths = Set(order)
+        if selectedPath == nil || !selectedPaths.contains(selectedPath!) { selectedPath = order.last }
+    }
+
+    /// Selected paths in visible (top-to-bottom) order.
+    func orderedSelection() -> [String] {
+        visibleRows.map(\.node.path).filter { selectedPaths.contains($0) }
+    }
+
+    /// Selected file nodes (directories excluded), in visible order — used to "open all".
+    func selectedFileNodes() -> [FileNode] {
+        orderedSelection().compactMap { node(atPath: $0) }.filter { !$0.isDirectory }
+    }
+
+    // MARK: - CHANGES list navigation
+
+    /// Move the CHANGES selection by `delta` through the change list (in display
+    /// order), clamping at the ends. Returns the newly selected change so the caller
+    /// can refresh an open diff peek.
+    @discardableResult
+    func moveChangeSelection(by delta: Int) -> FileChange? {
+        guard let worktreePath, !changes.isEmpty else { return nil }
+        selectionSource = .changes
+        let absolute = changes.map { worktreePath + "/" + $0.path }
+        let index = selectedPath.flatMap { absolute.firstIndex(of: $0) }
+        let next = index.map { max(0, min(absolute.count - 1, $0 + delta)) } ?? 0
+        selectedPath = absolute[next]
+        return changes[next]
+    }
+
+    /// Keep the current change selected if it's still valid, else select the first —
+    /// used when the CHANGES section becomes active. Returns the resulting change.
+    @discardableResult
+    func selectCurrentOrFirstChange() -> FileChange? {
+        guard let worktreePath, !changes.isEmpty else { return nil }
+        selectionSource = .changes
+        let absolute = changes.map { worktreePath + "/" + $0.path }
+        if let selectedPath, let index = absolute.firstIndex(of: selectedPath) { return changes[index] }
+        selectedPath = absolute[0]
+        return changes[0]
+    }
+
+    // MARK: - Left/Right arrow tree navigation (VSCode-style)
+
+    /// →: expand a collapsed folder; on an already-expanded folder, step into its
+    /// first child. No-op on a file.
+    func selectExpandOrDescend() {
+        guard let node = selectedNode else {
+            if let first = visibleRows.first { select(first.node.path) }
+            return
+        }
+        guard node.isDirectory else { return }
+        if isExpanded(node) {
+            let rows = visibleRows
+            guard let i = rows.firstIndex(where: { $0.node.path == node.path }) else { return }
+            if i + 1 < rows.count, rows[i + 1].depth > rows[i].depth {
+                select(rows[i + 1].node.path)
+            }
+        } else {
+            toggleExpand(node)
+        }
+    }
+
+    /// ←: collapse an expanded folder; on a collapsed folder or a file, jump up to the
+    /// parent folder.
+    func selectCollapseOrAscend() {
+        guard let node = selectedNode else { return }
+        if node.isDirectory, isExpanded(node) {
+            toggleExpand(node)
+            return
+        }
+        let rows = visibleRows
+        guard let i = rows.firstIndex(where: { $0.node.path == node.path }) else { return }
+        let depth = rows[i].depth
+        guard depth > 0 else { return }
+        for j in stride(from: i - 1, through: 0, by: -1) where rows[j].depth == depth - 1 {
+            select(rows[j].node.path)
+            return
+        }
+    }
+
+    // MARK: - Selection as Claude-ready @-refs (clipboard)
+
+    /// The current FILES selection as a single clipboard string of `@`-prefixed paths
+    /// relative to the worktree root, in visible order, space-joined (each token quoted
+    /// when it contains spaces). Empty when nothing is selected or no worktree is open.
+    func selectionRefs() -> String {
+        guard let worktreePath else { return "" }
+        let root = PathUtil.standardized(worktreePath)
+        let tokens = orderedSelection().map { absolute -> String in
+            let rel = PathUtil.relativePath(of: absolute, under: root)
+            return rel.contains(" ") ? "@\"\(rel)\"" : "@\(rel)"
+        }
+        return tokens.joined(separator: " ")
+    }
+
+    /// Move the current multi-selection to the Trash (guarded; shows the confirm
+    /// dialog). No-op when the selection is empty.
+    func requestTrashSelected(now: Date = Date()) {
+        let paths = orderedSelection()
+        guard !paths.isEmpty else { return }
+        pendingMutation = PendingMutation(kind: .trash, paths: paths, worktreeBusy: isBusy(now))
     }
 
     /// Find a node by absolute path within the currently displayed (and expanded)

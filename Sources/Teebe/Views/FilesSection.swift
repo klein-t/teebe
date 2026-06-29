@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import TeebeCore
 
 /// FILES accordion section: search + sort + the lazily-expanding file tree.
@@ -7,10 +8,18 @@ struct FilesSection: View {
     @Bindable var worktree: WorktreeModel
     @Bindable var preview: PreviewModel
     @Binding var isOpen: Bool
+    /// Owned by RootView; lets ⌘F focus the search field and ↓/Esc hand focus back.
+    var searchFocused: FocusState<Bool>.Binding
+    /// The reveal area the tree fills below its search box. Fixed (not flexible) while
+    /// browsing so a CHANGES reflow can't momentarily balloon FILES.
+    var revealHeight: CGFloat
+    /// While the window edge is being dragged, FILES becomes the flexible filler so the
+    /// drag resizes it; otherwise it's pinned to `revealHeight`.
+    var liveResizing: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            SectionHeader(title: "FILES", isOpen: isOpen, onToggle: { isOpen.toggle() }) {
+            SectionHeader(title: "FILES", isOpen: isOpen, isActive: app.activeSection == .files, onToggle: { isOpen.toggle() }) {
                 if isOpen {
                     Menu {
                         Picker("Show", selection: $worktree.filter) {
@@ -42,15 +51,54 @@ struct FilesSection: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12))
                         .padding(.horizontal, 11).padding(.vertical, 5)
-                    ScrollView {
-                        FileRowsView(app: app, preview: preview)
+                        .focused(searchFocused)
+                        .onChange(of: app.searchFocusRequest) { _, _ in searchFocused.wrappedValue = true }
+                        // ↓ drops focus into the results so the tree's arrow keys take over.
+                        .onKeyPress(.downArrow) {
+                            searchFocused.wrappedValue = false
+                            if let first = worktree.visibleRows.first,
+                               worktree.selectedPath == nil
+                                || !worktree.visibleRows.contains(where: { $0.node.path == worktree.selectedPath }) {
+                                worktree.select(first.node.path)
+                            }
+                            return .handled
+                        }
+                        // Enter opens the current (or first) result without leaving the field.
+                        .onKeyPress(.return) {
+                            guard let node = worktree.selectedNode ?? worktree.visibleRows.first?.node else { return .ignored }
+                            if node.isDirectory { worktree.toggleExpand(node) } else { app.open(node) }
+                            return .handled
+                        }
+                        // Esc clears the query first, then hands focus back to the tree.
+                        .onKeyPress(.escape) {
+                            if worktree.searchQuery.isEmpty { searchFocused.wrappedValue = false } else { worktree.searchQuery = "" }
+                            return .handled
+                        }
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            FileRowsView(app: app, preview: preview)
+                        }
+                        .scrollBounceBehavior(.basedOnSize)
+                        // Keep the keyboard cursor on-screen: scroll the minimal amount
+                        // to reveal it when ↑/↓ moves selection past the visible edge.
+                        // Snap, don't animate — an animated scrollTo fights the row's
+                        // highlight animation and SwiftUI's relayout and reads as a
+                        // bounce (the old row flashes before settling). Finder/Xcode
+                        // snap on keyboard nav too.
+                        .onChange(of: worktree.selectedPath) { _, sel in
+                            guard app.activeSection == .files, let sel else { return }
+                            proxy.scrollTo(sel, anchor: nil)
+                        }
                     }
-                    .scrollBounceBehavior(.basedOnSize)
                 }
                 .transition(.opacity)
             }
         }
-        .frame(maxHeight: isOpen ? .infinity : nil)
+        // Open + idle → a fixed reveal pane (the tree scrolls inside it), so a CHANGES
+        // height change can't make FILES balloon for a frame. Open + dragging → the
+        // flexible filler, so the window edge resizes the reveal. Closed → just the header.
+        .frame(height: isOpen && !liveResizing ? revealHeight : nil)
+        .frame(maxHeight: isOpen && liveResizing ? .infinity : nil)
         .clipped()
     }
 }
@@ -86,7 +134,7 @@ struct FileRow: View {
 
     private var worktree: WorktreeModel { app.selector.worktree }
     private var node: FileNode { row.node }
-    private var isSelected: Bool { worktree.selectedPath == node.path }
+    private var isSelected: Bool { app.activeSection == .files && worktree.selectedPaths.contains(node.path) }
     private var isExpanded: Bool { worktree.isExpanded(node) }
 
     var body: some View {
@@ -117,7 +165,8 @@ struct FileRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isSelected ? Palette.accent : .clear)
         .foregroundStyle(isSelected ? .white : .primary)
-        .animation(.easeInOut(duration: 0.18), value: isSelected)
+        // No fade on selection: a 0.18s cross-fade leaves a visible trail of
+        // half-lit rows when arrowing fast. The cursor snaps, like native file lists.
         .contentShape(Rectangle())
         .onTapGesture { select() }
         .simultaneousGesture(TapGesture(count: 2).onEnded { activate() })
@@ -139,9 +188,18 @@ struct FileRow: View {
     }
 
     private func select() {
-        worktree.selectedPath = node.path
-        worktree.selectionSource = .files
-        if node.isDirectory { worktree.toggleExpand(node) }
+        // ⌘-click toggles one row; ⇧-click extends a range; a plain click single-selects
+        // (and toggles a folder's expansion).
+        app.activeSection = .files
+        let mods = NSEvent.modifierFlags
+        if mods.contains(.command) {
+            worktree.toggleSelection(node.path)
+        } else if mods.contains(.shift) {
+            worktree.extendSelection(to: node.path)
+        } else {
+            worktree.select(node.path)
+            if node.isDirectory { worktree.toggleExpand(node) }
+        }
         if preview.isVisible, !node.isDirectory, let wt = worktree.worktreePath {
             Task { await preview.update(for: node, worktreePath: wt) }
         }

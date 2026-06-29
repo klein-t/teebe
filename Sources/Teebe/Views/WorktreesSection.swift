@@ -11,7 +11,7 @@ struct WorktreesSection: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SectionHeader(title: "WORKTREES", isOpen: isOpen, onToggle: { isOpen.toggle() }) {
+            SectionHeader(title: "WORKTREES", isOpen: isOpen, isActive: app.activeSection == .worktrees, onToggle: { isOpen.toggle() }) {
                 if isOpen {
                     HStack(spacing: 2) {
                         Button { app.presentAddRepositoryPanel() } label: {
@@ -57,21 +57,34 @@ struct WorktreesSection: View {
                 // Hug the rows (the window wraps content), but cap at the content
                 // height and scroll inside when the window is dragged too short — the
                 // other headers must never get pushed off-screen.
-                ScrollView { worktreeListBody }
-                    .scrollBounceBehavior(.basedOnSize)
-                    .frame(maxHeight: listContentHeight)
-                    .transition(.opacity)
+                ScrollViewReader { proxy in
+                    ScrollView { worktreeListBody }
+                        .scrollBounceBehavior(.basedOnSize)
+                        .frame(maxHeight: listContentHeight)
+                        // Keep the keyboard cursor visible as ↑/↓ move it. Snap, not
+                        // animate (see FilesSection) — avoids the bounce-then-settle.
+                        .onChange(of: selector.highlightedWorktree?.path) { _, path in
+                            guard app.activeSection == .worktrees, let path else { return }
+                            proxy.scrollTo(path, anchor: nil)
+                        }
+                }
+                .transition(.opacity)
             }
         }
         .clipped()
     }
 
-    /// Estimated natural height of the worktree list, used to cap the section so it
-    /// hugs its rows yet can shrink-and-scroll when space is tight.
+    /// Tallest the worktree list hugs before it scrolls internally (repo row + ~6
+    /// worktrees). Keeps the window from ballooning on a repo with many worktrees;
+    /// RootView's `worktreesContentHeight` mirrors this cap.
+    static let maxListHeight: CGFloat = 200
+
+    /// Natural height of the worktree list, capped at `maxListHeight` so the section
+    /// hugs its rows up to the cap and scrolls beyond it.
     private var listContentHeight: CGFloat {
         let repoRow: CGFloat = selector.selectedRepo != nil ? 25 : 0
         let rows: CGFloat = selector.worktrees.isEmpty ? 26 : CGFloat(selector.worktrees.count) * 26
-        return 8 + repoRow + rows   // 8 = worktreeListBody vertical padding
+        return min(8 + repoRow + rows, Self.maxListHeight)   // 8 = worktreeListBody vertical padding
     }
 
     private var worktreeListBody: some View {
@@ -109,6 +122,9 @@ struct WorktreesSection: View {
     private func worktreeRow(_ worktree: Worktree) -> some View {
         let info = selector.info(for: worktree)
         let isActive = selector.selectedWorktree?.path == worktree.path
+        // The keyboard cursor (only while WORKTREES is the active section): an outline,
+        // distinct from the filled accent of the committed worktree. Enter commits it.
+        let isHighlighted = app.activeSection == .worktrees && selector.highlightedWorktree?.path == worktree.path
         return HStack(spacing: 7) {
             LiveDot(active: info.isLive)
             Image(systemName: "point.3.connected.trianglepath.dotted")
@@ -127,9 +143,18 @@ struct WorktreesSection: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isActive ? Palette.accent : .clear)
         .foregroundStyle(isActive ? .white : .primary)
+        .overlay {
+            if isHighlighted, !isActive {
+                RoundedRectangle(cornerRadius: 4).strokeBorder(Palette.accent, lineWidth: 1.5)
+            }
+        }
         .animation(.easeInOut(duration: 0.18), value: isActive)
         .contentShape(Rectangle())
-        .onTapGesture { Task { await selector.selectWorktree(worktree) } }
+        .onTapGesture {
+            app.activeSection = .worktrees
+            selector.highlightedWorktree = worktree
+            Task { await selector.selectWorktree(worktree) }
+        }
         .contextMenu {
             Button("Open in Finder") { app.revealPath(worktree.path) }
             Button("Open in Terminal") { app.openTerminal(at: worktree.path) }
@@ -137,5 +162,6 @@ struct WorktreesSection: View {
                 Button("Remove Worktree…", role: .destructive) { app.removeWorktree(worktree) }
             }
         }
+        .id(worktree.path)   // scroll-to target for keyboard highlight
     }
 }

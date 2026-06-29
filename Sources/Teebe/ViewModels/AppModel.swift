@@ -11,6 +11,12 @@ final class AppModel {
     var floatOnTop: Bool { didSet { persist() } }
     private(set) var errorMessage: String?
 
+    /// Which section the keyboard currently drives — arrows, Enter and Space act on
+    /// it, and its header shows the active accent. Moved by ⌘1/⌘2/⌘3, Tab/⇧Tab, or by
+    /// clicking into a section.
+    enum FocusSection: Equatable { case worktrees, changes, files }
+    var activeSection: FocusSection = .files
+
     /// Auto-dismiss timer for the current error banner, so a transient failure
     /// (e.g. "Not a git repository") never sticks around indefinitely.
     @ObservationIgnored private var errorClearTask: Task<Void, Never>?
@@ -142,6 +148,20 @@ final class AppModel {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(node.path, forType: .string)
     }
+
+    /// ⌘⇧C: copy the FILES selection to the clipboard as Claude-ready `@`-refs, ready
+    /// to paste into whatever terminal/agent is open. No-op unless files are selected.
+    func copySelectedRefs() {
+        let refs = selector.worktree.selectionRefs()
+        guard !refs.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(refs, forType: .string)
+    }
+
+    /// ⌘F: ask the FILES search field to take focus. The view observes this counter
+    /// and focuses on change (a token rather than a bool so repeat presses re-fire).
+    private(set) var searchFocusRequest = 0
+    func focusSearch() { searchFocusRequest += 1 }
 
     func rename(_ node: FileNode) {
         guard let newName = promptForName(title: "Rename", initial: node.name), newName != node.name else { return }
