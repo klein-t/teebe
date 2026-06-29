@@ -117,6 +117,31 @@ struct SelectorModelTests {
         #expect(selector.worktree.worktreePath == "/repo")
     }
 
+    @Test("WORKTREES keyboard cursor moves and clamps; Enter commits the switch")
+    func worktreeHighlightNav() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [
+            Worktree(path: "/repo", branch: "main", isPrimary: true),
+            Worktree(path: "/repo-a", branch: "feat/a"),
+            Worktree(path: "/repo-b", branch: "feat/b"),
+        ]
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
+        await selector.selectRepo(Repository(path: "/repo"))
+
+        // Activating WORKTREES seats the cursor on the currently-open worktree.
+        selector.highlightSelectedWorktree()
+        #expect(selector.highlightedWorktree?.path == "/repo")
+
+        selector.moveWorktreeHighlight(by: 1)
+        #expect(selector.highlightedWorktree?.path == "/repo-a")
+        selector.moveWorktreeHighlight(by: 5)   // clamps at the last row
+        #expect(selector.highlightedWorktree?.path == "/repo-b")
+        #expect(selector.selectedWorktree?.path == "/repo")   // not switched until commit
+
+        await selector.commitHighlightedWorktree()
+        #expect(selector.selectedWorktree?.path == "/repo-b")
+    }
+
     @Test("live dot lights for a worktree written to within the window, off after it")
     func liveDotWindow() async {
         let git = FakeGitClient()
@@ -442,6 +467,137 @@ struct WorktreeNavigationTests {
         #expect(model.visibleRows.map(\.node.name) == ["b.txt"])
     }
 
+    // MARK: - Left/Right arrow tree navigation
+
+    @Test("→ expands a collapsed folder, then descends into its first child")
+    func rightArrowExpandsThenDescends() async throws {
+        let (dir, cleanup) = tempTree(); defer { cleanup() }
+        let model = WorktreeModel(environment: makeTestEnvironment())
+        await model.load(worktreePath: dir, repo: Repository(path: dir))
+        let src = try #require(model.visibleRows.first { $0.node.name == "src" }).node
+        model.select(src.path)
+
+        model.selectExpandOrDescend()
+        #expect(model.isExpanded(src))
+        #expect(model.selectedPath == src.path)   // cursor stays on the folder
+
+        model.selectExpandOrDescend()
+        #expect(model.selectedNode?.name == "b.txt")   // now steps into the child
+    }
+
+    @Test("← collapses an expanded folder; from a child it jumps to the parent")
+    func leftArrowCollapsesAndAscends() async throws {
+        let (dir, cleanup) = tempTree(); defer { cleanup() }
+        let model = WorktreeModel(environment: makeTestEnvironment())
+        await model.load(worktreePath: dir, repo: Repository(path: dir))
+        let src = try #require(model.visibleRows.first { $0.node.name == "src" }).node
+        model.select(src.path)
+        model.selectExpandOrDescend()   // expand
+        let b = try #require(model.visibleRows.first { $0.node.name == "b.txt" }).node
+        model.select(b.path)
+
+        model.selectCollapseOrAscend()   // file → jump to parent
+        #expect(model.selectedNode?.name == "src")
+        #expect(model.isExpanded(src))   // parent stays expanded
+
+        model.selectCollapseOrAscend()   // expanded folder → collapse
+        #expect(model.isExpanded(src) == false)
+    }
+
+    // MARK: - Multi-selection
+
+    @Test("⌘-toggle and ⇧-range build and collapse the multi-selection")
+    func multiSelectToggleAndRange() async {
+        let (dir, cleanup) = tempTree(); defer { cleanup() }
+        let model = WorktreeModel(environment: makeTestEnvironment())
+        await model.load(worktreePath: dir, repo: Repository(path: dir))
+        let rows = model.visibleRows.map(\.node.path)
+        let (first, second) = (rows[0], rows[1])
+
+        model.select(first)
+        model.toggleSelection(second)
+        #expect(model.selectedPaths == [first, second])
+        model.toggleSelection(second)
+        #expect(model.selectedPaths == [first])
+
+        model.select(first)
+        model.extendSelection(to: second)
+        #expect(model.selectedPaths == [first, second])
+        #expect(model.orderedSelection() == [first, second])   // visible (top-down) order
+
+        model.selectAllVisible()
+        #expect(model.selectedPaths.count == rows.count)
+
+        // A plain arrow collapses any multi-selection back to a single cursor.
+        model.selectPrevious()
+        #expect(model.selectedPaths.count == 1)
+    }
+
+    @Test("⇧↓ extends the selection by one row")
+    func shiftArrowExtends() async {
+        let (dir, cleanup) = tempTree(); defer { cleanup() }
+        let model = WorktreeModel(environment: makeTestEnvironment())
+        await model.load(worktreePath: dir, repo: Repository(path: dir))
+        model.select(model.visibleRows[0].node.path)
+        model.extendSelection(by: 1)
+        #expect(model.selectedPaths.count == 2)
+    }
+
+    @Test("selectedFileNodes excludes directories")
+    func selectedFileNodesExcludesDirs() async {
+        let (dir, cleanup) = tempTree(); defer { cleanup() }
+        let model = WorktreeModel(environment: makeTestEnvironment())
+        await model.load(worktreePath: dir, repo: Repository(path: dir))
+        model.selectAllVisible()   // src (dir) + a.txt
+        let files = model.selectedFileNodes()
+        #expect(files.allSatisfy { !$0.isDirectory })
+        #expect(files.contains { $0.name == "a.txt" })
+    }
+
+    @Test("requestTrashSelected stages a trash mutation for the whole selection")
+    func trashSelected() async {
+        let (dir, cleanup) = tempTree(); defer { cleanup() }
+        let model = WorktreeModel(environment: makeTestEnvironment())
+        await model.load(worktreePath: dir, repo: Repository(path: dir))
+        model.selectAllVisible()
+        model.requestTrashSelected(now: Date())
+        #expect(model.pendingMutation?.kind == .trash)
+        #expect(Set(model.pendingMutation?.paths ?? []) == model.selectedPaths)
+    }
+
+    // MARK: - Selection as @-refs
+
+    @Test("selectionRefs emits @-prefixed worktree-relative paths in visible order")
+    func selectionRefsFormat() async throws {
+        let (dir, cleanup) = tempTree(); defer { cleanup() }
+        let model = WorktreeModel(environment: makeTestEnvironment())
+        await model.load(worktreePath: dir, repo: Repository(path: dir))
+        let src = try #require(model.visibleRows.first { $0.node.name == "src" }).node
+        model.select(src.path)
+        model.selectExpandOrDescend()   // expand so src/b.txt is visible
+        let b = try #require(model.visibleRows.first { $0.node.name == "b.txt" }).node
+        let a = try #require(model.visibleRows.first { $0.node.name == "a.txt" }).node
+        model.select(a.path)
+        model.toggleSelection(b.path)
+
+        // Visible order is src/b.txt (depth 1, under src) then a.txt.
+        #expect(model.selectionRefs() == "@src/b.txt @a.txt")
+    }
+
+    @Test("selectionRefs quotes a path containing spaces")
+    func selectionRefsQuotesSpaces() async throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("tb-refs-\(UUID().uuidString)")
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? "x".write(to: dir.appendingPathComponent("my file.txt"), atomically: true, encoding: .utf8)
+        defer { try? fm.removeItem(at: dir) }
+        let model = WorktreeModel(environment: makeTestEnvironment())
+        await model.load(worktreePath: dir.path, repo: Repository(path: dir.path))
+        let file = try #require(model.visibleRows.first { $0.node.name == "my file.txt" }).node
+        model.select(file.path)
+        #expect(model.selectionRefs() == "@\"my file.txt\"")
+    }
+
     @Test("changeGroups groups changes by folder")
     func changeGroups() async {
         let (dir, cleanup) = tempTree(); defer { cleanup() }
@@ -456,6 +612,28 @@ struct WorktreeNavigationTests {
         let folders = model.changeGroups.map(\.folder)
         #expect(folders.contains("src"))
         #expect(folders.contains(""))
+    }
+
+    @Test("CHANGES selection moves through the list and clamps at the ends")
+    func changeNavigation() async {
+        let (dir, cleanup) = tempTree(); defer { cleanup() }
+        let git = FakeGitClient()
+        git.statusResult = StatusResult(changes: [
+            FileChange(path: "a.txt", worktreeStatus: .modified),
+            FileChange(path: "src/b.txt", worktreeStatus: .modified),
+        ])
+        let model = WorktreeModel(environment: makeTestEnvironment(git: git))
+        await model.load(worktreePath: dir, repo: Repository(path: dir))
+
+        let first = try? #require(model.selectCurrentOrFirstChange())
+        #expect(model.selectionSource == .changes)
+        #expect(model.selectedPath == dir + "/" + model.changes[0].path)
+        #expect(first?.path == model.changes[0].path)
+
+        #expect(model.moveChangeSelection(by: 1)?.path == model.changes[1].path)
+        #expect(model.selectedPath == dir + "/" + model.changes[1].path)
+        #expect(model.moveChangeSelection(by: 1)?.path == model.changes[1].path)   // clamp at end
+        #expect(model.moveChangeSelection(by: -5)?.path == model.changes[0].path)  // clamp at start
     }
 
     @Test("commitPending stages and commits, then clears the message")

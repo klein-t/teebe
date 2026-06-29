@@ -18,10 +18,18 @@ struct RootView: View {
     /// scrolls; dragging the window's bottom edge while FILES is open updates it, and
     /// it's remembered per repo.
     @State private var filesReveal: CGFloat = 300
+    /// True only while the user is actively dragging the window's edge. FILES is a
+    /// fixed-height pane the rest of the time (so a CHANGES reflow can't make it balloon
+    /// for a frame); during a drag it becomes the flexible filler so the edge resizes it.
+    @State private var isLiveResizing = false
+    /// Focus of the FILES search field, lifted here so ⌘F can drive it and the
+    /// command-key shortcuts can stand down while the user is typing in it.
+    @FocusState private var searchFocused: Bool
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
 
     private var worktree: WorktreeModel { app.selector.worktree }
+    private var selector: SelectorModel { app.selector }
 
     /// Window height when all three sections are collapsed: the compact title row
     /// plus the three stacked headers (with their separators), no slack below.
@@ -49,14 +57,19 @@ struct RootView: View {
             } else {
                 // Pinned-header accordion: every section header stays visible. The
                 // window wraps its content (see targetHeight), so WORKTREES and CHANGES
-                // simply hug their rows; only FILES — whose tree is unbounded — fills
-                // the remaining height and scrolls.
+                // hug their rows (capped, then scroll); FILES is a fixed reveal pane that
+                // becomes the flexible filler only while the window edge is being dragged.
                 VStack(spacing: 0) {
+                    // Higher priority so WORKTREES/CHANGES keep their hugged height and
+                    // FILES yields: while dragging, FILES is the flexible filler and would
+                    // otherwise make the VStack split space evenly and squeeze CHANGES.
                     WorktreesSection(app: app, isOpen: sectionBinding(.worktrees, openWorktrees))
+                        .layoutPriority(1)
                     Divider()
                     ChangesSection(app: app, worktree: worktree, preview: preview, isOpen: sectionBinding(.changes, openChanges))
+                        .layoutPriority(1)
                     Divider()
-                    FilesSection(app: app, worktree: worktree, preview: preview, isOpen: sectionBinding(.files, openFiles))
+                    FilesSection(app: app, worktree: worktree, preview: preview, isOpen: sectionBinding(.files, openFiles), searchFocused: $searchFocused, revealHeight: filesReveal, liveResizing: isLiveResizing)
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
             }
@@ -81,8 +94,8 @@ struct RootView: View {
                 setTrafficLights(visible: false, animated: false, window: resolved)
                 applyLayout(for: app.selector.selectedRepo?.path)
             },
-            onLiveResizeStart: { setHeightLocked(heightPinned, height: targetHeight()) },
-            onLiveResizeEnd: { handleLiveResizeEnd($0) }
+            onLiveResizeStart: { isLiveResizing = true; setHeightLocked(heightPinned, height: targetHeight()) },
+            onLiveResizeEnd: { isLiveResizing = false; handleLiveResizeEnd($0) }
         ))
         .onChange(of: app.selector.selectedRepo?.path) { _, path in applyLayout(for: path) }
         // Keep WORKTREES/CHANGES wrapped to their rows as the lists change (preserving
@@ -95,13 +108,19 @@ struct RootView: View {
             if !allClosed { applyWindowSizing(animated: false) }
         }
         .background(QuickLookBridge(controller: quickLook))
+        .background { commandShortcuts }
         .focusable()
         .focusEffectDisabled()
         .onKeyPress(.space) { handleSpace(); return .handled }
         .onKeyPress(.escape) { preview.close(); dismissWindow(id: "preview"); return .handled }
-        .onKeyPress(.upArrow) { move(-1); return .handled }
-        .onKeyPress(.downArrow) { move(1); return .handled }
+        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { handleArrow($0) }
         .onKeyPress(.return) { activateSelected(); return .handled }
+        // Tab / ⇧Tab cycle the active section (stands down while typing in search).
+        .onKeyPress(keys: [.tab]) { press in
+            guard !searchFocused else { return .ignored }
+            cycleSection(forward: !press.modifiers.contains(.shift))
+            return .handled
+        }
         .confirmationDialog(confirmTitle, isPresented: confirmBinding, titleVisibility: .visible) {
             Button("Confirm", role: .destructive) { Task { await worktree.confirmPendingMutation() } }
             Button("Cancel", role: .cancel) { worktree.cancelPendingMutation() }
@@ -194,15 +213,18 @@ struct RootView: View {
         applyWindowSizing(animated: false)
     }
 
-    /// `true` only when every section is collapsed: the window then shrinks to the
-    /// three stacked headers and its height is pinned.
-    private var heightPinned: Bool { allClosed }
+    /// `true` whenever FILES is closed: the window then *wraps* its content exactly
+    /// (headers, plus WORKTREES/CHANGES hugged to their capped rows), so its height is
+    /// pinned. Leaving it free in these states let SwiftUI's idealHeight drift the
+    /// window a frame later and open an 18pt "chin" of empty material below the content.
+    /// Only FILES open (the unbounded scroller) makes the window freely resizable.
+    private var heightPinned: Bool { !openFiles }
 
-    /// When the window is pinned (all-collapsed) drive the SwiftUI frame to that exact
+    /// When the window is pinned (FILES closed) drive the SwiftUI frame to that exact
     /// height so `windowResizability` reports the same min/ideal/max we set on the
-    /// `NSWindow`; otherwise SwiftUI's content-min re-clamps the window a frame later
-    /// and leaves an empty "chin" below the last header. `nil` (free height) whenever a
-    /// section is open.
+    /// `NSWindow`; otherwise SwiftUI's idealHeight re-clamps the window a frame later
+    /// and leaves an empty "chin" of material below the content. `nil` (free height)
+    /// only while FILES is open.
     ///
     /// `targetHeight()` is a *window* height; SwiftUI's `.frame` sizes the *content*
     /// (`contentLayoutRect`) and the window is that plus a constant title-bar inset. We
@@ -228,22 +250,23 @@ struct RootView: View {
         (window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
     }
 
-    /// Estimated natural height of the open worktree list (mirrors WorktreesSection);
+    /// Height of the open worktree list (mirrors WorktreesSection, including its cap);
     /// 0 when closed.
     private var worktreesContentHeight: CGFloat {
         guard openWorktrees else { return 0 }
         let s = app.selector
         let repoRow: CGFloat = s.selectedRepo != nil ? 25 : 0
         let rows: CGFloat = s.worktrees.isEmpty ? 26 : CGFloat(s.worktrees.count) * 26
-        return 8 + repoRow + rows
+        return min(8 + repoRow + rows, WorktreesSection.maxListHeight)
     }
 
-    /// Estimated natural height of the open change list (mirrors ChangesSection); 0
-    /// when closed.
+    /// Height of the open change list (mirrors ChangesSection, including its cap); 0
+    /// when closed. The +14 is the section's top/bottom padding around the list.
     private var changesContentHeight: CGFloat {
         guard openChanges else { return 0 }
         let count = app.selector.worktree.changeCount
-        return 14 + (count == 0 ? 24 : CGFloat(count) * 24)
+        let natural: CGFloat = count == 0 ? 24 : CGFloat(count) * 24
+        return 14 + min(natural, ChangesSection.maxListHeight)
     }
 
     /// Size the window to the current state, anchored at the top so it grows and
@@ -310,21 +333,170 @@ struct RootView: View {
 
     // MARK: - Keyboard
 
-    private func move(_ delta: Int) {
+    /// Arrow-key navigation, dispatched to whichever section is active. WORKTREES:
+    /// move the keyboard cursor (Enter commits). CHANGES: move the selection and track
+    /// the open diff peek. FILES: move/extend the cursor and ←/→ collapse-expand.
+    private func handleArrow(_ press: KeyPress) -> KeyPress.Result {
+        let result: KeyPress.Result
+        switch app.activeSection {
+        case .worktrees: result = handleWorktreeArrow(press)
+        case .changes:   result = handleChangesArrow(press)
+        case .files:     result = handleFilesArrow(press)
+        }
+        return result
+    }
+
+    /// WORKTREES: ↑/↓ move the keyboard cursor (no switch — Enter commits).
+    private func handleWorktreeArrow(_ press: KeyPress) -> KeyPress.Result {
+        switch press.key {
+        case .upArrow:   selector.moveWorktreeHighlight(by: -1)
+        case .downArrow: selector.moveWorktreeHighlight(by: 1)
+        default:         return .ignored
+        }
+        return .handled
+    }
+
+    /// CHANGES: ↑/↓ move the selection and follow the open diff peek.
+    private func handleChangesArrow(_ press: KeyPress) -> KeyPress.Result {
+        switch press.key {
+        case .upArrow:   moveChange(by: -1)
+        case .downArrow: moveChange(by: 1)
+        default:         return .ignored
+        }
+        return .handled
+    }
+
+    /// FILES: ↑/↓ move/extend the cursor; ←/→ collapse-expand or jump parent/child.
+    private func handleFilesArrow(_ press: KeyPress) -> KeyPress.Result {
         worktree.selectionSource = .files
-        delta < 0 ? worktree.selectPrevious() : worktree.selectNext()
-        if preview.isVisible, let node = worktree.selectedNode, !node.isDirectory,
-           let wt = worktree.worktreePath {
-            Task { await preview.update(for: node, worktreePath: wt) }
+        let shift = press.modifiers.contains(.shift)
+        switch press.key {
+        case .upArrow:
+            if shift { worktree.extendSelection(by: -1) } else { worktree.selectPrevious() }
+        case .downArrow:
+            if shift { worktree.extendSelection(by: 1) } else { worktree.selectNext() }
+        case .leftArrow:  worktree.selectCollapseOrAscend()
+        case .rightArrow: worktree.selectExpandOrDescend()
+        default:          return .ignored
+        }
+        syncPreviewToSelection()
+        return .handled
+    }
+
+    /// Move the CHANGES selection and, if the diff peek is open, swap its content to
+    /// the newly selected file in place (the preview window itself does not move).
+    private func moveChange(by delta: Int) {
+        guard let change = worktree.moveChangeSelection(by: delta),
+              preview.isVisible, let wt = worktree.worktreePath else { return }
+        let node = FileNode(path: wt + "/" + change.path, isDirectory: false, change: change)
+        Task { await preview.update(for: node, worktreePath: wt) }
+    }
+
+    // MARK: - Section focus (⌘1/2/3, Tab)
+
+    /// ⌘1/⌘2/⌘3: if the section is already active, toggle it open/closed; otherwise
+    /// make it active (opening it and moving the selection in).
+    private func focusOrToggle(_ section: AppModel.FocusSection) {
+        if app.activeSection == section {
+            setOpen(rootSection(section), !sectionIsOpen(section))
+        } else {
+            activate(section)
         }
     }
 
-    /// Spacebar previews the current selection: the native Quick Look panel for a
-    /// FILES row, or the in-app diff peek for a CHANGES row.
+    /// Tab / ⇧Tab: move the active section forward/back through WORKTREES→CHANGES→FILES.
+    private func cycleSection(forward: Bool) {
+        let order: [AppModel.FocusSection] = [.worktrees, .changes, .files]
+        let index = order.firstIndex(of: app.activeSection) ?? 2
+        activate(order[(index + (forward ? 1 : order.count - 1)) % order.count])
+    }
+
+    /// Make `section` the active one: open it if collapsed, and seat the selection
+    /// (the open worktree for WORKTREES, the current/first change, or a file cursor).
+    private func activate(_ section: AppModel.FocusSection) {
+        app.activeSection = section
+        if !sectionIsOpen(section) { setOpen(rootSection(section), true) }
+        switch section {
+        case .worktrees:
+            selector.highlightSelectedWorktree()
+        case .changes:
+            if let change = worktree.selectCurrentOrFirstChange(), preview.isVisible, let wt = worktree.worktreePath {
+                let node = FileNode(path: wt + "/" + change.path, isDirectory: false, change: change)
+                Task { await preview.update(for: node, worktreePath: wt) }
+            }
+        case .files:
+            worktree.selectionSource = .files
+            let hasValidCursor = worktree.selectedPath.map { sel in worktree.visibleRows.contains { $0.node.path == sel } } ?? false
+            if !hasValidCursor, let first = worktree.visibleRows.first { worktree.select(first.node.path) }
+        }
+    }
+
+    private func rootSection(_ s: AppModel.FocusSection) -> Section {
+        switch s {
+        case .worktrees: .worktrees
+        case .changes:   .changes
+        case .files:     .files
+        }
+    }
+
+    private func sectionIsOpen(_ s: AppModel.FocusSection) -> Bool {
+        switch s {
+        case .worktrees: openWorktrees
+        case .changes:   openChanges
+        case .files:     openFiles
+        }
+    }
+
+    /// Keep the live preview tracking the cursor as it moves over files.
+    private func syncPreviewToSelection() {
+        guard preview.isVisible, let node = worktree.selectedNode, !node.isDirectory,
+              let wt = worktree.worktreePath else { return }
+        Task { await preview.update(for: node, worktreePath: wt) }
+    }
+
+    /// Hidden buttons that register the command-key shortcuts window-wide. Disabled
+    /// while the search field is focused so ⌘A / ⌘⌫ keep editing the query text there.
+    private var commandShortcuts: some View {
+        Group {
+            Button("") { focusOrToggle(.worktrees) }.keyboardShortcut("1", modifiers: .command)
+            Button("") { focusOrToggle(.changes) }.keyboardShortcut("2", modifiers: .command)
+            Button("") { focusOrToggle(.files) }.keyboardShortcut("3", modifiers: .command)
+            Button("") { focusSearch() }.keyboardShortcut("f", modifiers: .command)
+            Button("") { if app.activeSection == .files { worktree.selectAllVisible() } }.keyboardShortcut("a", modifiers: .command)
+            Button("") { copyRefs() }.keyboardShortcut("c", modifiers: [.command, .shift])
+            Button("") { trashSelection() }.keyboardShortcut(.delete, modifiers: .command)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+        .disabled(searchFocused)
+    }
+
+    /// ⌘F: open FILES if needed and hand focus to its search field.
+    private func focusSearch() {
+        if !openFiles { setOpen(.files, true) }
+        app.focusSearch()
+    }
+
+    /// ⌘⇧C: copy the FILES selection to the clipboard as Claude-ready `@`-refs.
+    private func copyRefs() {
+        guard app.activeSection == .files else { return }
+        app.copySelectedRefs()
+    }
+
+    /// ⌘⌫: move the FILES selection to the Trash (guarded by the confirm dialog).
+    private func trashSelection() {
+        guard app.activeSection == .files else { return }
+        worktree.requestTrashSelected()
+    }
+
+    /// Spacebar previews the active section's selection: the native Quick Look panel
+    /// for a FILES row, the in-app diff peek for a CHANGES row, nothing for WORKTREES.
     private func handleSpace() {
-        switch worktree.selectionSource {
-        case .changes: toggleDiffPeek()
-        case .files: presentQuickLook()
+        switch app.activeSection {
+        case .changes:   toggleDiffPeek()
+        case .files:     presentQuickLook()
+        case .worktrees: break
         }
     }
 
@@ -346,6 +518,18 @@ struct RootView: View {
         Task {
             await preview.toggle(for: node, worktreePath: wt)
             openWindow(id: "preview")
+            await reclaimKeyFocus()
+        }
+    }
+
+    /// The freshly-opened peek scene becomes the key window and would swallow ↑/↓, so
+    /// the CHANGES/FILES list couldn't drive it. Hand key status back to the main
+    /// window (the peek stays visible — it floats above and only its content updates).
+    /// Retried across a few runloops because the scene becomes key asynchronously.
+    private func reclaimKeyFocus() async {
+        for _ in 0..<3 {
+            try? await Task.sleep(for: .milliseconds(80))
+            window?.makeKey()
         }
     }
 
@@ -360,9 +544,23 @@ struct RootView: View {
         quickLook.toggle(urls: urls, startIndex: start)
     }
 
+    /// Enter, dispatched by active section: WORKTREES commits the highlighted worktree
+    /// (the switch); CHANGES opens the changed file; FILES opens the file(s) or toggles
+    /// a folder.
     private func activateSelected() {
-        guard let node = worktree.selectedNode else { return }
-        if node.isDirectory { worktree.toggleExpand(node) } else { app.open(node) }
+        switch app.activeSection {
+        case .worktrees:
+            Task { await selector.commitHighlightedWorktree() }
+        case .changes:
+            guard let wt = worktree.worktreePath, let change = selectedChange else { return }
+            app.open(FileNode(path: wt + "/" + change.path, isDirectory: false, change: change))
+        case .files:
+            guard let node = worktree.selectedNode else { return }
+            if node.isDirectory { worktree.toggleExpand(node); return }
+            // With several files selected, Enter opens them all; otherwise just the cursor.
+            let files = worktree.selectedFileNodes()
+            if files.count > 1 { files.forEach { app.open($0) } } else { app.open(node) }
+        }
     }
 
     // MARK: - Guarded mutation confirmation

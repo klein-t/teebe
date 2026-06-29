@@ -10,7 +10,7 @@ struct ChangesSection: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SectionHeader(title: "CHANGES", isOpen: isOpen, onToggle: { isOpen.toggle() }) {
+            SectionHeader(title: "CHANGES", isOpen: isOpen, isActive: app.activeSection == .changes, onToggle: { isOpen.toggle() }) {
                 HStack(spacing: 8) {
                     countBadge(worktree.changeCount)
                     if let active = app.selector.selectedWorktree {
@@ -26,11 +26,20 @@ struct ChangesSection: View {
                 // Hug the rows (the window wraps content); cap at the content height
                 // and scroll inside only when the window is dragged too short.
                 VStack(spacing: 0) {
-                    ScrollView {
-                        changeList
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            changeList
+                        }
+                        .scrollBounceBehavior(.basedOnSize)
+                        .frame(maxHeight: listContentHeight)
+                        // Follow the selection when ↑/↓ moves it past the visible edge.
+                        // Snap, not animate (see FilesSection): an animated scrollTo
+                        // reads as a bounce against the row highlight + relayout.
+                        .onChange(of: worktree.selectedPath) { _, sel in
+                            guard app.activeSection == .changes, let sel else { return }
+                            proxy.scrollTo(sel, anchor: nil)
+                        }
                     }
-                    .scrollBounceBehavior(.basedOnSize)
-                    .frame(maxHeight: listContentHeight)
                 }
                 .padding(.top, 8)
                 .padding(.bottom, 6)
@@ -40,11 +49,18 @@ struct ChangesSection: View {
         .clipped()
     }
 
-    /// Estimated natural height of the change list, used to cap the section so it
-    /// hugs its rows yet can shrink-and-scroll when space is tight.
+    /// Tallest the change list hugs before it scrolls internally. Bounds how much the
+    /// window grows for a worktree with many changes, so browsing between worktrees with
+    /// very different change counts doesn't lurch the window. RootView's
+    /// `changesContentHeight` mirrors this cap so the window math and the view agree.
+    static let maxListHeight: CGFloat = 144   // ~6 rows (24pt each), then scroll
+
+    /// Natural height of the change list (rows are 24pt tall), capped at `maxListHeight`
+    /// so the section hugs its rows up to the cap and scrolls beyond it.
     private var listContentHeight: CGFloat {
         let count = worktree.changeCount
-        return count == 0 ? 24 : CGFloat(count) * 24   // rows are 24pt tall
+        let natural: CGFloat = count == 0 ? 24 : CGFloat(count) * 24
+        return min(natural, Self.maxListHeight)
     }
 
     private var changeList: some View {
@@ -76,7 +92,7 @@ struct ChangesSection: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(selected ? Palette.accent : .clear)
         .foregroundStyle(selected ? .white : .primary)
-        .animation(.easeInOut(duration: 0.18), value: selected)
+        // Snap, no cross-fade — avoids the trailing highlight when arrowing fast.
         .contentShape(Rectangle())
         .onTapGesture { select(change) }
         .contextMenu {
@@ -87,6 +103,7 @@ struct ChangesSection: View {
             }
             Button("Discard…", role: .destructive) { worktree.requestDiscard(change) }
         }
+        .id(absolutePath(of: change) ?? change.path)   // matches selectedPath for scroll-to
     }
 
     private func absolutePath(of change: FileChange) -> String? {
@@ -94,7 +111,7 @@ struct ChangesSection: View {
     }
 
     private func isSelected(_ change: FileChange) -> Bool {
-        worktree.selectionSource == .changes && worktree.selectedPath == absolutePath(of: change)
+        app.activeSection == .changes && worktree.selectedPath == absolutePath(of: change)
     }
 
     /// Click a change → select it (highlight). Space then peeks its diff. If the
@@ -102,6 +119,7 @@ struct ChangesSection: View {
     private func select(_ change: FileChange) {
         guard let worktreePath = worktree.worktreePath else { return }
         let node = FileNode(path: worktreePath + "/" + change.path, isDirectory: false, change: change)
+        app.activeSection = .changes
         worktree.selectedPath = node.path
         worktree.selectionSource = .changes
         if preview.isVisible {
