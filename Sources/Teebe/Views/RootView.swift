@@ -121,6 +121,12 @@ struct RootView: View {
             cycleSection(forward: !press.modifiers.contains(.shift))
             return .handled
         }
+        // ? opens the keyboard cheat sheet (but let it type into the search field).
+        .onKeyPress("?") {
+            guard !searchFocused else { return .ignored }
+            app.showKeyboardShortcuts = true
+            return .handled
+        }
         .confirmationDialog(confirmTitle, isPresented: confirmBinding, titleVisibility: .visible) {
             Button("Confirm", role: .destructive) { Task { await worktree.confirmPendingMutation() } }
             Button("Cancel", role: .cancel) { worktree.cancelPendingMutation() }

@@ -51,6 +51,9 @@ struct TeebeApp: App {
                 .sheet(isPresented: $whatsNew.isPresented) {
                     WhatsNewView(model: whatsNew)
                 }
+                .sheet(isPresented: $app.showKeyboardShortcuts) {
+                    KeyboardShortcutsView()
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize) // freely resizable; content scrolls inside
@@ -60,6 +63,8 @@ struct TeebeApp: App {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesCommand(updater: updater)
                 Button("What's New in \(Brand.name)") { whatsNew.present() }
+                Button("Keyboard Shortcuts") { app.showKeyboardShortcuts = true }
+                    .keyboardShortcut("/", modifiers: .command)
             }
         }
 
