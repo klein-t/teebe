@@ -73,17 +73,49 @@ struct WhatsNewView: View {
     private func bullet(_ item: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Text("•").foregroundStyle(Palette.secondaryText)
-            Text(attributed(item))
-                .font(.system(size: 12.5))
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
+            ChipFlow(spacing: 3, lineSpacing: 6) {
+                ForEach(Array(tokens(for: item).enumerated()), id: \.offset) { _, token in
+                    switch token {
+                    case let .word(text, bold):
+                        Text(text)
+                            .font(.system(size: 12.5, weight: bold ? .semibold : .regular))
+                            .foregroundStyle(.primary)
+                    case let .chip(text):
+                        Text(text)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 5).padding(.vertical, 1.5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(Color.primary.opacity(0.08))
+                            )
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    /// Render inline markdown (bold, code, links) for a bullet, falling back to plain
-    /// text if it can't be parsed.
-    private func attributed(_ item: String) -> AttributedString {
-        (try? AttributedString(markdown: item)) ?? AttributedString(item)
+    /// Split a bullet's inline markdown into flow tokens: plain words (optionally bold)
+    /// and `code` spans. Working word-by-word (instead of one `Text`) lets the code
+    /// spans render as real rounded chip views that wrap inline with the prose.
+    private func tokens(for item: String) -> [BulletToken] {
+        guard let parsed = try? AttributedString(markdown: item) else {
+            return item.split(separator: " ").map { .word(String($0), bold: false) }
+        }
+        var out: [BulletToken] = []
+        for run in parsed.runs {
+            let text = String(parsed[run.range].characters)
+            if run.inlinePresentationIntent?.contains(.code) == true {
+                out.append(.chip(text.trimmingCharacters(in: .whitespaces)))
+            } else {
+                let bold = run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+                for word in text.split(separator: " ", omittingEmptySubsequences: true) {
+                    out.append(.word(String(word), bold: bold))
+                }
+            }
+        }
+        return out
     }
 
     private var footer: some View {
@@ -93,5 +125,87 @@ struct WhatsNewView: View {
                 .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
+    }
+}
+
+/// A flow token: a plain (optionally bold) word, or a `code` span shown as a chip.
+private enum BulletToken {
+    case word(String, bold: Bool)
+    case chip(String)
+}
+
+/// A left-to-right wrapping layout that aligns every item on the text baseline, so the
+/// rounded chip views sit inline with the prose and wrap to new lines cleanly (no
+/// trailing slivers, unlike an inline-text background).
+private struct ChipFlow: Layout {
+    var spacing: CGFloat = 3
+    var lineSpacing: CGFloat = 6
+
+    private struct Metric { let size: CGSize; let baseline: CGFloat }
+
+    private func metric(_ subview: LayoutSubview) -> Metric {
+        let dim = subview.dimensions(in: .unspecified)
+        return Metric(size: CGSize(width: dim.width, height: dim.height),
+                      baseline: dim[VerticalAlignment.firstTextBaseline] ?? dim.height)
+    }
+
+    /// Group subview indices into rows that each fit within `maxWidth`.
+    private func rows(_ subviews: Subviews, maxWidth: CGFloat) -> [[Int]] {
+        var rows: [[Int]] = []
+        var row: [Int] = []
+        var x: CGFloat = 0
+        for index in subviews.indices {
+            let width = metric(subviews[index]).size.width
+            if !row.isEmpty, x + width > maxWidth {
+                rows.append(row); row = []; x = 0
+            }
+            row.append(index)
+            x += width + spacing
+        }
+        if !row.isEmpty { rows.append(row) }
+        return rows
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        let rows = rows(subviews, maxWidth: maxWidth)
+        var height: CGFloat = 0
+        var width: CGFloat = 0
+        for (i, row) in rows.enumerated() {
+            let metrics = row.map { metric(subviews[$0]) }
+            let ascent = metrics.map(\.baseline).max() ?? 0
+            let descent = metrics.map { $0.size.height - $0.baseline }.max() ?? 0
+            height += ascent + descent + (i < rows.count - 1 ? lineSpacing : 0)
+            let rowWidth = metrics.reduce(0) { $0 + $1.size.width + spacing } - spacing
+            width = max(width, rowWidth)
+        }
+        return CGSize(width: maxWidth.isFinite ? maxWidth : max(width, 0), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let rows = rows(subviews, maxWidth: bounds.width)
+        var y = bounds.minY
+        for row in rows {
+            let metrics = row.map { metric(subviews[$0]) }
+            let ascent = metrics.map(\.baseline).max() ?? 0
+            let descent = metrics.map { $0.size.height - $0.baseline }.max() ?? 0
+            var x = bounds.minX
+            for (offset, index) in row.enumerated() {
+                let m = metrics[offset]
+                subviews[index].place(at: CGPoint(x: x, y: y + ascent - m.baseline),
+                                      proposal: ProposedViewSize(m.size))
+                x += m.size.width + spacing
+            }
+            y += ascent + descent + lineSpacing
+        }
+    }
+
+    /// Report the first row's baseline so an enclosing `firstTextBaseline` HStack (the
+    /// bullet dot) lines up with the first line of text.
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect,
+                           proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? {
+        guard guide == .firstTextBaseline,
+              let first = rows(subviews, maxWidth: bounds.width).first else { return nil }
+        return first.map { metric(subviews[$0]).baseline }.max()
     }
 }

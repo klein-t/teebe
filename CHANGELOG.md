@@ -4,15 +4,32 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-06-30
 
 ### Added
-- Worktrees added or removed **outside** teebe (e.g. `git worktree add` / `remove`
-  in a terminal) are now detected automatically and appear in the WORKTREES list
-  without a manual action. The Refresh button forces a full re-scan.
-- A **What's New** window that shows this changelog inside the app — opened
-  automatically the first time you launch a new version, and any time from
-  Help → What's New.
+- **Keyboard navigation.** Drive the whole window without the mouse. Arrow keys move
+  through Worktrees, Changes and Files. `⌘1` / `⌘2` / `⌘3` focus a section (press again
+  to collapse), and `Tab` cycles between them. `Return` opens a file or switches
+  worktree, and `Space` Quick Looks a file or peeks a diff.
+- **Multi-select and send to your agent.** Select several files with `⌘`- or `⇧`-click,
+  `⇧↑` / `⇧↓`, or `⌘A`. Copy them as AI-agent-ready `@`-refs with `⌘⇧C`, or move them to
+  the Trash with `⌘⌫`.
+- **Automatic worktree detection.** Worktrees you add or remove outside teebe (for
+  example with `git worktree add` in a terminal) now appear on their own, with no
+  manual action. The Refresh button forces a full re-scan.
+- **Keyboard Shortcuts cheat sheet.** Press `?` (or open Help → Keyboard Shortcuts) for
+  the full list.
+- **Jump to search** with `⌘F`.
+- **What's New window.** Shows this changelog inside the app: automatically on the
+  first launch after an update, and any time from Help → What's New.
+
+### Changed
+- **Bounded section sizing.** The Worktrees and Changes lists now scroll inside their
+  own area once they get tall, instead of growing without limit. The window stays a
+  stable size as you switch between worktrees.
+- **Vertical maximize.** The green window button now grows teebe to the full screen
+  height at its current width (filling with the file tree) instead of zooming to cover
+  the whole screen. Click it again to restore the previous size.
 
 ## [0.3.0] - 2026-06-24
 
