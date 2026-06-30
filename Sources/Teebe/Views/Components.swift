@@ -197,6 +197,9 @@ extension View {
 struct SectionHeader<Trailing: View>: View {
     let title: String
     let isOpen: Bool
+    /// Whether this is the section the keyboard is currently driving — tints the title
+    /// in the accent colour so the active section is always visible.
+    var isActive: Bool = false
     let onToggle: () -> Void
     @ViewBuilder var trailing: () -> Trailing
 
@@ -225,7 +228,8 @@ struct SectionHeader<Trailing: View>: View {
             Text(title)
                 .font(.system(size: 11, weight: .bold))
                 .tracking(0.5)
-                .foregroundStyle(Palette.headerLabel)
+                .foregroundStyle(isActive ? Palette.accent : Palette.headerLabel)
+                .animation(.easeInOut(duration: 0.18), value: isActive)
                 .fixedSize()
                 .layoutPriority(1)
             Spacer(minLength: 6)

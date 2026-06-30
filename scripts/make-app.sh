@@ -12,7 +12,7 @@ LOGO="Sources/Teebe/Resources/teebe-logo.png"
 # uses to decide whether an update is newer, so it MUST increase per release —
 # CI passes the release tag (e.g. APP_VERSION=0.2.0). A static value would make
 # every release look identical and Sparkle would never offer an update.
-APP_VERSION="${APP_VERSION:-0.3.0}"
+APP_VERSION="${APP_VERSION:-0.3.1}"
 BUILD_NUMBER="${BUILD_NUMBER:-$APP_VERSION}"
 
 # Sparkle auto-update config. Override via env in CI; the public key pairs with

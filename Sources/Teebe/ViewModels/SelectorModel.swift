@@ -217,7 +217,32 @@ final class SelectorModel {
 
     func selectWorktree(_ wt: Worktree) async {
         selectedWorktree = wt
+        highlightedWorktree = wt
         await worktree.load(worktreePath: wt.path, repo: selectedRepo)
         onSelectionChange?()
+    }
+
+    // MARK: - Keyboard navigation (WORKTREES)
+
+    /// The keyboard cursor in the WORKTREES list, distinct from the committed
+    /// `selectedWorktree`: ↑/↓ move it, Enter commits it (switching the worktree).
+    var highlightedWorktree: Worktree?
+
+    /// Seed the cursor on the currently-open worktree (when WORKTREES becomes active).
+    func highlightSelectedWorktree() { highlightedWorktree = selectedWorktree }
+
+    /// Move the keyboard cursor one row (no switch — that happens on commit).
+    func moveWorktreeHighlight(by delta: Int) {
+        guard !worktrees.isEmpty else { return }
+        let base = highlightedWorktree ?? selectedWorktree
+        let index = base.flatMap { b in worktrees.firstIndex { $0.path == b.path } } ?? 0
+        let next = max(0, min(worktrees.count - 1, index + delta))
+        highlightedWorktree = worktrees[next]
+    }
+
+    /// Commit the highlighted worktree (Enter): switch to it unless it's already current.
+    func commitHighlightedWorktree() async {
+        guard let wt = highlightedWorktree, wt.path != selectedWorktree?.path else { return }
+        await selectWorktree(wt)
     }
 }
