@@ -31,6 +31,9 @@ All notable changes to teebe are documented here. The format is based on
   height at its current width (filling with the file tree) instead of zooming to cover
   the whole screen. Click it again to restore the previous size.
 
+### Fixed
+- Folders in the file tree now show a folder icon instead of a flat blue square.
+
 ## [0.3.0] - 2026-06-24
 
 ### Changed

@@ -176,9 +176,10 @@ struct FileRow: View {
     @ViewBuilder
     private var icon: some View {
         if node.isDirectory {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(isSelected ? Color.white.opacity(0.9) : Color(red: 0x5A / 255, green: 0xA7 / 255, blue: 1))
-                .frame(width: 15, height: 12)
+            Image(systemName: "folder.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(isSelected ? Color.white : Color(red: 0x5A / 255, green: 0xA7 / 255, blue: 1))
+                .frame(width: 15)
         } else {
             Image(systemName: node.iconName)
                 .font(.system(size: 12))
