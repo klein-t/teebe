@@ -22,6 +22,9 @@ struct RootView: View {
     /// fixed-height pane the rest of the time (so a CHANGES reflow can't make it balloon
     /// for a frame); during a drag it becomes the flexible filler so the edge resizes it.
     @State private var isLiveResizing = false
+    /// Layout to restore when the green zoom is toggled off — set while the window is
+    /// "vertically maximized" (full height), nil otherwise.
+    @State private var zoomRestore: ZoomRestore?
     /// Focus of the FILES search field, lifted here so ⌘F can drive it and the
     /// command-key shortcuts can stand down while the user is typing in it.
     @FocusState private var searchFocused: Bool
@@ -45,6 +48,10 @@ struct RootView: View {
     private let minFilesReveal: CGFloat = 140
 
     private enum Section { case worktrees, changes, files }
+
+    /// Snapshot taken when the green zoom maximizes the window vertically, restored on
+    /// the next zoom toggle.
+    private struct ZoomRestore { let frame: NSRect; let openFiles: Bool; let reveal: CGFloat }
 
     private var allClosed: Bool { !openWorktrees && !openChanges && !openFiles }
 
@@ -95,7 +102,8 @@ struct RootView: View {
                 applyLayout(for: app.selector.selectedRepo?.path)
             },
             onLiveResizeStart: { isLiveResizing = true; setHeightLocked(heightPinned, height: targetHeight()) },
-            onLiveResizeEnd: { isLiveResizing = false; handleLiveResizeEnd($0) }
+            onLiveResizeEnd: { isLiveResizing = false; handleLiveResizeEnd($0) },
+            onZoom: { toggleVerticalZoom() }
         ))
         .onChange(of: app.selector.selectedRepo?.path) { _, path in applyLayout(for: path) }
         // Keep WORKTREES/CHANGES wrapped to their rows as the lists change (preserving
@@ -285,9 +293,39 @@ struct RootView: View {
         setWindowHeight(target, animated: animated && !shrinking)
     }
 
+    /// Green zoom: toggle a *vertical* maximize. Grow to the full visible screen height
+    /// at the current width and x (never wider), opening FILES so it fills the new room;
+    /// a second click restores the previous size and section layout. Unlike AppKit's
+    /// default zoom (fill the whole screen, both dimensions), this keeps teebe a column.
+    private func toggleVerticalZoom() {
+        guard let window else { return }
+        let visible = (window.screen ?? NSScreen.main)?.visibleFrame ?? window.frame
+        if let restore = zoomRestore {
+            zoomRestore = nil
+            openFiles = restore.openFiles
+            filesReveal = restore.reveal
+            setHeightLocked(heightPinned, height: targetHeight())
+            window.setFrame(restore.frame, display: true, animate: false)
+            persistLayout()
+            return
+        }
+        zoomRestore = ZoomRestore(frame: window.frame, openFiles: openFiles, reveal: filesReveal)
+        openFiles = true
+        let nonFiles = collapsedHeight + worktreesContentHeight + changesContentHeight
+        filesReveal = max(minFilesReveal, visible.height - nonFiles)
+        setHeightLocked(false, height: targetHeight())   // FILES open → resizable up to the screen
+        var frame = window.frame
+        frame.size.height = visible.height               // width and x untouched → no widening
+        frame.origin.y = visible.minY
+        window.setFrame(frame, display: true, animate: false)
+        persistLayout()
+    }
+
     /// User finished dragging the window edge. Height is derived from content (wrap),
     /// so there's nothing to remember — just persist the open/closed flags.
     private func handleLiveResizeEnd(_ height: CGFloat) {
+        // A manual resize means we're no longer in the zoomed state.
+        zoomRestore = nil
         // Dragging the edge resizes the FILES area (the only thing that can grow past
         // its content); record it so the reveal persists. With FILES closed the window
         // already wraps WORKTREES/CHANGES, so there's nothing to remember.

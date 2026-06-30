@@ -27,6 +27,9 @@ All notable changes to teebe are documented here. The format is based on
 - **Bounded section sizing.** The Worktrees and Changes lists now scroll inside their
   own area once they get tall, instead of growing without limit. The window stays a
   stable size as you switch between worktrees.
+- **Vertical maximize.** The green window button now grows teebe to the full screen
+  height at its current width (filling with the file tree) instead of zooming to cover
+  the whole screen. Click it again to restore the previous size.
 
 ## [0.3.0] - 2026-06-24
 

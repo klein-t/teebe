@@ -26,6 +26,10 @@ struct WindowController: NSViewRepresentable {
     var onResolve: (NSWindow) -> Void
     var onLiveResizeStart: () -> Void
     var onLiveResizeEnd: (CGFloat) -> Void
+    /// Green "zoom" button (and double-click on the title bar is left to AppKit). We
+    /// override it to grow the window to full height at the same width instead of the
+    /// default fill-the-screen zoom.
+    var onZoom: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -46,22 +50,26 @@ struct WindowController: NSViewRepresentable {
         }
     }
 
-    final class Coordinator {
+    final class Coordinator: NSObject {
         private(set) weak var window: NSWindow?
         private var observers: [NSObjectProtocol] = []
         private var floatOnTop = false
         private var onLiveResizeStart: (() -> Void)?
         private var onLiveResizeEnd: ((CGFloat) -> Void)?
+        private var onZoom: (() -> Void)?
 
         /// Per-update, no allocation: refresh the callbacks and float level only.
         func refresh(parent: WindowController) {
             onLiveResizeStart = parent.onLiveResizeStart
             onLiveResizeEnd = parent.onLiveResizeEnd
+            onZoom = parent.onZoom
             if floatOnTop != parent.floatOnTop {
                 floatOnTop = parent.floatOnTop
                 window?.level = floatOnTop ? .floating : .normal
             }
         }
+
+        @objc private func zoomClicked() { onZoom?() }
 
         /// One-time: bind to the window and install the live-resize observers.
         func attach(_ window: NSWindow?, parent: WindowController) {
@@ -70,6 +78,11 @@ struct WindowController: NSViewRepresentable {
             floatOnTop = parent.floatOnTop
             window.level = floatOnTop ? .floating : .normal
             parent.onResolve(window)
+            // Take over the green zoom button so it grows to full height, not full screen.
+            if let zoomButton = window.standardWindowButton(.zoomButton) {
+                zoomButton.target = self
+                zoomButton.action = #selector(zoomClicked)
+            }
             // Re-assert the height clamp the instant a drag begins (SwiftUI's
             // windowResizability keeps re-enabling free resize otherwise)…
             observers.append(NotificationCenter.default.addObserver(
