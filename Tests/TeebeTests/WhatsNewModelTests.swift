@@ -34,46 +34,33 @@ struct WhatsNewModelTests {
     func freshInstall() {
         let store = makeStore()
         let model = WhatsNewModel(version: "0.3.0", changelogMarkdown: changelog, store: store)
-        model.presentIfUpdated()
-        #expect(model.isPresented == false)
+        #expect(model.presentIfUpdated() == false)
         #expect(store.load().lastSeenVersion == "0.3.0")
     }
 
-    @Test("auto-presents once after an update, then records the new version")
+    @Test("greets once after an update, then records the new version")
     func presentsOnUpdate() {
         let store = makeStore()
         try? store.save(AppState(lastSeenVersion: "0.2.2"))
         let model = WhatsNewModel(version: "0.3.0", changelogMarkdown: changelog, store: store)
-        model.presentIfUpdated()
-        #expect(model.isPresented == true)
+        #expect(model.presentIfUpdated() == true)
         #expect(store.load().lastSeenVersion == "0.3.0")
     }
 
-    @Test("does not re-present for the same version")
+    @Test("does not greet again for the same version")
     func sameVersion() {
         let store = makeStore()
         try? store.save(AppState(lastSeenVersion: "0.3.0"))
         let model = WhatsNewModel(version: "0.3.0", changelogMarkdown: changelog, store: store)
-        model.presentIfUpdated()
-        #expect(model.isPresented == false)
+        #expect(model.presentIfUpdated() == false)
     }
 
-    @Test("a dev build with no version never auto-presents and doesn't crash")
+    @Test("a dev build with no version never greets and doesn't crash")
     func devBuild() {
         let store = makeStore()
         let model = WhatsNewModel(version: nil, changelogMarkdown: changelog, store: store)
-        model.presentIfUpdated()
-        #expect(model.isPresented == false)
+        #expect(model.presentIfUpdated() == false)
         #expect(store.load().lastSeenVersion == nil)
         #expect(model.displayVersion == "dev build")
-    }
-
-    @Test("manual present opens it regardless of seen state")
-    func manualPresent() {
-        let store = makeStore()
-        try? store.save(AppState(lastSeenVersion: "0.3.0"))
-        let model = WhatsNewModel(version: "0.3.0", changelogMarkdown: changelog, store: store)
-        model.present()
-        #expect(model.isPresented == true)
     }
 }

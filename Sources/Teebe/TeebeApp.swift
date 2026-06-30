@@ -43,28 +43,17 @@ struct TeebeApp: App {
 
     var body: some Scene {
         WindowGroup(Brand.name) {
-            RootView(app: app, preview: preview)
-                .task {
-                    await app.bootstrap()
-                    whatsNew.presentIfUpdated()   // greet once after an update
-                }
-                .sheet(isPresented: $whatsNew.isPresented) {
-                    WhatsNewView(model: whatsNew)
-                }
-                .sheet(isPresented: $app.showKeyboardShortcuts) {
-                    KeyboardShortcutsView()
-                }
+            RootWindowContent(app: app, preview: preview, whatsNew: whatsNew)
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize) // freely resizable; content scrolls inside
         .defaultSize(width: 440, height: 640)
         .commands {
-            // "Check for Updates…" and "What's New" in the app menu next to About.
+            // "Check for Updates…", "What's New", and "Keyboard Shortcuts" next to About.
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesCommand(updater: updater)
-                Button("What's New in \(Brand.name)") { whatsNew.present() }
-                Button("Keyboard Shortcuts") { app.showKeyboardShortcuts = true }
-                    .keyboardShortcut("/", modifiers: .command)
+                WhatsNewMenuCommand()
+                KeyboardShortcutsMenuCommand()
             }
         }
 
@@ -73,5 +62,47 @@ struct TeebeApp: App {
             PreviewPanel(preview: preview, app: app)
         }
         .windowResizability(.contentSize)
+
+        // "What's New" and the Keyboard Shortcuts cheat sheet are real, movable
+        // windows rather than sheets (macOS pins sheets to the parent and won't let
+        // you drag them). Chrome-less to match their in-content header; closed via the
+        // footer button, Esc, or ⌘W.
+        Window("What's New in \(Brand.name)", id: WindowID.whatsNew) {
+            WhatsNewView(model: whatsNew)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+
+        Window("Keyboard Shortcuts", id: WindowID.shortcuts) {
+            KeyboardShortcutsView()
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+    }
+}
+
+/// Stable identifiers for the secondary windows opened via `openWindow(id:)`.
+enum WindowID {
+    static let whatsNew = "whatsNew"
+    static let shortcuts = "shortcuts"
+}
+
+/// Hosts the main window's content and, on the first launch after an update, opens
+/// the What's New window. This lives in a `View` (not the `App` scene builder) so it
+/// can read `openWindow` from the environment.
+private struct RootWindowContent: View {
+    let app: AppModel
+    let preview: PreviewModel
+    let whatsNew: WhatsNewModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        RootView(app: app, preview: preview)
+            .task {
+                await app.bootstrap()
+                if whatsNew.presentIfUpdated() {   // greet once after an update
+                    openWindow(id: WindowID.whatsNew)
+                }
+            }
     }
 }

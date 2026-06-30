@@ -31,6 +31,7 @@ struct WhatsNewView: View {
             footer
         }
         .frame(width: 440, height: 520)
+        .onExitCommand { dismiss() }   // Esc closes the window
     }
 
     private var header: some View {
@@ -207,5 +208,13 @@ private struct ChipFlow: Layout {
         guard guide == .firstTextBaseline,
               let first = rows(subviews, maxWidth: bounds.width).first else { return nil }
         return first.map { metric(subviews[$0]).baseline }.max()
+    }
+}
+
+/// Menu command (next to About) that opens the What's New window.
+struct WhatsNewMenuCommand: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("What's New in \(Brand.name)") { openWindow(id: WindowID.whatsNew) }
     }
 }

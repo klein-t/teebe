@@ -9,7 +9,6 @@ import TeebeCore
 @Observable
 final class WhatsNewModel {
     private(set) var entries: [ChangelogEntry]
-    var isPresented = false
     /// User-facing app version (`CFBundleShortVersionString`), or `nil` when unknown
     /// (e.g. running via `swift run`, which has no Info.plist).
     let version: String?
@@ -24,24 +23,19 @@ final class WhatsNewModel {
 
     var hasContent: Bool { !entries.isEmpty }
 
-    /// Auto-present once after an update: when the running version is newer than the
-    /// version we last showed. A fresh install (no record) is *not* greeted with the
-    /// changelog — it's just recorded as seen. A dev build (no version) never
-    /// auto-presents. Either way the current version is marked seen so it won't
-    /// re-trigger.
-    func presentIfUpdated() {
-        guard let version else { return }
+    /// Decide whether to greet with the changelog on the first launch after an update,
+    /// and record the running version as seen. Returns `true` only when the running
+    /// version is newer than the one we last greeted for; a fresh install (no record)
+    /// or a dev build (no version) is recorded/ignored but never greeted. The caller
+    /// opens the What's New window — this model stays presentation-agnostic.
+    @discardableResult
+    func presentIfUpdated() -> Bool {
+        guard let version else { return false }
         let lastSeen = store.load().lastSeenVersion
-        if let lastSeen, SemVer.isGreater(version, than: lastSeen) {
-            isPresented = true
-        }
+        let shouldGreet = lastSeen.map { SemVer.isGreater(version, than: $0) } ?? false
         markSeen(version)
+        return shouldGreet
     }
-
-    /// Manual open (Help → What's New).
-    func present() { isPresented = true }
-
-    func dismiss() { isPresented = false }
 
     private func markSeen(_ version: String) {
         var state = store.load()

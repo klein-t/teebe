@@ -23,6 +23,7 @@ struct KeyboardShortcutsView: View {
             footer
         }
         .frame(width: 460, height: 560)
+        .onExitCommand { dismiss() }   // Esc closes the window
     }
 
     private var header: some View {
@@ -109,5 +110,14 @@ struct KeyboardShortcutsView: View {
                 .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
+    }
+}
+
+/// Menu command (next to About) that opens the Keyboard Shortcuts window; ⌘/.
+struct KeyboardShortcutsMenuCommand: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Keyboard Shortcuts") { openWindow(id: WindowID.shortcuts) }
+            .keyboardShortcut("/", modifiers: .command)
     }
 }
