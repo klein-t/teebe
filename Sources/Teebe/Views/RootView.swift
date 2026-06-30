@@ -132,7 +132,7 @@ struct RootView: View {
         // ? opens the keyboard cheat sheet (but let it type into the search field).
         .onKeyPress("?") {
             guard !searchFocused else { return .ignored }
-            app.showKeyboardShortcuts = true
+            openWindow(id: WindowID.shortcuts)
             return .handled
         }
         .confirmationDialog(confirmTitle, isPresented: confirmBinding, titleVisibility: .visible) {

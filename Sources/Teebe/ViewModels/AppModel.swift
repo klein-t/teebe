@@ -17,10 +17,6 @@ final class AppModel {
     enum FocusSection: Equatable { case worktrees, changes, files }
     var activeSection: FocusSection = .files
 
-    /// Drives the Keyboard Shortcuts cheat sheet. Toggled by the `?` key, the Help
-    /// menu item (⌘/), and dismissed from the sheet. Not persisted — purely transient UI.
-    var showKeyboardShortcuts = false
-
     /// Auto-dismiss timer for the current error banner, so a transient failure
     /// (e.g. "Not a git repository") never sticks around indefinitely.
     @ObservationIgnored private var errorClearTask: Task<Void, Never>?
