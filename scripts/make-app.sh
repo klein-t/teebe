@@ -47,6 +47,10 @@ for b in "$BINDIR"/*.bundle; do
 done
 shopt -u nullglob
 
+# Ship the changelog so the in-app "What's New" window can read it (Brand reads
+# CHANGELOG.md from Contents/Resources in a packaged build).
+cp CHANGELOG.md "$APP/Contents/Resources/CHANGELOG.md"
+
 # Embed Sparkle.framework (SwiftPM stages it next to the binary) and point the
 # executable's runtime search path at the bundle's Frameworks dir.
 echo "==> embedding Sparkle.framework"

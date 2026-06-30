@@ -26,6 +26,7 @@ struct TeebeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var app: AppModel
     @State private var preview: PreviewModel
+    @State private var whatsNew: WhatsNewModel
     @StateObject private var updater = UpdaterController()
 
     init() {
@@ -33,20 +34,32 @@ struct TeebeApp: App {
         let environment = AppEnvironment.live()
         _app = State(initialValue: AppModel(environment: environment))
         _preview = State(initialValue: PreviewModel(environment: environment))
+        _whatsNew = State(initialValue: WhatsNewModel(
+            version: Brand.appVersion,
+            changelogMarkdown: Brand.changelogMarkdown,
+            store: environment.store
+        ))
     }
 
     var body: some Scene {
         WindowGroup(Brand.name) {
             RootView(app: app, preview: preview)
-                .task { await app.bootstrap() }
+                .task {
+                    await app.bootstrap()
+                    whatsNew.presentIfUpdated()   // greet once after an update
+                }
+                .sheet(isPresented: $whatsNew.isPresented) {
+                    WhatsNewView(model: whatsNew)
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize) // freely resizable; content scrolls inside
         .defaultSize(width: 440, height: 640)
         .commands {
-            // Standard "Check for Updates…" item, placed in the app menu next to About.
+            // "Check for Updates…" and "What's New" in the app menu next to About.
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesCommand(updater: updater)
+                Button("What's New in \(Brand.name)") { whatsNew.present() }
             }
         }
 
