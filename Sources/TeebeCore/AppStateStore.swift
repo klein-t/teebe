@@ -42,6 +42,9 @@ public struct AppState: Codable, Equatable, Sendable {
     /// Accordion layout keyed by repository path. Optional so older state files
     /// (without this key) still decode instead of resetting everything.
     public var layoutByRepo: [String: SectionLayout]?
+    /// The app version we last showed the "What's New" window for. Optional so older
+    /// state files decode; `nil` means "never shown" (treated as a fresh install).
+    public var lastSeenVersion: String?
 
     public init(
         repositories: [PersistedRepository] = [],
@@ -50,7 +53,8 @@ public struct AppState: Codable, Equatable, Sendable {
         floatOnTop: Bool = false,
         lastSelectedRepoPath: String? = nil,
         lastSelectedWorktreePath: String? = nil,
-        layoutByRepo: [String: SectionLayout]? = nil
+        layoutByRepo: [String: SectionLayout]? = nil,
+        lastSeenVersion: String? = nil
     ) {
         self.repositories = repositories
         self.showChangedOnly = showChangedOnly
@@ -59,6 +63,7 @@ public struct AppState: Codable, Equatable, Sendable {
         self.lastSelectedRepoPath = lastSelectedRepoPath
         self.lastSelectedWorktreePath = lastSelectedWorktreePath
         self.layoutByRepo = layoutByRepo
+        self.lastSeenVersion = lastSeenVersion
     }
 }
 

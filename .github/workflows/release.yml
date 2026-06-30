@@ -33,10 +33,24 @@ jobs:
           # increase per release or Sparkle never sees a newer version.
           APP_VERSION="${GITHUB_REF_NAME#v}" ./scripts/make-app.sh release
 
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          # Single source of truth: the tag's CHANGELOG.md section feeds both the
+          # GitHub release body and the Sparkle appcast notes below.
+          VER="${GITHUB_REF_NAME#v}"
+          ./scripts/changelog-section.sh "$VER" > RELEASE_NOTES.md || true
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::warning::No CHANGELOG.md section for $VER — notes fall back to auto-generated."
+            printf '_No changelog entry for %s._\n' "$VER" > RELEASE_NOTES.md
+          fi
+          echo "----- release notes -----"; cat RELEASE_NOTES.md
+
       - name: Stage update archive
         run: |
           mkdir -p sparkle-updates
           ditto -c -k --keepParent teebe.app "sparkle-updates/teebe-${GITHUB_REF_NAME}.zip"
+          # Same-basename .md → generate_appcast attaches it as this item's notes.
+          cp RELEASE_NOTES.md "sparkle-updates/teebe-${GITHUB_REF_NAME}.md"
 
       - name: Generate & sign Sparkle appcast
         env:
@@ -47,6 +61,7 @@ jobs:
           # and point download URLs at this release's assets.
           printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | "$GEN" \
             --ed-key-file - \
+            --embed-release-notes \
             --download-url-prefix "https://github.com/klein-t/teebe/releases/download/${GITHUB_REF_NAME}/" \
             sparkle-updates
           cp sparkle-updates/teebe-*.zip .
@@ -75,5 +90,8 @@ jobs:
             teebe-*.zip
             teebe-macos.dmg
             appcast.xml
+          # Curated notes from CHANGELOG.md, with the auto-generated commit/PR list
+          # appended below them.
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
           draft: true

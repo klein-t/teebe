@@ -12,7 +12,7 @@ LOGO="Sources/Teebe/Resources/teebe-logo.png"
 # uses to decide whether an update is newer, so it MUST increase per release —
 # CI passes the release tag (e.g. APP_VERSION=0.2.0). A static value would make
 # every release look identical and Sparkle would never offer an update.
-APP_VERSION="${APP_VERSION:-0.3.1}"
+APP_VERSION="${APP_VERSION:-0.4.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-$APP_VERSION}"
 
 # Sparkle auto-update config. Override via env in CI; the public key pairs with
@@ -47,6 +47,18 @@ for b in "$BINDIR"/*.bundle; do
 done
 shopt -u nullglob
 
+# Ship the changelog so the in-app "What's New" window can read it (Brand reads
+# CHANGELOG.md from Contents/Resources in a packaged build).
+cp CHANGELOG.md "$APP/Contents/Resources/CHANGELOG.md"
+
+# Ship the license notices INSIDE the bundle so they travel with the binary that
+# users download (the GPL requires the license to accompany conveyed object code;
+# Sparkle's MIT and the vendored BSD-2-Clause notices require reproduction in
+# materials provided with a binary distribution). THIRD-PARTY-LICENSES.md carries
+# the full Sparkle + bsdiff/sais/ed25519/SUSignatureVerifier texts.
+cp LICENSE "$APP/Contents/Resources/LICENSE"
+cp THIRD-PARTY-LICENSES.md "$APP/Contents/Resources/THIRD-PARTY-LICENSES.md"
+
 # Embed Sparkle.framework (SwiftPM stages it next to the binary) and point the
 # executable's runtime search path at the bundle's Frameworks dir.
 echo "==> embedding Sparkle.framework"
@@ -79,6 +91,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
   <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
+  <key>NSHumanReadableCopyright</key><string>© 2026 Klein Tahiraj. Licensed under GPL-3.0-or-later (see LICENSE) or a commercial license. Bundles Sparkle and other components — see THIRD-PARTY-LICENSES.</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSHighResolutionCapable</key><true/>
