@@ -51,6 +51,14 @@ shopt -u nullglob
 # CHANGELOG.md from Contents/Resources in a packaged build).
 cp CHANGELOG.md "$APP/Contents/Resources/CHANGELOG.md"
 
+# Ship the license notices INSIDE the bundle so they travel with the binary that
+# users download (the GPL requires the license to accompany conveyed object code;
+# Sparkle's MIT and the vendored BSD-2-Clause notices require reproduction in
+# materials provided with a binary distribution). THIRD-PARTY-LICENSES.md carries
+# the full Sparkle + bsdiff/sais/ed25519/SUSignatureVerifier texts.
+cp LICENSE "$APP/Contents/Resources/LICENSE"
+cp THIRD-PARTY-LICENSES.md "$APP/Contents/Resources/THIRD-PARTY-LICENSES.md"
+
 # Embed Sparkle.framework (SwiftPM stages it next to the binary) and point the
 # executable's runtime search path at the bundle's Frameworks dir.
 echo "==> embedding Sparkle.framework"
@@ -83,6 +91,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
   <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
+  <key>NSHumanReadableCopyright</key><string>© 2026 Klein Tahiraj. Licensed under GPL-3.0-or-later (see LICENSE) or a commercial license. Bundles Sparkle and other components — see THIRD-PARTY-LICENSES.</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSHighResolutionCapable</key><true/>
