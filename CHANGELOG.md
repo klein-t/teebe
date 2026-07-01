@@ -4,6 +4,12 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-07-01
+
+### Fixed
+- Deleting a file (Move to Trash) or discarding changes no longer silently does
+  nothing after you confirm it in the dialog.
+
 ## [0.4.0] - 2026-06-30
 
 ### Added
