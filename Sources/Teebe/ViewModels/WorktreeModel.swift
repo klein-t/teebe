@@ -540,7 +540,16 @@ final class WorktreeModel {
     }
 
     func confirmPendingMutation() async {
-        guard let mutation = pendingMutation, let worktreePath else { return }
+        guard let mutation = pendingMutation else { return }
+        await confirm(mutation)
+    }
+
+    /// Execute a specific guarded mutation. Callers pass the mutation explicitly
+    /// (captured synchronously) rather than reading `pendingMutation` here: the
+    /// confirmation dialog clears `pendingMutation` as it dismisses, so a confirm
+    /// deferred into a `Task` would otherwise find it already nil and silently no-op.
+    func confirm(_ mutation: PendingMutation) async {
+        guard let worktreePath else { return }
         pendingMutation = nil
         await perform {
             switch mutation.kind {
