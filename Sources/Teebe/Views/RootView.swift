@@ -136,7 +136,14 @@ struct RootView: View {
             return .handled
         }
         .confirmationDialog(confirmTitle, isPresented: confirmBinding, titleVisibility: .visible) {
-            Button("Confirm", role: .destructive) { Task { await worktree.confirmPendingMutation() } }
+            // Capture the mutation synchronously: dismissing the dialog drives
+            // `confirmBinding` to false → `cancelPendingMutation()`, which would clear
+            // `pendingMutation` before a deferred `Task` could read it.
+            Button("Confirm", role: .destructive) {
+                if let mutation = worktree.pendingMutation {
+                    Task { await worktree.confirm(mutation) }
+                }
+            }
             Button("Cancel", role: .cancel) { worktree.cancelPendingMutation() }
         } message: {
             Text(confirmMessage)
