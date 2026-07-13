@@ -13,6 +13,10 @@ final class SelectorModel {
         var behind: Int = 0
         var changeCount: Int = 0
         var isLive: Bool = false
+
+        /// Whether there is anything to pull or push — rows hide the "↓ ↑"
+        /// indicator entirely when both counts are zero.
+        var hasSync: Bool { ahead > 0 || behind > 0 }
     }
 
     private(set) var repositories: [Repository] = []
@@ -89,7 +93,7 @@ final class SelectorModel {
         } catch {
             worktrees = []
             branches = []
-            errorMessage = "\(error)"
+            errorMessage = WorktreeModel.describe(error)
         }
         await refreshWorktreeInfo()
         if let primary = worktrees.first(where: { $0.isPrimary }) ?? worktrees.first {
@@ -160,7 +164,7 @@ final class SelectorModel {
             errorMessage = nil
         } catch {
             // A transient failure shouldn't blank the list — keep what we have.
-            errorMessage = "\(error)"
+            errorMessage = WorktreeModel.describe(error)
             return
         }
         worktrees = discovered

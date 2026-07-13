@@ -11,15 +11,9 @@ struct ChangesSection: View {
     var body: some View {
         VStack(spacing: 0) {
             SectionHeader(title: "CHANGES", isOpen: isOpen, isActive: app.activeSection == .changes, onToggle: { isOpen.toggle() }) {
-                HStack(spacing: 8) {
-                    countBadge(worktree.changeCount)
-                    if let active = app.selector.selectedWorktree {
-                        let info = app.selector.info(for: active)
-                        Text(info.syncText)
-                            .font(.system(size: 11)).monospacedDigit()
-                            .foregroundStyle(Palette.secondaryText)
-                    }
-                }
+                // Just the count: the ahead/behind indicator lives on the worktree
+                // rows — branch sync state isn't a property of the change list.
+                countBadge(worktree.changeCount)
             }
 
             if isOpen {
@@ -41,8 +35,8 @@ struct ChangesSection: View {
                         }
                     }
                 }
-                .padding(.top, 8)
-                .padding(.bottom, 6)
+                .padding(.top, Self.listTopPadding)
+                .padding(.bottom, Self.listBottomPadding)
                 .transition(.opacity)
             }
         }
@@ -53,13 +47,18 @@ struct ChangesSection: View {
     /// window grows for a worktree with many changes, so browsing between worktrees with
     /// very different change counts doesn't lurch the window. RootView's
     /// `changesContentHeight` mirrors this cap so the window math and the view agree.
-    static let maxListHeight: CGFloat = 144   // ~6 rows (24pt each), then scroll
+    static let maxListHeight: CGFloat = 144   // ~6 rows, then scroll
 
-    /// Natural height of the change list (rows are 24pt tall), capped at `maxListHeight`
-    /// so the section hugs its rows up to the cap and scrolls beyond it.
+    /// Row/padding metrics. RootView's `changesContentHeight` derives the window's
+    /// wrap height from these — keep every literal here so the two can't desync.
+    static let rowHeight: CGFloat = 24
+    static let listTopPadding: CGFloat = 8
+    static let listBottomPadding: CGFloat = 6
+
+    /// Natural height of the change list, capped at `maxListHeight` so the section
+    /// hugs its rows up to the cap and scrolls beyond it.
     private var listContentHeight: CGFloat {
-        let count = worktree.changeCount
-        let natural: CGFloat = count == 0 ? 24 : CGFloat(count) * 24
+        let natural = CGFloat(max(worktree.changeCount, 1)) * Self.rowHeight
         return min(natural, Self.maxListHeight)
     }
 
@@ -72,7 +71,7 @@ struct ChangesSection: View {
                 Text("No changes")
                     .font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 25).padding(.vertical, 4)
+                    .padding(.horizontal, 30).padding(.vertical, 4)
             }
         }
     }
@@ -80,7 +79,7 @@ struct ChangesSection: View {
     private func changeRow(_ change: FileChange, indented: Bool) -> some View {
         let selected = isSelected(change)
         return HStack(spacing: 7) {
-            Image(systemName: "doc")
+            Image(systemName: change.iconName)
                 .font(.system(size: 11))
                 .foregroundStyle(selected ? .white : Palette.secondaryText)
             Text((change.path as NSString).lastPathComponent)
@@ -88,7 +87,8 @@ struct ChangesSection: View {
             Spacer(minLength: 4)
             StatusLetter(change: change)
         }
-        .padding(.leading, indented ? 41 : 25).padding(.trailing, 11).frame(height: 24)
+        // Leading 30 lines the icon up with the FILES rows' icon column below.
+        .padding(.leading, indented ? 46 : 30).padding(.trailing, 11).frame(height: Self.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(selected ? Palette.accent : .clear)
         .foregroundStyle(selected ? .white : .primary)
