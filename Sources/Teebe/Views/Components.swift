@@ -235,7 +235,9 @@ struct SectionHeader<Trailing: View>: View {
             Spacer(minLength: 6)
             trailing()
         }
-        .padding(.horizontal, 9)
+        // 11pt matches the list rows' trailing inset so header controls and row
+        // content share one right edge.
+        .padding(.horizontal, 11)
         .frame(height: 32)
         .contentShape(Rectangle())
         // The layout/window resize is animated by RootView.setOpen (it eases on

@@ -30,12 +30,13 @@ struct WorktreesSection: View {
                                 Button("Remove \(selected.name)", role: .destructive) { app.removeRepository(selected) }
                             }
                         } label: {
-                            Text("···").font(.system(size: 13)).foregroundStyle(Palette.secondaryText).hoverChip()
+                            Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Palette.secondaryText).hoverChip()
                         }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                         .help("Repository actions")
                         Button { Task { await selector.refreshWorktrees() } } label: {
-                            Image(systemName: "arrow.clockwise").font(.system(size: 11))
+                            Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
                         }
                         .buttonStyle(IconButtonStyle()).foregroundStyle(Palette.secondaryText)
                         .help("Refresh worktrees")
@@ -43,8 +44,10 @@ struct WorktreesSection: View {
                 } else if let active = selector.selectedWorktree {
                     HStack(spacing: 5) {
                         LiveDot(active: selector.info(for: active).isLive)
+                        // Same treatment as the collapsed FILES header's branch label;
+                        // the accent colour (+ dot) marks this one as the active worktree.
                         Text(active.branch ?? active.name)
-                            .font(.system(size: 12.5, weight: .semibold))
+                            .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Palette.accent)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -79,12 +82,18 @@ struct WorktreesSection: View {
     /// RootView's `worktreesContentHeight` mirrors this cap.
     static let maxListHeight: CGFloat = 200
 
+    /// Row/padding metrics. RootView's `worktreesContentHeight` derives the window's
+    /// wrap height from these — keep every literal here so the two can't desync.
+    static let rowHeight: CGFloat = 26
+    static let repoRowHeight: CGFloat = 25
+    static let listVerticalPadding: CGFloat = 4
+
     /// Natural height of the worktree list, capped at `maxListHeight` so the section
     /// hugs its rows up to the cap and scrolls beyond it.
     private var listContentHeight: CGFloat {
-        let repoRow: CGFloat = selector.selectedRepo != nil ? 25 : 0
-        let rows: CGFloat = selector.worktrees.isEmpty ? 26 : CGFloat(selector.worktrees.count) * 26
-        return min(8 + repoRow + rows, Self.maxListHeight)   // 8 = worktreeListBody vertical padding
+        let repoRow: CGFloat = selector.selectedRepo != nil ? Self.repoRowHeight : 0
+        let rows = CGFloat(max(selector.worktrees.count, 1)) * Self.rowHeight
+        return min(Self.listVerticalPadding * 2 + repoRow + rows, Self.maxListHeight)
     }
 
     private var worktreeListBody: some View {
@@ -102,7 +111,7 @@ struct WorktreesSection: View {
                     .padding(.horizontal, 25).padding(.vertical, 5)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, Self.listVerticalPadding)
     }
 
     private func repoSubheader(_ repo: Repository) -> some View {
@@ -116,7 +125,7 @@ struct WorktreesSection: View {
             // The sync indicator belongs on individual worktree rows, not the repo
             // root — the root isn't itself a branch with an ahead/behind count.
         }
-        .padding(.horizontal, 11).frame(height: 25)
+        .padding(.horizontal, 11).frame(height: Self.repoRowHeight)
     }
 
     private func worktreeRow(_ worktree: Worktree) -> some View {
@@ -134,12 +143,16 @@ struct WorktreesSection: View {
                 .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
             Spacer(minLength: 4)
-            Text(info.syncText)
-                .font(.system(size: 11))
-                .monospacedDigit()
-                .foregroundStyle(isActive ? .white.opacity(0.85) : Palette.secondaryText)
+            // "↓0 ↑0" is pure noise — only show the sync arrows once there is
+            // something to pull or push.
+            if info.hasSync {
+                Text(info.syncText)
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundStyle(isActive ? .white.opacity(0.85) : Palette.secondaryText)
+            }
         }
-        .padding(.leading, 25).padding(.trailing, 11).frame(height: 26)
+        .padding(.leading, 25).padding(.trailing, 11).frame(height: Self.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isActive ? Palette.accent : .clear)
         .foregroundStyle(isActive ? .white : .primary)
