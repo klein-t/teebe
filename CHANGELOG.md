@@ -4,6 +4,21 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-07-16
+
+### Fixed
+- The FILES section no longer leaves an empty strip at the bottom of the window,
+  and the file tree no longer snaps upward when a window resize ends.
+- Git failures now show a short human-readable message instead of a raw
+  technical error dump.
+
+### Changed
+- CHANGES rows now use the same per-type file icons as the FILES tree.
+- The "↓0 ↑0" sync indicator is hidden when there is nothing to pull or push,
+  and no longer appears in the CHANGES header.
+- Tidier section headers: unified icon sizes, typography and alignment across
+  sections.
+
 ## [0.4.1] - 2026-07-01
 
 ### Fixed
