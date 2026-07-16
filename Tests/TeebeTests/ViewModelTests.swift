@@ -117,6 +117,24 @@ struct SelectorModelTests {
         #expect(selector.worktree.worktreePath == "/repo")
     }
 
+    @Test("hasSync only when there is something to pull or push")
+    func worktreeInfoHasSync() {
+        #expect(SelectorModel.WorktreeInfo().hasSync == false)
+        #expect(SelectorModel.WorktreeInfo(ahead: 1).hasSync == true)
+        #expect(SelectorModel.WorktreeInfo(behind: 2).hasSync == true)
+        #expect(SelectorModel.WorktreeInfo(ahead: 1, behind: 2).hasSync == true)
+    }
+
+    @Test("a failed repo selection surfaces a human-readable error, not a raw Swift error")
+    func selectRepoErrorIsHumanReadable() async {
+        let git = FakeGitClient()
+        git.worktreesError = .notAGitRepository(path: "/x")
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
+
+        await selector.selectRepo(Repository(path: "/x"))
+        #expect(selector.errorMessage == "Not a git repository: /x")
+    }
+
     @Test("WORKTREES keyboard cursor moves and clamps; Enter commits the switch")
     func worktreeHighlightNav() async {
         let git = FakeGitClient()

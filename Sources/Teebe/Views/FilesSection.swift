@@ -10,8 +10,8 @@ struct FilesSection: View {
     @Binding var isOpen: Bool
     /// Owned by RootView; lets ⌘F focus the search field and ↓/Esc hand focus back.
     var searchFocused: FocusState<Bool>.Binding
-    /// The reveal area the tree fills below its search box. Fixed (not flexible) while
-    /// browsing so a CHANGES reflow can't momentarily balloon FILES.
+    /// The reveal area below the section header (search box + tree). Fixed (not
+    /// flexible) while browsing so a CHANGES reflow can't momentarily balloon FILES.
     var revealHeight: CGFloat
     /// While the window edge is being dragged, FILES becomes the flexible filler so the
     /// drag resizes it; otherwise it's pinned to `revealHeight`.
@@ -32,7 +32,8 @@ struct FilesSection: View {
                         }
                         Toggle("Show ignored", isOn: $worktree.showIgnored)
                     } label: {
-                        Text("···").font(.system(size: 13)).foregroundStyle(Palette.secondaryText).hoverChip()
+                        Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Palette.secondaryText).hoverChip()
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .help("Sort & filter")
@@ -91,13 +92,19 @@ struct FilesSection: View {
                         }
                     }
                 }
+                // Idle → a fixed reveal pane (the tree scrolls inside it), so a CHANGES
+                // reflow can't make FILES balloon for a frame. Dragging → the flexible
+                // filler, so the window edge resizes the reveal. The frame sits on the
+                // search+tree content, NOT the whole section: `revealHeight` is the area
+                // *below* the header (RootView budgets the header separately in
+                // `collapsedHeight`), so pinning the outer VStack — header included —
+                // rendered the section one header-height short and left a dead strip of
+                // empty material at the window's bottom edge.
+                .frame(height: liveResizing ? nil : revealHeight)
+                .frame(maxHeight: liveResizing ? .infinity : nil)
                 .transition(.opacity)
             }
         }
-        // Open + idle → a fixed reveal pane (the tree scrolls inside it), so a CHANGES
-        // height change can't make FILES balloon for a frame. Open + dragging → the
-        // flexible filler, so the window edge resizes the reveal. Closed → just the header.
-        .frame(height: isOpen && !liveResizing ? revealHeight : nil)
         .frame(maxHeight: isOpen && liveResizing ? .infinity : nil)
         .clipped()
     }
@@ -115,7 +122,7 @@ struct FileRowsView: View {
             Text(app.repositories.isEmpty ? "Add a repository to get started" : "No files")
                 .font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 25).padding(.vertical, 6)
+                .padding(.horizontal, 30).padding(.vertical, 6)
         } else {
             LazyVStack(spacing: 0) {
                 ForEach(worktree.visibleRows) { row in

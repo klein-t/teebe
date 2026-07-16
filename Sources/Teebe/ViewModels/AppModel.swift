@@ -239,7 +239,7 @@ final class AppModel {
                 try await environment.worktreeService.addWorktree(in: repo, at: url.path, branch: branch, createBranch: true)
                 await selector.selectRepo(repo)
             } catch {
-                errorMessage = "Couldn't create worktree: \(error)"
+                errorMessage = "Couldn't create worktree: \(WorktreeModel.describe(error))"
             }
         }
     }

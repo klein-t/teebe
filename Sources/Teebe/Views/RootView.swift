@@ -272,22 +272,23 @@ struct RootView: View {
     }
 
     /// Height of the open worktree list (mirrors WorktreesSection, including its cap);
-    /// 0 when closed.
+    /// 0 when closed. Built from the section's own metrics so the two can't desync.
     private var worktreesContentHeight: CGFloat {
         guard openWorktrees else { return 0 }
         let s = app.selector
-        let repoRow: CGFloat = s.selectedRepo != nil ? 25 : 0
-        let rows: CGFloat = s.worktrees.isEmpty ? 26 : CGFloat(s.worktrees.count) * 26
-        return min(8 + repoRow + rows, WorktreesSection.maxListHeight)
+        let repoRow: CGFloat = s.selectedRepo != nil ? WorktreesSection.repoRowHeight : 0
+        let rows = CGFloat(max(s.worktrees.count, 1)) * WorktreesSection.rowHeight
+        return min(WorktreesSection.listVerticalPadding * 2 + repoRow + rows,
+                   WorktreesSection.maxListHeight)
     }
 
     /// Height of the open change list (mirrors ChangesSection, including its cap); 0
-    /// when closed. The +14 is the section's top/bottom padding around the list.
+    /// when closed. Built from the section's own metrics so the two can't desync.
     private var changesContentHeight: CGFloat {
         guard openChanges else { return 0 }
-        let count = app.selector.worktree.changeCount
-        let natural: CGFloat = count == 0 ? 24 : CGFloat(count) * 24
-        return 14 + min(natural, ChangesSection.maxListHeight)
+        let natural = CGFloat(max(app.selector.worktree.changeCount, 1)) * ChangesSection.rowHeight
+        return ChangesSection.listTopPadding + ChangesSection.listBottomPadding
+            + min(natural, ChangesSection.maxListHeight)
     }
 
     /// Size the window to the current state, anchored at the top so it grows and
