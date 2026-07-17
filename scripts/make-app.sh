@@ -94,6 +94,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHumanReadableCopyright</key><string>© 2026 Klein Tahiraj. Licensed under GPL-3.0-or-later (see LICENSE) or a commercial license. Bundles Sparkle and other components — see THIRD-PARTY-LICENSES.</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSDocumentsFolderUsageDescription</key><string>teebe only reads the folder your repository lives in, to show its worktrees, changes, and files. Nothing is uploaded or modified without your action.</string>
+  <key>NSDesktopFolderUsageDescription</key><string>teebe only reads the folder your repository lives in, to show its worktrees, changes, and files. Nothing is uploaded or modified without your action.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>teebe only reads the folder your repository lives in, to show its worktrees, changes, and files. Nothing is uploaded or modified without your action.</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>SUFeedURL</key><string>${SU_FEED_URL}</string>
   <key>SUPublicEDKey</key><string>${SU_PUBLIC_ED_KEY}</string>
