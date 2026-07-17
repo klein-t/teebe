@@ -125,6 +125,31 @@ struct LiveDot: View {
     }
 }
 
+/// Compact chip showing what the AI agent in a worktree is doing: "working"
+/// while a session is mid-turn, "needs you" once its turn ended or it stalled.
+/// Hidden when idle. `onAccent` recolors for the filled active-row background.
+struct AgentBadge: View {
+    var state: AgentActivityState
+    var onAccent: Bool = false
+
+    var body: some View {
+        if state != .idle {
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(onAccent ? .white : tint)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1.5)
+                .background(Capsule().fill((onAccent ? Color.white : tint).opacity(0.18)))
+                .help(state == .working
+                    ? "A coding agent is working in this worktree"
+                    : "The agent finished its turn or stalled — it needs you")
+        }
+    }
+
+    private var label: String { state == .working ? "working" : "needs you" }
+    private var tint: Color { state == .working ? Palette.accent : Palette.amber }
+}
+
 // MARK: - Press / hover chrome for compact controls
 
 /// Tactile press feedback for prominent action buttons (e.g. Commit): the whole
