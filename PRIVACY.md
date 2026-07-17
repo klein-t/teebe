@@ -42,14 +42,14 @@ transmitted anywhere.
 - **Your repository folders.** teebe reads the folder you add (and its git
   worktrees) to show worktrees, changes, and files. macOS may ask you to allow
   access if a repository lives in Documents, Desktop, or Downloads; if you
-  decline, teebe simply can't display repositories in that folder — nothing
-  else breaks, and you can change your mind in System Settings → Privacy &
-  Security → Files & Folders.
+  decline, teebe simply can't display repositories in that folder. Nothing
+  else breaks, and you can change your mind any time in System Settings →
+  Privacy & Security → Files & Folders.
 - **Claude Code session logs** (`~/.claude/projects`). To show the per-worktree
   agent badge ("working" / "needs you"), teebe reads the tail of the newest
   session log for each worktree and reduces it to that single status. The
   content of your agent conversations is never stored, indexed, displayed, or
-  sent anywhere — it is parsed in memory, only to tell whether the agent is
+  sent anywhere: it is parsed in memory, only to tell whether the agent is
   mid-turn or waiting for you.
 
 ## Updates
