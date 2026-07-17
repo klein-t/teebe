@@ -132,6 +132,40 @@ final class WatcherBox {
     }
 }
 
+// MARK: - Fake agent status
+
+/// Scriptable per-worktree agent states for tests; the closure form feeds
+/// `AppEnvironment.agentStatus`.
+final class FakeAgentStates: @unchecked Sendable {
+    private let lock = NSLock()
+    private var states: [String: AgentActivityState] = [:]
+
+    subscript(path: String) -> AgentActivityState? {
+        get { lock.lock(); defer { lock.unlock() }; return states[path] }
+        set { lock.lock(); states[path] = newValue; lock.unlock() }
+    }
+
+    var provider: @Sendable (String, Date) -> AgentActivityState {
+        { [self] path, _ in self[path] ?? .idle }
+    }
+}
+
+/// Records notifications the models post (delivery happens on the main actor).
+final class NotificationSpy: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [(title: String, body: String)] = []
+
+    var posted: [(title: String, body: String)] {
+        lock.lock(); defer { lock.unlock() }; return recorded
+    }
+
+    var record: @MainActor (String, String) -> Void {
+        { [self] title, body in
+            lock.lock(); recorded.append((title, body)); lock.unlock()
+        }
+    }
+}
+
 // MARK: - Test environment
 
 @MainActor
@@ -141,7 +175,10 @@ func makeTestEnvironment(
     ops: FakeFileOps = FakeFileOps(),
     store: AppStateStore? = nil,
     monitor: WorktreeActivityMonitor = WorktreeActivityMonitor(),
-    makeWatcher: (@MainActor () -> FileSystemWatcher)? = nil
+    makeWatcher: (@MainActor () -> FileSystemWatcher)? = nil,
+    agentStatus: (@Sendable (String, Date) -> AgentActivityState)? = nil,
+    agentProjectsRootPath: String? = nil,
+    notify: (@MainActor (String, String) -> Void)? = nil
 ) -> AppEnvironment {
     let storeURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("tb-test-\(UUID().uuidString)")
@@ -152,6 +189,9 @@ func makeTestEnvironment(
         ops: ops,
         store: store ?? AppStateStore(url: storeURL),
         activityMonitor: monitor,
-        makeWatcher: makeWatcher ?? { FakeWatcher() }
+        makeWatcher: makeWatcher ?? { FakeWatcher() },
+        agentStatus: agentStatus ?? { _, _ in .idle },
+        agentProjectsRootPath: agentProjectsRootPath,
+        notify: notify ?? { _, _ in }
     )
 }
