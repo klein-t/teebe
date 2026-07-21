@@ -58,7 +58,7 @@ All notable changes to teebe are documented here. The format is based on
 ## [0.3.0] - 2026-06-24
 
 ### Changed
-- Window resizing reworked into a coherent content-wrap model — no more
+- Window resizing reworked into a coherent content-wrap model: no more
   bounce / jump / gap on resize.
 
 ### Added
@@ -80,7 +80,7 @@ All notable changes to teebe are documented here. The format is based on
 
 ### Changed
 - The CHANGES section now hugs its rows like WORKTREES instead of taking the
-  flexible vertical space — FILES is the sole space-filling section, and the
+  flexible vertical space; FILES is the sole space-filling section, and the
   window resizes as the change count changes.
 
 ## [0.2.0] - 2026-06-23

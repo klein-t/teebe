@@ -5,13 +5,13 @@ Copyright (c) 2026 Klein Tahiraj. All rights reserved.
 Teebe is **dual-licensed**. You may use it under **either** of the following,
 at your choice:
 
-## 1. Open-source license — GPL-3.0-or-later (default)
+## 1. Open-source license: GPL-3.0-or-later (default)
 
 Teebe is free and open source under the **GNU General Public License, version 3
 or (at your option) any later version**. The full text is in [`LICENSE`](LICENSE).
 
-In plain terms, the GPL lets anyone use, study, modify, and redistribute Teebe —
-including for a fee — **provided that** any distributed work based on Teebe is
+In plain terms, the GPL lets anyone use, study, modify, and redistribute Teebe,
+including for a fee, **provided that** any distributed work based on Teebe is
 also released under the GPL with complete corresponding source code, and without
 additional restrictions.
 
@@ -19,7 +19,7 @@ This means you **cannot** take Teebe's source, build a closed-source or
 proprietary product on top of it, and distribute that product. Any derivative
 you ship must itself be GPL and open source.
 
-> Note: simply *running* Teebe inside an organization — even commercially —
+> Note: simply *running* Teebe inside an organization, even commercially,
 > imposes no obligations. The GPL's copyleft only applies when you **distribute**
 > Teebe or a derivative work.
 
