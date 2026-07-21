@@ -31,7 +31,7 @@ in **git worktrees**. In short:
    git switch dev && git pull
    git worktree add ../teebe-<name> -b feat/<name> dev
    ```
-2. Keep changes focused. This codebase is test-first — add or update tests for
+2. Keep changes focused. This codebase is test-first: add or update tests for
    any behavior change in `TeebeCore` or the view models.
 3. Run `swift test` and `swiftlint lint` locally before pushing.
 4. Open a pull request into **`dev`** (never directly into `main`). CI (build,
@@ -62,10 +62,10 @@ licenses.
 
 teebe self-updates via [Sparkle](https://sparkle-project.org). Updates are
 delivered through an **appcast** (`appcast.xml`). The app's `SUFeedURL` points at
-**`https://teebe.io/appcast.xml`** — hosted on our own domain (the `teebe-site`
+**`https://teebe.io/appcast.xml`**, hosted on our own domain (the `teebe-site`
 GitHub Pages repo) so the feed URL baked into shipped binaries is
 host-independent. The appcast's `.app` zip enclosures still live on GitHub
-Releases. Each update is integrity-signed with an **EdDSA key** — this is
+Releases. Each update is integrity-signed with an **EdDSA key**; this is
 Sparkle's own signature and is independent of Apple notarization (which governs
 first-launch Gatekeeper trust, not updates).
 
@@ -82,13 +82,13 @@ stores the private key in the login Keychain):
 
 Then add these to the GitHub repo (Settings → Secrets and variables → Actions):
 
-- `SPARKLE_PUBLIC_ED_KEY` — the public key string (embedded in `Info.plist` at
+- `SPARKLE_PUBLIC_ED_KEY`: the public key string (embedded in `Info.plist` at
   build time via `SU_PUBLIC_ED_KEY`).
-- `SPARKLE_ED_PRIVATE_KEY` — the contents of `sparkle_private.key` (used by CI
+- `SPARKLE_ED_PRIVATE_KEY`: the contents of `sparkle_private.key` (used by CI
   to sign the appcast). Treat it like any signing secret; do not commit it.
 
 Delete `sparkle_private.key` after adding the secret. The private key is the
-root of update trust — if it leaks, rotate it (new keypair, new public key in
+root of update trust; if it leaks, rotate it (new keypair, new public key in
 the next release).
 
 ### What happens on release
@@ -106,7 +106,7 @@ the previous release, so existing apps see nothing new. Once published, existing
 users get an in-app "Update available" prompt; the menu also has **Check for
 Updates…**.
 
-> The `publish-appcast` workflow needs a repo secret **`SITE_DEPLOY_KEY`** — the
+> The `publish-appcast` workflow needs a repo secret **`SITE_DEPLOY_KEY`**: the
 > private half of an SSH **deploy key** whose public half is installed on
 > `klein-t/teebe-site` with write access. A deploy key is scoped to that single
 > repo and isn't tied to a personal account, so a leak can only push to

@@ -20,7 +20,7 @@ records one anonymous, aggregate event:
 When you open a page on `teebe.io`, a small script records one anonymous,
 aggregate page-view event: the **page** you viewed, the **referring site** (if
 any), and your **country**. To tell a fresh visit from a page-to-page click we
-keep a single per-tab flag in your browser's `sessionStorage` — it holds no
+keep a single per-tab flag in your browser's `sessionStorage`; it holds no
 identifier and is gone when you close the tab.
 
 We use all of this only to gauge interest and adoption. It is not tied to your
@@ -29,7 +29,7 @@ identity and is not sold or shared.
 ## What we don't collect
 
 - We do **not** store your IP address.
-- We do **not** track anything you do inside the app — teebe contains no in-app
+- We do **not** track anything you do inside the app; teebe contains no in-app
   analytics or telemetry.
 - We do **not** use cookies or ad trackers.
 - We have no accounts, so there is no personal profile to collect.

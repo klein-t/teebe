@@ -1,6 +1,6 @@
 # Contributor License Agreement (CLA)
 
-Teebe is dual-licensed (GPL-3.0-or-later **and** a commercial license — see
+Teebe is dual-licensed (GPL-3.0-or-later **and** a commercial license; see
 [`LICENSING.md`](LICENSING.md)). To keep offering it under both, the project must
 hold the rights to license every contribution under both. This CLA secures that.
 
@@ -9,8 +9,8 @@ project, you agree to the terms below. The "Project Owner" is Klein Tahiraj.
 
 ## 1. Definitions
 
-"Contribution" means any original work of authorship — code, documentation, or
-other material — that you intentionally submit to this project for inclusion.
+"Contribution" means any original work of authorship (code, documentation, or
+other material) that you intentionally submit to this project for inclusion.
 
 ## 2. Copyright license
 
