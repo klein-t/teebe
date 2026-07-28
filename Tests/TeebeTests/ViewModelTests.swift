@@ -184,6 +184,26 @@ struct SelectorModelTests {
         #expect(selector.info(for: git.worktreesResult[1]).isLive == false)
     }
 
+    @Test("agent poll expires a stale live dot once the busy window lapses")
+    func liveDotExpiresViaAgentPoll() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        let monitor = WorktreeActivityMonitor()
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git, monitor: monitor))
+        await selector.selectRepo(Repository(path: "/repo"))
+
+        let t = Date(timeIntervalSince1970: 1000)
+        monitor.recordActivity(worktreePath: "/repo", at: t)
+        selector.refreshLiveState(now: t.addingTimeInterval(1))
+        #expect(selector.info(for: git.worktreesResult[0]).isLive == true)
+
+        // No further file events: the periodic agent poll is the only thing that
+        // runs, and it must also let the live flag expire — otherwise the dot
+        // (and its repeat-forever pulse animation) runs until the next rescan.
+        await selector.refreshAgentStates(now: t.addingTimeInterval(30))
+        #expect(selector.info(for: git.worktreesResult[0]).isLive == false)
+    }
+
     @Test("refreshWorktreeInfo computes live state alongside sync counts")
     func liveDotViaRefreshInfo() async {
         let git = FakeGitClient()
