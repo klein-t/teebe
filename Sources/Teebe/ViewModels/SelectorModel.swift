@@ -55,6 +55,10 @@ final class SelectorModel {
     /// Periodic re-derive so purely time-based transitions (stall, idle-out)
     /// happen even when no session log is being written.
     private var agentPollTask: Task<Void, Never>?
+    /// One-shot follow-up scheduled while any live dot is lit, so `isLive` expires
+    /// shortly after the busy window lapses instead of latching until the next
+    /// event (a latched dot keeps a repeat-forever pulse animation burning CPU).
+    private var liveExpiryTask: Task<Void, Never>?
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -67,10 +71,27 @@ final class SelectorModel {
     /// Recompute only the cheap `isLive` flags from the activity monitor (no git),
     /// e.g. after a file-watch event reports external activity.
     func refreshLiveState(now: Date = Date()) {
+        var anyLive = false
         for wt in worktrees {
             var info = worktreeInfo[wt.path] ?? WorktreeInfo()
             info.isLive = environment.activityMonitor.isBusy(worktreePath: wt.path, within: 5, now: now)
+            anyLive = anyLive || info.isLive
             worktreeInfo[wt.path] = info
+        }
+        scheduleLiveExpiry(anyLive: anyLive)
+    }
+
+    /// While any dot is lit, keep a single pending re-check just past the busy
+    /// window; each activity event pushes it back, so the last write is followed
+    /// by exactly one expiry pass that turns the dot (and its animation) off.
+    private func scheduleLiveExpiry(anyLive: Bool) {
+        liveExpiryTask?.cancel()
+        liveExpiryTask = nil
+        guard anyLive else { return }
+        liveExpiryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5.5))
+            guard !Task.isCancelled else { return }
+            self?.refreshLiveState()
         }
     }
 
@@ -255,6 +276,7 @@ final class SelectorModel {
         for worktree in worktrees {
             var entry = info[worktree.path] ?? WorktreeInfo()
             entry.agentState = states[worktree.path] ?? .idle
+            entry.isLive = environment.activityMonitor.isBusy(worktreePath: worktree.path, within: 5, now: now)
             info[worktree.path] = entry
         }
         notifyAgentTransitions(from: worktreeInfo, to: info)
