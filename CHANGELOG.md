@@ -4,6 +4,25 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-07-28
+
+### Added
+- **Agent status per worktree.** Each worktree now shows what its AI agent is
+  doing, "working" while a session is mid-turn and "needs you" once the turn
+  ends or stalls, with a notification when an agent finishes and is waiting on
+  you.
+
+### Fixed
+- The green live-activity dot no longer stays lit forever after a single file
+  change. It now goes out a few seconds after the last write, which also stops
+  a pulse animation that kept running in the background and used CPU while the
+  app was idle.
+
+### Changed
+- The macOS folder-access prompt now explains why teebe needs access to your
+  repositories, and the privacy notice spells out that everything stays on
+  your Mac.
+
 ## [0.4.2] - 2026-07-16
 
 ### Fixed
