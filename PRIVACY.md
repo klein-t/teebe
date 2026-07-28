@@ -20,7 +20,7 @@ records one anonymous, aggregate event:
 When you open a page on `teebe.io`, a small script records one anonymous,
 aggregate page-view event: the **page** you viewed, the **referring site** (if
 any), and your **country**. To tell a fresh visit from a page-to-page click we
-keep a single per-tab flag in your browser's `sessionStorage` — it holds no
+keep a single per-tab flag in your browser's `sessionStorage`; it holds no
 identifier and is gone when you close the tab.
 
 We use all of this only to gauge interest and adoption. It is not tied to your
@@ -29,10 +29,28 @@ identity and is not sold or shared.
 ## What we don't collect
 
 - We do **not** store your IP address.
-- We do **not** track anything you do inside the app — teebe contains no in-app
+- We do **not** track anything you do inside the app; teebe contains no in-app
   analytics or telemetry.
 - We do **not** use cookies or ad trackers.
 - We have no accounts, so there is no personal profile to collect.
+
+## What the app reads on your Mac (and why)
+
+Everything below stays on your Mac. None of it is collected, stored by us, or
+transmitted anywhere.
+
+- **Your repository folders.** teebe reads the folder you add (and its git
+  worktrees) to show worktrees, changes, and files. macOS may ask you to allow
+  access if a repository lives in Documents, Desktop, or Downloads; if you
+  decline, teebe simply can't display repositories in that folder. Nothing
+  else breaks, and you can change your mind any time in System Settings →
+  Privacy & Security → Files & Folders.
+- **Claude Code session logs** (`~/.claude/projects`). To show the per-worktree
+  agent badge ("working" / "needs you"), teebe reads the tail of the newest
+  session log for each worktree and reduces it to that single status. The
+  content of your agent conversations is never stored, indexed, displayed, or
+  sent anywhere: it is parsed in memory, only to tell whether the agent is
+  mid-turn or waiting for you.
 
 ## Updates
 

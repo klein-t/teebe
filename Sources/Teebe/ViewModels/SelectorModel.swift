@@ -13,6 +13,9 @@ final class SelectorModel {
         var behind: Int = 0
         var changeCount: Int = 0
         var isLive: Bool = false
+        /// What the AI agent working in this worktree is doing (from its
+        /// Claude Code session log).
+        var agentState: AgentActivityState = .idle
 
         /// Whether there is anything to pull or push — rows hide the "↓ ↑"
         /// indicator entirely when both counts are zero.
@@ -46,6 +49,16 @@ final class SelectorModel {
     /// dir), used to filter watcher events. Resolved via `git rev-parse` so it's
     /// correct even when `<repo>/.git` is a gitlink file rather than a directory.
     private var worktreesAdminDir: String?
+    /// Watches the Claude projects root so agent badges react to session-log
+    /// writes (which happen outside any repo, so the repo watchers never see them).
+    private var agentWatcher: FileSystemWatcher?
+    /// Periodic re-derive so purely time-based transitions (stall, idle-out)
+    /// happen even when no session log is being written.
+    private var agentPollTask: Task<Void, Never>?
+    /// One-shot follow-up scheduled while any live dot is lit, so `isLive` expires
+    /// shortly after the busy window lapses instead of latching until the next
+    /// event (a latched dot keeps a repeat-forever pulse animation burning CPU).
+    private var liveExpiryTask: Task<Void, Never>?
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -58,10 +71,27 @@ final class SelectorModel {
     /// Recompute only the cheap `isLive` flags from the activity monitor (no git),
     /// e.g. after a file-watch event reports external activity.
     func refreshLiveState(now: Date = Date()) {
+        var anyLive = false
         for wt in worktrees {
             var info = worktreeInfo[wt.path] ?? WorktreeInfo()
             info.isLive = environment.activityMonitor.isBusy(worktreePath: wt.path, within: 5, now: now)
+            anyLive = anyLive || info.isLive
             worktreeInfo[wt.path] = info
+        }
+        scheduleLiveExpiry(anyLive: anyLive)
+    }
+
+    /// While any dot is lit, keep a single pending re-check just past the busy
+    /// window; each activity event pushes it back, so the last write is followed
+    /// by exactly one expiry pass that turns the dot (and its animation) off.
+    private func scheduleLiveExpiry(anyLive: Bool) {
+        liveExpiryTask?.cancel()
+        liveExpiryTask = nil
+        guard anyLive else { return }
+        liveExpiryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5.5))
+            guard !Task.isCancelled else { return }
+            self?.refreshLiveState()
         }
     }
 
@@ -73,6 +103,7 @@ final class SelectorModel {
         repoWatcher?.stop()
         repoWatcher = nil
         worktreesAdminDir = nil
+        stopAgentWatching()
         selectedRepo = nil
         worktrees = []
         selectedWorktree = nil
@@ -86,6 +117,7 @@ final class SelectorModel {
     func selectRepo(_ repo: Repository) async {
         selectedRepo = repo
         await startRepoWatching(repo)
+        startAgentWatching()
         do {
             worktrees = try await environment.worktreeService.worktrees(for: repo)
             branches = try await environment.branchService.branches(for: repo)
@@ -187,36 +219,111 @@ final class SelectorModel {
     /// WORKTREES list (drives the sync arrows and pulse dot).
     func refreshWorktreeInfo(now: Date = Date()) async {
         let statusService = environment.statusService
+        let agentStatus = environment.agentStatus
         let worktrees = self.worktrees
         // Fetch each worktree's status concurrently — these are independent git
         // reads, so a repo with many worktrees shouldn't serialize N `git status`
-        // calls on every repo switch.
-        let statuses = await withTaskGroup(of: (String, StatusResult?).self) { group in
+        // calls on every repo switch. The agent-log scan rides along per worktree.
+        let statuses = await withTaskGroup(of: (String, StatusResult?, AgentActivityState).self) { group in
             for worktree in worktrees {
                 let path = worktree.path
-                group.addTask { (path, try? await statusService.status(worktreePath: path)) }
+                group.addTask {
+                    (path, try? await statusService.status(worktreePath: path), agentStatus(path, now))
+                }
             }
-            var byPath: [String: StatusResult] = [:]
-            for await (path, status) in group {
-                if let status { byPath[path] = status }
+            var byPath: [String: (StatusResult?, AgentActivityState)] = [:]
+            for await (path, status, agent) in group {
+                byPath[path] = (status, agent)
             }
             return byPath
         }
         var info: [String: WorktreeInfo] = [:]
         for worktree in worktrees {
-            let status = statuses[worktree.path]
+            let (status, agent) = statuses[worktree.path] ?? (nil, .idle)
             info[worktree.path] = WorktreeInfo(
                 ahead: status?.ahead ?? 0,
                 behind: status?.behind ?? 0,
                 changeCount: status?.changes.count ?? 0,
-                isLive: environment.activityMonitor.isBusy(worktreePath: worktree.path, within: 5, now: now)
+                isLive: environment.activityMonitor.isBusy(worktreePath: worktree.path, within: 5, now: now),
+                agentState: agent
             )
         }
+        notifyAgentTransitions(from: worktreeInfo, to: info)
         worktreeInfo = info
     }
 
     func info(for worktree: Worktree) -> WorktreeInfo {
         worktreeInfo[worktree.path] ?? WorktreeInfo()
+    }
+
+    // MARK: - Agent status (Claude Code session logs)
+
+    /// Re-derive only the agent badges — no git. Used by the projects-root
+    /// watcher and the periodic poll; cheap enough to run often.
+    func refreshAgentStates(now: Date = Date()) async {
+        let agentStatus = environment.agentStatus
+        let worktrees = self.worktrees
+        let states = await withTaskGroup(of: (String, AgentActivityState).self) { group in
+            for worktree in worktrees {
+                let path = worktree.path
+                group.addTask { (path, agentStatus(path, now)) }
+            }
+            var byPath: [String: AgentActivityState] = [:]
+            for await (path, state) in group { byPath[path] = state }
+            return byPath
+        }
+        var info = worktreeInfo
+        for worktree in worktrees {
+            var entry = info[worktree.path] ?? WorktreeInfo()
+            entry.agentState = states[worktree.path] ?? .idle
+            entry.isLive = environment.activityMonitor.isBusy(worktreePath: worktree.path, within: 5, now: now)
+            info[worktree.path] = entry
+        }
+        notifyAgentTransitions(from: worktreeInfo, to: info)
+        worktreeInfo = info
+    }
+
+    /// Notify only on the working → needsAttention edge: the turn just ended (or
+    /// stalled). A session discovered already-finished stays silent, so app
+    /// launch never replays old sessions as notifications.
+    private func notifyAgentTransitions(from old: [String: WorktreeInfo], to new: [String: WorktreeInfo]) {
+        for worktree in worktrees {
+            guard old[worktree.path]?.agentState == .working,
+                  new[worktree.path]?.agentState == .needsAttention else { continue }
+            let name = worktree.branch ?? worktree.name
+            environment.notify("Agent needs you", "\(name) — the agent finished or is waiting")
+        }
+    }
+
+    /// Watch the Claude projects root (session logs live outside the repo, so the
+    /// repo watchers never see them) and poll slowly for time-only transitions.
+    private func startAgentWatching() {
+        stopAgentWatching()
+        guard let root = environment.agentProjectsRootPath else { return }
+        let watcher = environment.makeWatcher()
+        watcher.start(paths: [root], debounce: 1.0) { [weak self] _ in
+            Task { @MainActor in await self?.handleAgentWatchEvent() }
+        }
+        agentWatcher = watcher
+        agentPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { return }
+                await self?.refreshAgentStates()
+            }
+        }
+    }
+
+    private func stopAgentWatching() {
+        agentWatcher?.stop()
+        agentWatcher = nil
+        agentPollTask?.cancel()
+        agentPollTask = nil
+    }
+
+    /// A coalesced batch of session-log writes — re-derive the badges.
+    func handleAgentWatchEvent() async {
+        await refreshAgentStates()
     }
 
     func selectWorktree(_ wt: Worktree) async {

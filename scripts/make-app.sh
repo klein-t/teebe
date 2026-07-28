@@ -12,7 +12,7 @@ LOGO="Sources/Teebe/Resources/teebe-logo.png"
 # uses to decide whether an update is newer, so it MUST increase per release —
 # CI passes the release tag (e.g. APP_VERSION=0.2.0). A static value would make
 # every release look identical and Sparkle would never offer an update.
-APP_VERSION="${APP_VERSION:-0.4.2}"
+APP_VERSION="${APP_VERSION:-0.5.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-$APP_VERSION}"
 
 # Sparkle auto-update config. Override via env in CI; the public key pairs with
@@ -94,6 +94,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHumanReadableCopyright</key><string>© 2026 Klein Tahiraj. Licensed under GPL-3.0-or-later (see LICENSE) or a commercial license. Bundles Sparkle and other components — see THIRD-PARTY-LICENSES.</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSDocumentsFolderUsageDescription</key><string>teebe only reads the folder your repository lives in, to show its worktrees, changes, and files. Nothing is uploaded or modified without your action.</string>
+  <key>NSDesktopFolderUsageDescription</key><string>teebe only reads the folder your repository lives in, to show its worktrees, changes, and files. Nothing is uploaded or modified without your action.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>teebe only reads the folder your repository lives in, to show its worktrees, changes, and files. Nothing is uploaded or modified without your action.</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>SUFeedURL</key><string>${SU_FEED_URL}</string>
   <key>SUPublicEDKey</key><string>${SU_PUBLIC_ED_KEY}</string>

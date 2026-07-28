@@ -52,6 +52,9 @@ struct WorktreesSection: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .layoutPriority(1)
+                        // Surface the agent chip even with the section collapsed —
+                        // "needs you" must not hide behind a fold.
+                        AgentBadge(state: selector.info(for: active).agentState)
                     }
                 }
             }
@@ -143,6 +146,7 @@ struct WorktreesSection: View {
                 .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
             Spacer(minLength: 4)
+            AgentBadge(state: info.agentState, onAccent: isActive)
             // "↓0 ↑0" is pure noise — only show the sync arrows once there is
             // something to pull or push.
             if info.hasSync {
