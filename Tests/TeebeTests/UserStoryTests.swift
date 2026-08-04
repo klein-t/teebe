@@ -22,6 +22,20 @@ struct RepoStoryTests {
         #expect(app.repositories.count == 1)
     }
 
+    @Test("A3b: re-adding a tracked repo selects it instead of doing nothing")
+    func a3bReAddSelects() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/a", branch: "main", isPrimary: true)]
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+        _ = await app.addRepository(path: "/a")
+        _ = await app.addRepository(path: "/b")
+        #expect(app.selector.selectedRepo?.path == "/b")
+        // Picking /a again from the add panel must switch back to it.
+        #expect(await app.addRepository(path: "/a") == false)
+        #expect(app.repositories.count == 2)
+        #expect(app.selector.selectedRepo?.path == "/a")
+    }
+
     @Test("A4: removing a repo persists the removal")
     func a4RemovePersists() async {
         let git = FakeGitClient()

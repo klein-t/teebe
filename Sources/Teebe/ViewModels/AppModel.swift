@@ -92,7 +92,12 @@ final class AppModel {
         // worktrees (firmlink /var → /private/var), avoiding duplicate/mismatched entries.
         let standardized = PathUtil.standardized((path as NSString).expandingTildeInPath)
         setError(nil)   // a fresh attempt clears any stale banner
-        guard !repositories.contains(where: { $0.path == standardized }) else { return false }
+        // Re-adding a tracked repo isn't an error — the user picked it expecting to
+        // see it, so switch to it instead of silently doing nothing.
+        if let existing = repositories.first(where: { $0.path == standardized }) {
+            await selector.selectRepo(existing)
+            return false
+        }
         do {
             _ = try await environment.git.worktrees(repoPath: standardized)
         } catch {
