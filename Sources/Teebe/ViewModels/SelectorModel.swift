@@ -219,27 +219,34 @@ final class SelectorModel {
     /// WORKTREES list (drives the sync arrows and pulse dot).
     func refreshWorktreeInfo(now: Date = Date()) async {
         let statusService = environment.statusService
-        let agentStatus = environment.agentStatus
+        let agentStatuses = environment.agentStatuses
         let worktrees = self.worktrees
+        let paths = worktrees.map(\.path)
+        // One batched agent-log scan for the whole repo — the scanner needs every
+        // worktree path to attribute a session to the worktree it runs in, not
+        // the one it was launched from. Runs off-main alongside the git reads.
+        let agentTask = Task.detached { agentStatuses(paths, now) }
         // Fetch each worktree's status concurrently — these are independent git
         // reads, so a repo with many worktrees shouldn't serialize N `git status`
-        // calls on every repo switch. The agent-log scan rides along per worktree.
-        let statuses = await withTaskGroup(of: (String, StatusResult?, AgentActivityState).self) { group in
+        // calls on every repo switch.
+        let statuses = await withTaskGroup(of: (String, StatusResult?).self) { group in
             for worktree in worktrees {
                 let path = worktree.path
                 group.addTask {
-                    (path, try? await statusService.status(worktreePath: path), agentStatus(path, now))
+                    (path, try? await statusService.status(worktreePath: path))
                 }
             }
-            var byPath: [String: (StatusResult?, AgentActivityState)] = [:]
-            for await (path, status, agent) in group {
-                byPath[path] = (status, agent)
+            var byPath: [String: StatusResult?] = [:]
+            for await (path, status) in group {
+                byPath[path] = status
             }
             return byPath
         }
+        let agentStates = await agentTask.value
         var info: [String: WorktreeInfo] = [:]
         for worktree in worktrees {
-            let (status, agent) = statuses[worktree.path] ?? (nil, .idle)
+            let status = statuses[worktree.path] ?? nil
+            let agent = agentStates[worktree.path] ?? .idle
             info[worktree.path] = WorktreeInfo(
                 ahead: status?.ahead ?? 0,
                 behind: status?.behind ?? 0,
@@ -261,17 +268,10 @@ final class SelectorModel {
     /// Re-derive only the agent badges — no git. Used by the projects-root
     /// watcher and the periodic poll; cheap enough to run often.
     func refreshAgentStates(now: Date = Date()) async {
-        let agentStatus = environment.agentStatus
+        let agentStatuses = environment.agentStatuses
         let worktrees = self.worktrees
-        let states = await withTaskGroup(of: (String, AgentActivityState).self) { group in
-            for worktree in worktrees {
-                let path = worktree.path
-                group.addTask { (path, agentStatus(path, now)) }
-            }
-            var byPath: [String: AgentActivityState] = [:]
-            for await (path, state) in group { byPath[path] = state }
-            return byPath
-        }
+        let paths = worktrees.map(\.path)
+        let states = await Task.detached { agentStatuses(paths, now) }.value
         var info = worktreeInfo
         for worktree in worktrees {
             var entry = info[worktree.path] ?? WorktreeInfo()
