@@ -87,23 +87,48 @@ struct StatusLetter: View {
     }
 }
 
-/// A green dot that pulses while a worktree is being written to (live agent).
+/// The worktree's whole story in one dot: a pulsing green while an agent is
+/// working there (or files are being written), steady amber when the agent's
+/// turn ended or stalled — it needs you — and dim gray when no conversation
+/// points at the worktree.
 ///
-/// The pulse is driven off `active` via `onChange`, not a one-shot `onAppear`, so
+/// The pulse is driven off state via `onChange`, not a one-shot `onAppear`, so
 /// a worktree that goes live *after* the row appears starts pulsing, and one that
 /// goes idle stops — the previous version latched whatever state it saw at appear.
 struct LiveDot: View {
+    /// Files are being written in the worktree right now (fs watcher).
     var active: Bool
+    /// What the Claude session pointing at the worktree is doing.
+    var agent: AgentActivityState = .idle
     @State private var animate = false
+
+    /// Amber never pulses — "needs you" is precisely the moment nothing is
+    /// happening, and it outranks stray fs activity (the agent's last writes
+    /// would otherwise flash green for a beat after its turn ended).
+    private var pulsing: Bool { agent == .working || (agent == .idle && active) }
+
+    private var fill: Color {
+        if agent == .needsAttention { return Palette.amber }
+        return pulsing ? Palette.live : Color(white: 0.79)
+    }
 
     var body: some View {
         Circle()
-            .fill(active ? Palette.live : Color(white: 0.79))
+            .fill(fill)
             .frame(width: 7, height: 7)
             .overlay(ring)
-            .animation(.easeInOut(duration: 0.25), value: active)   // fade the fill on state change
+            .animation(.easeInOut(duration: 0.25), value: fill)   // fade the fill on state change
             .onAppear { syncPulse() }
-            .onChange(of: active) { _, _ in syncPulse() }
+            .onChange(of: pulsing) { _, _ in syncPulse() }
+            .help(helpText)
+    }
+
+    private var helpText: String {
+        switch agent {
+        case .working: return "A coding agent is working in this worktree"
+        case .needsAttention: return "The agent finished its turn or stalled — it needs you"
+        case .idle: return active ? "Files are changing in this worktree" : ""
+        }
     }
 
     /// The expanding halo. Hidden entirely while idle so a stopped pulse can't
@@ -113,41 +138,16 @@ struct LiveDot: View {
             .stroke(Palette.live, lineWidth: 2)
             .scaleEffect(animate ? 2.4 : 1)
             .opacity(animate ? 0 : 0.5)
-            .opacity(active ? 1 : 0)
+            .opacity(pulsing ? 1 : 0)
     }
 
     private func syncPulse() {
-        if active {
+        if pulsing {
             withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { animate = true }
         } else {
             withAnimation(.easeOut(duration: 0.2)) { animate = false }
         }
     }
-}
-
-/// Compact chip showing what the AI agent in a worktree is doing: "working"
-/// while a session is mid-turn, "needs you" once its turn ended or it stalled.
-/// Hidden when idle. `onAccent` recolors for the filled active-row background.
-struct AgentBadge: View {
-    var state: AgentActivityState
-    var onAccent: Bool = false
-
-    var body: some View {
-        if state != .idle {
-            Text(label)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(onAccent ? .white : tint)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1.5)
-                .background(Capsule().fill((onAccent ? Color.white : tint).opacity(0.18)))
-                .help(state == .working
-                    ? "A coding agent is working in this worktree"
-                    : "The agent finished its turn or stalled — it needs you")
-        }
-    }
-
-    private var label: String { state == .working ? "working" : "needs you" }
-    private var tint: Color { state == .working ? Palette.accent : Palette.amber }
 }
 
 // MARK: - Press / hover chrome for compact controls
