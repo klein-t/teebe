@@ -12,9 +12,11 @@ struct AppEnvironment {
     let activityMonitor: WorktreeActivityMonitor
     /// Factory for a file-system watcher (overridable with a fake in tests).
     let makeWatcher: @MainActor () -> FileSystemWatcher
-    /// Reads the agent activity state for a worktree path (live: Claude Code
-    /// session logs via `AgentSessionScanner`; tests inject a script).
-    let agentStatus: @Sendable (_ worktreePath: String, _ now: Date) -> AgentActivityState
+    /// Reads the agent activity states for all of a repo's worktree paths at
+    /// once (live: Claude Code session logs via `AgentSessionScanner`; tests
+    /// inject a script). Batched so the scanner can attribute a session logged
+    /// under one worktree's project dir to the worktree it actually runs in.
+    let agentStatuses: @Sendable (_ worktreePaths: [String], _ now: Date) -> [String: AgentActivityState]
     /// Where the session logs live, so a watcher can react to log writes.
     /// nil disables watching (and in tests, the watcher entirely).
     let agentProjectsRootPath: String?
@@ -28,7 +30,7 @@ struct AppEnvironment {
         store: AppStateStore,
         activityMonitor: WorktreeActivityMonitor,
         makeWatcher: @escaping @MainActor () -> FileSystemWatcher,
-        agentStatus: @escaping @Sendable (String, Date) -> AgentActivityState = { _, _ in .idle },
+        agentStatuses: @escaping @Sendable ([String], Date) -> [String: AgentActivityState] = { _, _ in [:] },
         agentProjectsRootPath: String? = nil,
         notify: @escaping @MainActor (String, String) -> Void = { _, _ in }
     ) {
@@ -38,7 +40,7 @@ struct AppEnvironment {
         self.store = store
         self.activityMonitor = activityMonitor
         self.makeWatcher = makeWatcher
-        self.agentStatus = agentStatus
+        self.agentStatuses = agentStatuses
         self.agentProjectsRootPath = agentProjectsRootPath
         self.notify = notify
     }
@@ -66,7 +68,7 @@ struct AppEnvironment {
             store: AppStateStore(),
             activityMonitor: WorktreeActivityMonitor(),
             makeWatcher: { FSEventsWatcher() },
-            agentStatus: { path, now in scanner.state(forWorktreePath: path, now: now) },
+            agentStatuses: { paths, now in scanner.states(forWorktreePaths: paths, now: now) },
             agentProjectsRootPath: projectsRoot.path,
             notify: AgentNotifier.post
         )

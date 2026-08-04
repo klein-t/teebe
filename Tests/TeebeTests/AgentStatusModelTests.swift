@@ -22,7 +22,7 @@ struct AgentStatusModelTests {
         return SelectorModel(environment: makeTestEnvironment(
             git: git,
             makeWatcher: box.map { b in { b.make() } },
-            agentStatus: states.provider,
+            agentStatuses: states.provider,
             agentProjectsRootPath: projectsRoot,
             notify: spy.record
         ))
