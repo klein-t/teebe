@@ -43,11 +43,18 @@ public struct AgentSessionEntry: Equatable, Sendable {
     public var kind: Kind
     public var timestamp: Date
     public var isSidechain: Bool
+    /// The directory the session was operating in when this entry was logged.
+    /// This is the ground truth for *which worktree* the agent is in: a session
+    /// launched in the primary checkout that moves into a linked worktree keeps
+    /// logging under the launch dir's project folder, but its entries' `cwd`
+    /// follows the agent.
+    public var cwd: String?
 
-    public init(kind: Kind, timestamp: Date, isSidechain: Bool) {
+    public init(kind: Kind, timestamp: Date, isSidechain: Bool, cwd: String? = nil) {
         self.kind = kind
         self.timestamp = timestamp
         self.isSidechain = isSidechain
+        self.cwd = cwd
     }
 
     /// Parse one JSONL line; nil for meta lines, malformed JSON, or entries
@@ -74,7 +81,8 @@ public struct AgentSessionEntry: Equatable, Sendable {
         return AgentSessionEntry(
             kind: kind,
             timestamp: timestamp,
-            isSidechain: dict["isSidechain"] as? Bool ?? false
+            isSidechain: dict["isSidechain"] as? Bool ?? false,
+            cwd: dict["cwd"] as? String
         )
     }
 
@@ -136,32 +144,66 @@ public struct AgentSessionScanner: Sendable {
         String(path.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
     }
 
-    /// The agent state for a worktree, judged from the most recently modified
-    /// session file in its project dir.
+    /// The agent state for a single worktree, judged only from sessions logged
+    /// under its own project dir.
     public func state(forWorktreePath path: String, now: Date = Date()) -> AgentActivityState {
-        let dir = projectsRoot.appendingPathComponent(
-            Self.projectDirName(forWorktreePath: path), isDirectory: true)
-        guard let newest = newestSessionFile(in: dir) else { return .idle }
-        // Fast path: a file untouched for the idle window can't be anything else.
-        if now.timeIntervalSince(newest.mtime) >= thresholds.idle { return .idle }
-        return AgentStateDeriver.derive(
-            lastEntry: lastMainChainEntry(in: newest.url), now: now, thresholds: thresholds)
+        states(forWorktreePaths: [path], now: now)[path] ?? .idle
     }
 
-    private func newestSessionFile(in dir: URL) -> (url: URL, mtime: Date)? {
+    /// States for a repo's worktrees, attributing each session to the worktree
+    /// its entries actually ran in (the entry `cwd`), not the directory it was
+    /// launched from. A session started in the primary checkout that then works
+    /// inside a linked worktree logs under the primary's project dir — a purely
+    /// per-dir lookup would pin its "working" badge on the primary.
+    public func states(forWorktreePaths paths: [String], now: Date = Date()) -> [String: AgentActivityState] {
+        var result: [String: AgentActivityState] = [:]
+        for path in paths { result[path] = .idle }
+        // Every fresh session file across every project dir (files idle-old by
+        // mtime can only be idle — skip without reading them).
+        var files: [(launchPath: String, url: URL, mtime: Date)] = []
+        var seen = Set<URL>()
+        for path in paths {
+            let dir = projectsRoot.appendingPathComponent(
+                Self.projectDirName(forWorktreePath: path), isDirectory: true)
+            for file in sessionFiles(in: dir) where now.timeIntervalSince(file.mtime) < thresholds.idle {
+                guard seen.insert(file.url.standardizedFileURL).inserted else { continue }
+                files.append((path, file.url, file.mtime))
+            }
+        }
+        // Oldest first, so when two sessions land on the same worktree the newer
+        // session's verdict wins (the per-dir "newest file wins" rule, kept).
+        for file in files.sorted(by: { $0.mtime < $1.mtime }) {
+            guard let entry = lastMainChainEntry(in: file.url) else { continue }
+            let state = AgentStateDeriver.derive(lastEntry: entry, now: now, thresholds: thresholds)
+            guard state != .idle else { continue }
+            let owner = owningPath(forCwd: entry.cwd, among: paths) ?? file.launchPath
+            result[owner] = state
+        }
+        return result
+    }
+
+    /// The deepest known worktree containing `cwd` — sessions record the exact
+    /// directory they run in, which is often a subdirectory of the worktree.
+    /// nil when `cwd` is missing or outside every known worktree.
+    private func owningPath(forCwd cwd: String?, among paths: [String]) -> String? {
+        guard let cwd else { return nil }
+        return paths
+            .filter { cwd == $0 || cwd.hasPrefix($0 + "/") }
+            .max { $0.count < $1.count }
+    }
+
+    private func sessionFiles(in dir: URL) -> [(url: URL, mtime: Date)] {
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
-        ) else { return nil }
+        ) else { return [] }
         return entries
             .filter { $0.pathExtension == "jsonl" }
-            .compactMap { url -> (URL, Date)? in
+            .compactMap { url -> (url: URL, mtime: Date)? in
                 guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
                       let mtime = values.contentModificationDate else { return nil }
-                return (url, mtime)
+                return (url: url, mtime: mtime)
             }
-            .max { $0.1 < $1.1 }
-            .map { (url: $0.0, mtime: $0.1) }
     }
 
     /// Scan the tail of the file backwards for the last parseable entry that

@@ -43,7 +43,10 @@ struct WorktreesSection: View {
                     }
                 } else if let active = selector.selectedWorktree {
                     HStack(spacing: 5) {
-                        LiveDot(active: selector.info(for: active).isLive)
+                        // The dot carries the agent state too (amber = needs you),
+                        // so "needs you" stays visible even with the section folded.
+                        LiveDot(active: selector.info(for: active).isLive,
+                                agent: selector.info(for: active).agentState)
                         // Same treatment as the collapsed FILES header's branch label;
                         // the accent colour (+ dot) marks this one as the active worktree.
                         Text(active.branch ?? active.name)
@@ -52,9 +55,6 @@ struct WorktreesSection: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .layoutPriority(1)
-                        // Surface the agent chip even with the section collapsed —
-                        // "needs you" must not hide behind a fold.
-                        AgentBadge(state: selector.info(for: active).agentState)
                     }
                 }
             }
@@ -138,7 +138,7 @@ struct WorktreesSection: View {
         // distinct from the filled accent of the committed worktree. Enter commits it.
         let isHighlighted = app.activeSection == .worktrees && selector.highlightedWorktree?.path == worktree.path
         return HStack(spacing: 7) {
-            LiveDot(active: info.isLive)
+            LiveDot(active: info.isLive, agent: info.agentState)
             Image(systemName: "point.3.connected.trianglepath.dotted")
                 .font(.system(size: 11))
                 .foregroundStyle(isActive ? .white : Palette.secondaryText)
@@ -146,7 +146,6 @@ struct WorktreesSection: View {
                 .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
             Spacer(minLength: 4)
-            AgentBadge(state: info.agentState, onAccent: isActive)
             // "↓0 ↑0" is pure noise — only show the sync arrows once there is
             // something to pull or push.
             if info.hasSync {

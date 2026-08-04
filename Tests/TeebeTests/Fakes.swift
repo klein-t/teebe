@@ -135,7 +135,7 @@ final class WatcherBox {
 // MARK: - Fake agent status
 
 /// Scriptable per-worktree agent states for tests; the closure form feeds
-/// `AppEnvironment.agentStatus`.
+/// `AppEnvironment.agentStatuses`.
 final class FakeAgentStates: @unchecked Sendable {
     private let lock = NSLock()
     private var states: [String: AgentActivityState] = [:]
@@ -145,8 +145,10 @@ final class FakeAgentStates: @unchecked Sendable {
         set { lock.lock(); states[path] = newValue; lock.unlock() }
     }
 
-    var provider: @Sendable (String, Date) -> AgentActivityState {
-        { [self] path, _ in self[path] ?? .idle }
+    var provider: @Sendable ([String], Date) -> [String: AgentActivityState] {
+        { [self] paths, _ in
+            Dictionary(uniqueKeysWithValues: paths.map { ($0, self[$0] ?? .idle) })
+        }
     }
 }
 
@@ -176,7 +178,7 @@ func makeTestEnvironment(
     store: AppStateStore? = nil,
     monitor: WorktreeActivityMonitor = WorktreeActivityMonitor(),
     makeWatcher: (@MainActor () -> FileSystemWatcher)? = nil,
-    agentStatus: (@Sendable (String, Date) -> AgentActivityState)? = nil,
+    agentStatuses: (@Sendable ([String], Date) -> [String: AgentActivityState])? = nil,
     agentProjectsRootPath: String? = nil,
     notify: (@MainActor (String, String) -> Void)? = nil
 ) -> AppEnvironment {
@@ -190,7 +192,7 @@ func makeTestEnvironment(
         store: store ?? AppStateStore(url: storeURL),
         activityMonitor: monitor,
         makeWatcher: makeWatcher ?? { FakeWatcher() },
-        agentStatus: agentStatus ?? { _, _ in .idle },
+        agentStatuses: agentStatuses ?? { _, _ in [:] },
         agentProjectsRootPath: agentProjectsRootPath,
         notify: notify ?? { _, _ in }
     )

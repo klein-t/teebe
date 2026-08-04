@@ -10,37 +10,37 @@ private func iso(_ date: Date) -> String {
     return formatter.string(from: date)
 }
 
-private func humanPromptLine(at date: Date, sidechain: Bool = false) -> String {
+private func humanPromptLine(at date: Date, sidechain: Bool = false, cwd: String = "/Users/k/Documents/CODE/teebe") -> String {
     """
     {"parentUuid":null,"isSidechain":\(sidechain),"type":"user",\
     "message":{"role":"user","content":"hey can u check the product"},\
     "uuid":"u1","timestamp":"\(iso(date))","origin":{"kind":"human"},"promptSource":"typed",\
-    "cwd":"/Users/k/Documents/CODE/teebe","sessionId":"s1","gitBranch":"dev"}
+    "cwd":"\(cwd)","sessionId":"s1","gitBranch":"dev"}
     """
 }
 
-private func toolResultLine(at date: Date, sidechain: Bool = false) -> String {
+private func toolResultLine(at date: Date, sidechain: Bool = false, cwd: String = "/Users/k/Documents/CODE/teebe") -> String {
     """
     {"parentUuid":"a1","isSidechain":\(sidechain),"type":"user",\
     "message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"ok"}]},\
-    "uuid":"u2","timestamp":"\(iso(date))","cwd":"/Users/k/Documents/CODE/teebe","sessionId":"s1"}
+    "uuid":"u2","timestamp":"\(iso(date))","cwd":"\(cwd)","sessionId":"s1"}
     """
 }
 
-private func assistantToolUseLine(at date: Date, sidechain: Bool = false) -> String {
+private func assistantToolUseLine(at date: Date, sidechain: Bool = false, cwd: String = "/Users/k/Documents/CODE/teebe") -> String {
     """
     {"parentUuid":"u1","isSidechain":\(sidechain),"type":"assistant",\
     "message":{"role":"assistant","content":[{"type":"text","text":"Looking."},\
     {"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]},\
-    "uuid":"a1","timestamp":"\(iso(date))","cwd":"/Users/k/Documents/CODE/teebe","sessionId":"s1"}
+    "uuid":"a1","timestamp":"\(iso(date))","cwd":"\(cwd)","sessionId":"s1"}
     """
 }
 
-private func assistantTextLine(at date: Date, sidechain: Bool = false) -> String {
+private func assistantTextLine(at date: Date, sidechain: Bool = false, cwd: String = "/Users/k/Documents/CODE/teebe") -> String {
     """
     {"parentUuid":"u2","isSidechain":\(sidechain),"type":"assistant",\
     "message":{"role":"assistant","content":[{"type":"text","text":"Done — here is the answer."}]},\
-    "uuid":"a2","timestamp":"\(iso(date))","cwd":"/Users/k/Documents/CODE/teebe","sessionId":"s1"}
+    "uuid":"a2","timestamp":"\(iso(date))","cwd":"\(cwd)","sessionId":"s1"}
     """
 }
 
@@ -123,6 +123,15 @@ struct AgentSessionEntryTests {
     func sidechainFlag() throws {
         let entry = try #require(AgentSessionEntry.parse(line: assistantTextLine(at: date, sidechain: true)))
         #expect(entry.isSidechain == true)
+    }
+
+    @Test("cwd is carried through; missing cwd parses to nil")
+    func cwdCarried() throws {
+        let entry = try #require(AgentSessionEntry.parse(
+            line: assistantToolUseLine(at: date, cwd: "/repo/.claude/worktrees/audit/web")))
+        #expect(entry.cwd == "/repo/.claude/worktrees/audit/web")
+        let noCwd = #"{"type":"user","message":{"role":"user","content":"hi"},"uuid":"u9","timestamp":"2026-07-17T10:12:43.312Z"}"#
+        #expect(AgentSessionEntry.parse(line: noCwd)?.cwd == nil)
     }
 }
 
@@ -282,6 +291,96 @@ struct AgentSessionScannerTests {
         let fx = try makeFixture()
         try write(metaLines, to: fx.dir.appendingPathComponent("s1.jsonl"))
         #expect(fx.scanner.state(forWorktreePath: worktreePath, now: now) == .idle)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+}
+
+// MARK: - Scanner worktree attribution (entry cwd, not launch dir)
+
+@Suite("AgentSessionScanner worktree attribution")
+struct AgentScannerAttributionTests {
+    let now = Date(timeIntervalSince1970: 1_784_000_000)
+    // The linked worktree lives *under* the primary (teebe's own layout for
+    // agent-created worktrees), so attribution must pick the deepest match.
+    let primary = "/Users/k/Documents/CODE/teebe"
+    let linked = "/Users/k/Documents/CODE/teebe/.claude/worktrees/audit"
+    var paths: [String] { [primary, linked] }
+
+    struct Fixture {
+        var scanner: AgentSessionScanner
+        var root: URL
+        var primaryDir: URL
+    }
+
+    func makeFixture() throws -> Fixture {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("teebe-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let primaryDir = root.appendingPathComponent(
+            AgentSessionScanner.projectDirName(forWorktreePath: primary), isDirectory: true)
+        try FileManager.default.createDirectory(at: primaryDir, withIntermediateDirectories: true)
+        let scanner = AgentSessionScanner(
+            projectsRoot: root, thresholds: AgentStatusThresholds(stall: 600, idle: 1_800))
+        return Fixture(scanner: scanner, root: root, primaryDir: primaryDir)
+    }
+
+    func write(_ lines: [String], to url: URL, mtime: Date) throws {
+        try lines.joined(separator: "\n").appending("\n").write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: url.path)
+    }
+
+    @Test("a session launched in the primary but running inside a linked worktree badges the worktree")
+    func sessionFollowsCwd() throws {
+        let fx = try makeFixture()
+        // Entries' cwd is a *subdirectory* of the linked worktree, as real
+        // sessions record (the agent cd'd into web/).
+        try write(
+            [assistantToolUseLine(at: now.addingTimeInterval(-5), cwd: linked + "/web")],
+            to: fx.primaryDir.appendingPathComponent("s1.jsonl"), mtime: now.addingTimeInterval(-5))
+        let states = fx.scanner.states(forWorktreePaths: paths, now: now)
+        #expect(states[linked] == .working)
+        #expect(states[primary] == .idle)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("a cwd outside every known worktree falls back to the launch dir")
+    func unknownCwdFallsBack() throws {
+        let fx = try makeFixture()
+        try write(
+            [assistantToolUseLine(at: now.addingTimeInterval(-5), cwd: "/somewhere/else")],
+            to: fx.primaryDir.appendingPathComponent("s1.jsonl"), mtime: now.addingTimeInterval(-5))
+        let states = fx.scanner.states(forWorktreePaths: paths, now: now)
+        #expect(states[primary] == .working)
+        #expect(states[linked] == .idle)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("sessions for different worktrees under one project dir badge independently")
+    func concurrentSessions() throws {
+        let fx = try makeFixture()
+        try write(
+            [assistantTextLine(at: now.addingTimeInterval(-60), cwd: primary)],
+            to: fx.primaryDir.appendingPathComponent("s1.jsonl"), mtime: now.addingTimeInterval(-60))
+        try write(
+            [assistantToolUseLine(at: now.addingTimeInterval(-5), cwd: linked)],
+            to: fx.primaryDir.appendingPathComponent("s2.jsonl"), mtime: now.addingTimeInterval(-5))
+        let states = fx.scanner.states(forWorktreePaths: paths, now: now)
+        #expect(states[primary] == .needsAttention)
+        #expect(states[linked] == .working)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("for the same worktree the newer session's verdict wins")
+    func newerSessionWins() throws {
+        let fx = try makeFixture()
+        try write(
+            [assistantTextLine(at: now.addingTimeInterval(-900), cwd: linked)],
+            to: fx.primaryDir.appendingPathComponent("old.jsonl"), mtime: now.addingTimeInterval(-900))
+        try write(
+            [assistantToolUseLine(at: now.addingTimeInterval(-5), cwd: linked)],
+            to: fx.primaryDir.appendingPathComponent("new.jsonl"), mtime: now.addingTimeInterval(-5))
+        let states = fx.scanner.states(forWorktreePaths: paths, now: now)
+        #expect(states[linked] == .working)
         try? FileManager.default.removeItem(at: fx.root)
     }
 }

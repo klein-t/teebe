@@ -13,7 +13,7 @@ struct ChangesSection: View {
             SectionHeader(title: "CHANGES", isOpen: isOpen, isActive: app.activeSection == .changes, onToggle: { isOpen.toggle() }) {
                 // Just the count: the ahead/behind indicator lives on the worktree
                 // rows — branch sync state isn't a property of the change list.
-                countBadge(worktree.changeCount)
+                CountBadge(count: worktree.changeCount, contextID: worktree.worktreePath)
             }
 
             if isOpen {
@@ -127,14 +127,46 @@ struct ChangesSection: View {
         }
     }
 
-    private func countBadge(_ count: Int) -> some View {
-        Text("\(count)")
+}
+
+/// The CHANGES header count. Digits roll (`numericText`) only when the count of the
+/// *same* worktree changes (edits, stage/discard); a count arriving because the user
+/// switched worktrees snaps into place — rolling between two unrelated worktrees'
+/// totals reads as a glitch, not a change.
+private struct CountBadge: View {
+    let count: Int
+    /// Identity of the thing being counted (the worktree path).
+    let contextID: String?
+
+    @State private var displayed = 0
+    /// Which context `displayed` belongs to. Deliberately only updated when a count
+    /// arrives: a worktree switch changes `contextID` first and the new status lands
+    /// asynchronously later, so the mismatch at that moment is what marks the update
+    /// as "different worktree → snap".
+    @State private var displayedContext: String?
+
+    var body: some View {
+        Text("\(displayed)")
             .font(.system(size: 10, weight: .semibold))
             .monospacedDigit()
-            .contentTransition(.numericText())
+            .contentTransition(.numericText(value: Double(displayed)))
             .foregroundStyle(Palette.headerLabel)
             .padding(.horizontal, 5).frame(minWidth: 18, minHeight: 16)
             .background(Color.primary.opacity(0.07), in: Capsule())
-            .animation(.snappy(duration: 0.22), value: count)
+            .onAppear {
+                displayed = count
+                displayedContext = contextID
+            }
+            .onChange(of: count) { _, newCount in
+                let sameWorktree = displayedContext == contextID
+                displayedContext = contextID
+                if sameWorktree {
+                    withAnimation(.snappy(duration: 0.22)) { displayed = newCount }
+                } else {
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { displayed = newCount }
+                }
+            }
     }
 }
