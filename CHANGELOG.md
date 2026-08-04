@@ -4,6 +4,23 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-08-04
+
+### Fixed
+- Picking an already-tracked folder from the add (+) panel now switches to that
+  repository instead of silently doing nothing.
+- The CHANGES count no longer rolls its digits when you switch worktrees — it
+  snaps to the new worktree's total, and still animates when changes happen in
+  the current worktree.
+- Agent status now follows the worktree the agent is actually working in. A
+  session that starts in the main checkout and moves into a linked worktree
+  used to show as activity on the main checkout.
+
+### Changed
+- The "working" / "needs you" chip is gone; the worktree dot now tells the
+  whole story — pulsing green while an agent is working, steady amber when it
+  needs you, gray when nothing is happening there.
+
 ## [0.5.0] - 2026-07-28
 
 ### Added
