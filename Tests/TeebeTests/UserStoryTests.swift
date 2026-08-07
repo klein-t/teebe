@@ -213,6 +213,33 @@ struct PersistStoryTests {
         #expect(app.selector.selectedWorktree?.path == "/repo-feature")
     }
 
+    @Test("I3b: restoring a linked worktree loads it directly — the primary is never loaded first")
+    func i3SingleLoad() async {
+        // Loading the primary and then immediately the saved worktree fires two
+        // full tree builds during the window's very first layout pass, which
+        // AppKit escalates into a constraint-loop crash at launch. Restore must
+        // be a single load.
+        let git = FakeGitClient()
+        git.worktreesResult = [
+            Worktree(path: "/repo", branch: "main", isPrimary: true),
+            Worktree(path: "/repo-feature", branch: "feature"),
+        ]
+        let box = WatcherBox()
+        let env = makeTestEnvironment(git: git, makeWatcher: { box.make() })
+        var seed = AppState()
+        seed.repositories = [PersistedRepository(path: "/repo")]
+        seed.lastSelectedRepoPath = "/repo"
+        seed.lastSelectedWorktreePath = "/repo-feature"
+        try? env.store.save(seed)
+
+        let app = AppModel(environment: env)
+        await app.bootstrap()
+        #expect(app.selector.selectedWorktree?.path == "/repo-feature")
+        // One worktree-tree watcher, on the restored worktree — none on the primary.
+        #expect(box.watchers.contains { $0.watchedPaths == ["/repo-feature"] })
+        #expect(!box.watchers.contains { $0.watchedPaths == ["/repo"] })
+    }
+
     @Test("I1: switching the selected worktree persists it durably (no quit hook needed)")
     func i1PersistSelection() async {
         let git = FakeGitClient()

@@ -86,13 +86,21 @@ public struct AgentSessionEntry: Equatable, Sendable {
         )
     }
 
+    // Built once — ISO8601DateFormatter is expensive to construct and thread-safe,
+    // and this parser runs for every scanned session-log line.
+    private static let fractionalFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private static let plainFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
     private static func parseTimestamp(_ string: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: string) { return date }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: string)
+        fractionalFormatter.date(from: string) ?? plainFormatter.date(from: string)
     }
 }
 
@@ -120,16 +128,18 @@ public enum AgentStateDeriver {
 public struct AgentSessionScanner: Sendable {
     public var projectsRoot: URL
     public var thresholds: AgentStatusThresholds
-
     /// How much of the tail of a session file is scanned for the last entry.
-    private static let tailBytes = 256 * 1_024
+    /// Injectable so tests can exercise the window boundary with small files.
+    public var tailBytes: Int
 
     public init(
         projectsRoot: URL = AgentSessionScanner.defaultProjectsRoot,
-        thresholds: AgentStatusThresholds = AgentStatusThresholds()
+        thresholds: AgentStatusThresholds = AgentStatusThresholds(),
+        tailBytes: Int = 256 * 1_024
     ) {
         self.projectsRoot = projectsRoot
         self.thresholds = thresholds
+        self.tailBytes = tailBytes
     }
 
     public static var defaultProjectsRoot: URL {
@@ -208,19 +218,32 @@ public struct AgentSessionScanner: Sendable {
 
     /// Scan the tail of the file backwards for the last parseable entry that
     /// belongs to the main conversation (sidechains are subagent chatter).
+    ///
+    /// Lines are located and decoded individually, from the end: a tail window
+    /// that opens mid-multibyte-character (or mid-line) only invalidates that
+    /// first truncated line instead of poisoning a whole-buffer decode, and the
+    /// scan stops at the first hit instead of materializing every line of the
+    /// window when only the last one or two matter.
     private func lastMainChainEntry(in url: URL) -> AgentSessionEntry? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         guard let size = try? handle.seekToEnd() else { return nil }
-        let offset = size > UInt64(Self.tailBytes) ? size - UInt64(Self.tailBytes) : 0
+        let offset = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
         guard (try? handle.seek(toOffset: offset)) != nil,
-              let data = try? handle.readToEnd(),
-              let text = String(data: data, encoding: .utf8)
+              let data = try? handle.readToEnd(), !data.isEmpty
         else { return nil }
-        for line in text.split(separator: "\n").reversed() {
-            if let entry = AgentSessionEntry.parse(line: String(line)), !entry.isSidechain {
+        let newline = UInt8(ascii: "\n")
+        var end = data.endIndex
+        while end > data.startIndex {
+            let start = data[data.startIndex..<end].lastIndex(of: newline).map { $0 + 1 }
+                ?? data.startIndex
+            if start < end,
+               let line = String(data: data[start..<end], encoding: .utf8),
+               let entry = AgentSessionEntry.parse(line: line),
+               !entry.isSidechain {
                 return entry
             }
+            end = start > data.startIndex ? start - 1 : data.startIndex
         }
         return nil
     }

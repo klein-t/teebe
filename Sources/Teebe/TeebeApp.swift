@@ -100,9 +100,17 @@ private struct RootWindowContent: View {
         RootView(app: app, preview: preview)
             .task {
                 await app.bootstrap()
+                app.setUpHookIfNeeded()            // one-time Claude Code hook offer
                 if whatsNew.presentIfUpdated() {   // greet once after an update
                     openWindow(id: WindowID.whatsNew)
                 }
+            }
+            // Covered window → low-power mode (stop FSEvents, ride the hook ping);
+            // visible again → restart watchers and catch up.
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSApplication.didChangeOcclusionStateNotification
+            )) { _ in
+                app.setBackgrounded(!NSApp.occlusionState.contains(.visible))
             }
     }
 }

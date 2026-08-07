@@ -45,6 +45,27 @@ struct FileSystemWatcherTests {
         #expect(collector.batches.count == 2)
     }
 
+    @Test("continuous events cannot starve the flush past the max coalesce interval")
+    func starvationCapped() async throws {
+        let watcher = FSEventsWatcher()
+        let collector = BatchCollector()
+        watcher.debounceInterval = 0.05
+        watcher.maxCoalesceInterval = 0.15
+        watcher.handler = { collector.add($0) }
+
+        // Fire events every 20ms — always inside the 50ms debounce window, so a
+        // pure trailing debounce would never flush until the burst ends.
+        for index in 0..<30 {
+            watcher.ingest(["/f\(index)"])
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        // The cap forces intermediate flushes mid-burst, and nothing is lost.
+        #expect(collector.batches.count >= 2)
+        #expect(collector.allPaths.count == 30)
+    }
+
     @Test("real FSEvents delivers a write within timeout")
     func realDelivery() async throws {
         let fm = FileManager.default
