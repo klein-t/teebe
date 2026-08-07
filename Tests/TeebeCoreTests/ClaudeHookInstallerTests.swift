@@ -56,15 +56,15 @@ struct ClaudeHookInstallerTests {
     @Test("a partially installed settings gains only the missing events")
     func partialInstall() throws {
         var settings = try #require(ClaudeHookInstaller.settingsInstallingPing(into: [:]))
-        var hooks = settings["hooks"] as! [String: Any]
+        var hooks = try #require(settings["hooks"] as? [String: Any])
         hooks["UserPromptSubmit"] = nil   // drop one event
         settings["hooks"] = hooks
         #expect(!ClaudeHookInstaller.isInstalled(in: settings))
 
         let merged = try #require(ClaudeHookInstaller.settingsInstallingPing(into: settings))
-        let mergedHooks = merged["hooks"] as! [String: Any]
+        let mergedHooks = try #require(merged["hooks"] as? [String: Any])
         // Stop was already installed: still exactly one teebe group there.
-        let stop = mergedHooks["Stop"] as! [[String: Any]]
+        let stop = try #require(mergedHooks["Stop"] as? [[String: Any]])
         let teebeStopGroups = stop.filter {
             (($0["hooks"] as? [[String: Any]]) ?? [])
                 .contains { ($0["command"] as? String) == ClaudeHookInstaller.pingCommand }
