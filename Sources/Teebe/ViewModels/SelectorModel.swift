@@ -55,6 +55,16 @@ final class SelectorModel {
     /// Periodic re-derive so purely time-based transitions (stall, idle-out)
     /// happen even when no session log is being written.
     private var agentPollTask: Task<Void, Never>?
+    /// Darwin-notification listener for the Claude Code hook ping — the push
+    /// signal that keeps badges and notifications instant even in low power.
+    private var agentPingListener: AgentPingListening?
+    /// Low-power mode (window occluded): every FSEvents watcher is stopped and
+    /// the app rides on the hook ping plus a slow poll. See `setLowPower`.
+    private(set) var isLowPower = false
+    /// Poll cadences for the time-only agent transitions (stall/idle-out).
+    /// Vars so tests can shrink them.
+    var agentPollInterval: TimeInterval = 30
+    var lowPowerAgentPollInterval: TimeInterval = 120
     /// One-shot follow-up scheduled while any live dot is lit, so `isLive` expires
     /// shortly after the busy window lapses instead of latching until the next
     /// event (a latched dot keeps a repeat-forever pulse animation burning CPU).
@@ -112,9 +122,12 @@ final class SelectorModel {
         onSelectionChange?()
     }
 
-    /// Select a repo: discover its worktrees + branches, then focus the primary
-    /// worktree.
-    func selectRepo(_ repo: Repository) async {
+    /// Select a repo: discover its worktrees + branches, then focus
+    /// `preferredWorktreePath` when it still exists, else the primary worktree.
+    /// Restoring a saved selection goes through the preference rather than a
+    /// primary-then-saved double load: two full tree loads inside the window's
+    /// first layout pass escalate into an AppKit constraint-loop crash at launch.
+    func selectRepo(_ repo: Repository, preferredWorktreePath: String? = nil) async {
         selectedRepo = repo
         await startRepoWatching(repo)
         startAgentWatching()
@@ -128,8 +141,11 @@ final class SelectorModel {
             errorMessage = WorktreeModel.describe(error)
         }
         await refreshWorktreeInfo()
-        if let primary = worktrees.first(where: { $0.isPrimary }) ?? worktrees.first {
-            await selectWorktree(primary)
+        let target = preferredWorktreePath.flatMap { preferred in
+            worktrees.first { $0.path == preferred }
+        } ?? worktrees.first(where: { $0.isPrimary }) ?? worktrees.first
+        if let target {
+            await selectWorktree(target)
         }
         onSelectionChange?()
     }
@@ -296,29 +312,75 @@ final class SelectorModel {
     }
 
     /// Watch the Claude projects root (session logs live outside the repo, so the
-    /// repo watchers never see them) and poll slowly for time-only transitions.
+    /// repo watchers never see them), listen for the hook ping, and poll slowly
+    /// for time-only transitions.
     private func startAgentWatching() {
         stopAgentWatching()
-        guard let root = environment.agentProjectsRootPath else { return }
-        let watcher = environment.makeWatcher()
-        watcher.start(paths: [root], debounce: 1.0) { [weak self] _ in
-            Task { @MainActor in await self?.handleAgentWatchEvent() }
+        guard environment.agentProjectsRootPath != nil else { return }
+        startAgentWatcher()
+        let listener = environment.makeAgentPingListener()
+        listener.start { [weak self] in
+            Task { @MainActor in await self?.refreshAgentStates() }
         }
-        agentWatcher = watcher
+        agentPingListener = listener
         agentPollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
+                guard let interval = self?.currentAgentPollInterval else { return }
+                try? await Task.sleep(for: .seconds(interval))
                 guard !Task.isCancelled else { return }
                 await self?.refreshAgentStates()
             }
         }
     }
 
+    /// Just the FSEvents stream over the projects root — the part of agent
+    /// watching that low power turns off (the ping and slow poll stay on).
+    private func startAgentWatcher() {
+        agentWatcher?.stop()
+        agentWatcher = nil
+        guard !isLowPower, let root = environment.agentProjectsRootPath else { return }
+        let watcher = environment.makeWatcher()
+        watcher.start(paths: [root], debounce: 1.0) { [weak self] _ in
+            Task { @MainActor in await self?.handleAgentWatchEvent() }
+        }
+        agentWatcher = watcher
+    }
+
+    private var currentAgentPollInterval: TimeInterval {
+        isLowPower ? lowPowerAgentPollInterval : agentPollInterval
+    }
+
     private func stopAgentWatching() {
         agentWatcher?.stop()
         agentWatcher = nil
+        agentPingListener?.stop()
+        agentPingListener = nil
         agentPollTask?.cancel()
         agentPollTask = nil
+    }
+
+    // MARK: - Low-power mode (window occluded)
+
+    /// With the window occluded nobody is looking at the tree, so live FSEvents
+    /// streams (worktree, repo git dir, projects root) only burn CPU: with N busy
+    /// agents they wake the app about once a second. Low power stops them all and
+    /// relies on the hook ping (instant, push) plus the slow poll (stall/idle),
+    /// so "Agent needs you" notifications still fire while backgrounded. Exiting
+    /// restarts the watchers and re-derives everything missed.
+    func setLowPower(_ on: Bool) async {
+        guard on != isLowPower else { return }
+        isLowPower = on
+        if on {
+            repoWatcher?.stop()
+            agentWatcher?.stop()
+            agentWatcher = nil
+            worktree.pauseWatching()
+        } else {
+            if let repo = selectedRepo { await startRepoWatching(repo) }
+            startAgentWatcher()
+            await worktree.resumeWatching()
+            await refreshWorktrees()
+        }
     }
 
     /// A coalesced batch of session-log writes — re-derive the badges.

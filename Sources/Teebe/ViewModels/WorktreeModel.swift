@@ -152,6 +152,20 @@ final class WorktreeModel {
         self.watcher = watcher
     }
 
+    /// Low power: drop the worktree's FSEvents stream (the busiest watcher — it
+    /// spans the whole tree). `resumeWatching` restores it and refreshes to catch
+    /// anything written while paused.
+    func pauseWatching() {
+        watcher?.stop()
+        watcher = nil
+    }
+
+    func resumeWatching() async {
+        guard let worktreePath, watcher == nil else { return }
+        startWatching(worktreePath)
+        await refresh()
+    }
+
     /// Handle a file-watch event for the active worktree: record *external* activity
     /// (skipping our own recent writes), notify the owner, then refresh. Synchronous
     /// and parameterized so it is unit-testable without real FSEvents.

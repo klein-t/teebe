@@ -4,6 +4,27 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-08-07
+
+### Added
+- **Low-power mode.** When teebe's window is covered, every file watcher stops
+  and the app idles at near-zero CPU — while "agent needs you" notifications
+  keep arriving, now instantly, via a tiny Claude Code hook (`notifyutil` ping
+  on turn end). teebe offers to add the hook once at launch; declining keeps
+  everything working the old way.
+
+### Fixed
+- Under a continuous stream of agent writes the tree could stop updating until
+  the burst ended (the debounce never fired). Updates now land at least every
+  couple of seconds no matter how busy the agents are.
+- A session log whose scanned tail started mid-emoji (or mid-character) was
+  silently read as "no agent" — the worktree dot went gray while the agent was
+  actually working.
+
+### Changed
+- Session-log scanning is lighter: timestamp parsers are built once instead of
+  per line, and only the last relevant lines of each log are decoded.
+
 ## [0.5.1] - 2026-08-04
 
 ### Fixed
