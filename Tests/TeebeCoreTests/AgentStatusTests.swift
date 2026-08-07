@@ -194,7 +194,7 @@ struct AgentSessionScannerTests {
         var dir: URL
     }
 
-    func makeFixture() throws -> Fixture {
+    func makeFixture(tailBytes: Int = 256 * 1_024) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("teebe-tests", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -202,7 +202,8 @@ struct AgentSessionScannerTests {
             AgentSessionScanner.projectDirName(forWorktreePath: worktreePath), isDirectory: true)
         try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
         let scanner = AgentSessionScanner(
-            projectsRoot: root, thresholds: AgentStatusThresholds(stall: 600, idle: 1_800))
+            projectsRoot: root, thresholds: AgentStatusThresholds(stall: 600, idle: 1_800),
+            tailBytes: tailBytes)
         return Fixture(scanner: scanner, root: root, dir: projectDir)
     }
 
@@ -283,6 +284,26 @@ struct AgentSessionScannerTests {
             [assistantTextLine(at: now.addingTimeInterval(-7_200))],
             to: fx.dir.appendingPathComponent("s1.jsonl"), mtime: now.addingTimeInterval(-7_200))
         #expect(fx.scanner.state(forWorktreePath: worktreePath, now: now) == .idle)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("a tail window that opens mid-multibyte-character still parses the entries after it")
+    func tailBoundaryMidCharacter() throws {
+        // First line is emoji ballast; the real entry is the final line. Pick a
+        // tail size that (a) covers the whole entry line and (b) makes the tail
+        // offset land strictly inside one 4-byte emoji — a whole-buffer UTF-8
+        // decode of such a tail fails, which must not blank the verdict.
+        let entryLine = assistantToolUseLine(at: now.addingTimeInterval(-5))
+        let ballast = String(repeating: "🦊", count: 300)
+        let content = ballast + "\n" + entryLine + "\n"
+        let size = content.utf8.count
+        var tail = entryLine.utf8.count + 16
+        while (size - tail) % 4 != 2 { tail += 1 }   // offset 2 bytes into an emoji
+
+        let fx = try makeFixture(tailBytes: tail)
+        let url = fx.dir.appendingPathComponent("s1.jsonl")
+        try content.write(to: url, atomically: true, encoding: .utf8)
+        #expect(fx.scanner.state(forWorktreePath: worktreePath, now: now) == .working)
         try? FileManager.default.removeItem(at: fx.root)
     }
 

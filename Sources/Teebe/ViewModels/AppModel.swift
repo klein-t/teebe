@@ -84,6 +84,60 @@ final class AppModel {
         }
     }
 
+    // MARK: - Low-power mode + Claude Code hook
+
+    /// Mirror window occlusion into the selector's low-power mode: covered window
+    /// → stop all FSEvents streams and ride on the hook ping.
+    func setBackgrounded(_ backgrounded: Bool) {
+        Task { await selector.setLowPower(backgrounded) }
+    }
+
+    /// What to do about the Claude Code ping hook at launch.
+    enum HookSetupAction: Equatable { case ask, repair, none }
+
+    static func hookSetupAction(installed: Bool, response: String?) -> HookSetupAction {
+        if installed { return .none }
+        switch response {
+        case "accepted": return .repair   // user opted in once — restore silently
+        case "declined": return .none     // user said no — never touch, never re-ask
+        default: return .ask
+        }
+    }
+
+    /// Launch-time hook setup: offer once, then keep the user's choice. An
+    /// accepted hook that later disappears (settings rewritten by another tool)
+    /// is repaired without asking again.
+    func setUpHookIfNeeded() {
+        let action = Self.hookSetupAction(
+            installed: ClaudeHookInstaller.isInstalled(),
+            response: state.hookOfferResponse)
+        switch action {
+        case .none:
+            return
+        case .repair:
+            try? ClaudeHookInstaller.install()
+        case .ask:
+            let alert = NSAlert()
+            alert.messageText = "Notify instantly, use less battery?"
+            alert.informativeText = """
+            teebe can add a tiny hook to Claude Code (~/.claude/settings.json) that \
+            pings it the moment an agent finishes. With the hook, teebe stops all \
+            background file watching while its window is covered — near-zero CPU — \
+            and "agent needs you" notifications become instant. The hook is one \
+            `notifyutil` command; it sends no data anywhere.
+            """
+            alert.addButton(withTitle: "Add Hook")
+            alert.addButton(withTitle: "No Thanks")
+            let accepted = alert.runModal() == .alertFirstButtonReturn
+            state.hookOfferResponse = accepted ? "accepted" : "declined"
+            try? environment.store.save(state)
+            if accepted {
+                do { try ClaudeHookInstaller.install() }
+                catch { setError("Couldn't update ~/.claude/settings.json — hook not added.") }
+            }
+        }
+    }
+
     /// Add a repository after verifying it is a git repo (it must answer
     /// `worktree list`). Persists on success.
     @discardableResult

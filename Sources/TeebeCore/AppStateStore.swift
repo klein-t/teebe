@@ -45,6 +45,10 @@ public struct AppState: Codable, Equatable, Sendable {
     /// The app version we last showed the "What's New" window for. Optional so older
     /// state files decode; `nil` means "never shown" (treated as a fresh install).
     public var lastSeenVersion: String?
+    /// The user's answer to the one-time Claude Code hook offer: "accepted" (keep
+    /// the hook repaired silently), "declined" (never ask again, never touch the
+    /// settings), nil (not asked yet). Optional so older state files decode.
+    public var hookOfferResponse: String?
 
     public init(
         repositories: [PersistedRepository] = [],
@@ -54,7 +58,8 @@ public struct AppState: Codable, Equatable, Sendable {
         lastSelectedRepoPath: String? = nil,
         lastSelectedWorktreePath: String? = nil,
         layoutByRepo: [String: SectionLayout]? = nil,
-        lastSeenVersion: String? = nil
+        lastSeenVersion: String? = nil,
+        hookOfferResponse: String? = nil
     ) {
         self.repositories = repositories
         self.showChangedOnly = showChangedOnly
@@ -64,6 +69,7 @@ public struct AppState: Codable, Equatable, Sendable {
         self.lastSelectedWorktreePath = lastSelectedWorktreePath
         self.layoutByRepo = layoutByRepo
         self.lastSeenVersion = lastSeenVersion
+        self.hookOfferResponse = hookOfferResponse
     }
 }
 

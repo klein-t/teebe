@@ -52,6 +52,51 @@ mv "${APP_PATH}" "${DEST}/"
 # Belt-and-suspenders: strip quarantine in case anything set it.
 xattr -dr com.apple.quarantine "${DEST}/${APP}" 2>/dev/null || true
 
+# Offer the Claude Code hook that powers low-power mode + instant notifications.
+# Only when we can actually ask (a TTY): a piped `curl | bash` install defers to
+# the in-app offer on first launch. Idempotent; a malformed settings.json is
+# left untouched.
+SETTINGS="${HOME}/.claude/settings.json"
+if [ -r /dev/tty ] && command -v python3 >/dev/null 2>&1; then
+  printf "Add the Claude Code hook for instant notifications + low-power mode? [Y/n] " > /dev/tty
+  read -r REPLY < /dev/tty || REPLY="n"
+  case "${REPLY}" in
+    [nN]*) echo "Skipped — teebe will offer it on first launch." ;;
+    *)
+      python3 - "${SETTINGS}" <<'PYEOF' \
+        || echo "note: couldn't update settings.json — teebe will offer the hook on launch"
+import json, os, sys
+path = sys.argv[1]
+CHANNEL = "dev.teebe.agent"
+CMD = "notifyutil -p " + CHANNEL
+EVENTS = ["Stop", "Notification", "UserPromptSubmit"]
+settings = {}
+if os.path.exists(path):
+    with open(path) as f:
+        settings = json.load(f)   # malformed -> raise -> file left untouched
+hooks = settings.setdefault("hooks", {})
+changed = False
+for event in EVENTS:
+    groups = hooks.setdefault(event, [])
+    if any(CHANNEL in (h.get("command") or "")
+           for g in groups for h in (g.get("hooks") or [])):
+        continue
+    groups.append({"hooks": [{"type": "command", "command": CMD}]})
+    changed = True
+if changed:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".teebe-tmp"
+    with open(tmp, "w") as f:
+        json.dump(settings, f, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+    print("✓ Claude Code hook installed")
+else:
+    print("✓ Claude Code hook already present")
+PYEOF
+      ;;
+  esac
+fi
+
 echo "Launching teebe…"
 open "${DEST}/${APP}"
 
