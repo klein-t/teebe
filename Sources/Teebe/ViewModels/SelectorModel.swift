@@ -122,9 +122,12 @@ final class SelectorModel {
         onSelectionChange?()
     }
 
-    /// Select a repo: discover its worktrees + branches, then focus the primary
-    /// worktree.
-    func selectRepo(_ repo: Repository) async {
+    /// Select a repo: discover its worktrees + branches, then focus
+    /// `preferredWorktreePath` when it still exists, else the primary worktree.
+    /// Restoring a saved selection goes through the preference rather than a
+    /// primary-then-saved double load: two full tree loads inside the window's
+    /// first layout pass escalate into an AppKit constraint-loop crash at launch.
+    func selectRepo(_ repo: Repository, preferredWorktreePath: String? = nil) async {
         selectedRepo = repo
         await startRepoWatching(repo)
         startAgentWatching()
@@ -138,8 +141,11 @@ final class SelectorModel {
             errorMessage = WorktreeModel.describe(error)
         }
         await refreshWorktreeInfo()
-        if let primary = worktrees.first(where: { $0.isPrimary }) ?? worktrees.first {
-            await selectWorktree(primary)
+        let target = preferredWorktreePath.flatMap { preferred in
+            worktrees.first { $0.path == preferred }
+        } ?? worktrees.first(where: { $0.isPrimary }) ?? worktrees.first
+        if let target {
+            await selectWorktree(target)
         }
         onSelectionChange?()
     }

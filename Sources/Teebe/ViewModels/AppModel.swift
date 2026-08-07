@@ -75,13 +75,9 @@ final class AppModel {
             ?? repositories.first
         isHydrating = false
         guard let target else { return }
-        await selector.selectRepo(target)   // focuses the primary worktree
-        // Restore the last selected worktree if it still exists (else keep primary).
-        if let wtPath = lastWorktreePath,
-           selector.selectedWorktree?.path != wtPath,
-           let saved = selector.worktrees.first(where: { $0.path == wtPath }) {
-            await selector.selectWorktree(saved)
-        }
+        // One shot: the saved worktree (when it still exists) is selected directly,
+        // never primary-then-saved — the double load crashed the first layout pass.
+        await selector.selectRepo(target, preferredWorktreePath: lastWorktreePath)
     }
 
     // MARK: - Low-power mode + Claude Code hook
