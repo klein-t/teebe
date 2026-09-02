@@ -132,6 +132,29 @@ final class WatcherBox {
     }
 }
 
+// MARK: - Fake agent ping (darwin notification channel)
+
+/// Records lifecycle and lets a test fire the ping by hand.
+final class FakeAgentPing: AgentPingListening, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _startCount = 0
+    private var _stopCount = 0
+    private var handler: (@Sendable () -> Void)?
+
+    var startCount: Int { lock.lock(); defer { lock.unlock() }; return _startCount }
+    var stopCount: Int { lock.lock(); defer { lock.unlock() }; return _stopCount }
+
+    func start(_ handler: @escaping @Sendable () -> Void) {
+        lock.lock(); _startCount += 1; self.handler = handler; lock.unlock()
+    }
+    func stop() { lock.lock(); _stopCount += 1; handler = nil; lock.unlock() }
+    /// Simulate a `notifyutil -p` ping from a Claude Code hook.
+    func fire() {
+        lock.lock(); let handler = handler; lock.unlock()
+        handler?()
+    }
+}
+
 // MARK: - Fake agent status
 
 /// Scriptable per-worktree agent states for tests; the closure form feeds
@@ -180,7 +203,8 @@ func makeTestEnvironment(
     makeWatcher: (@MainActor () -> FileSystemWatcher)? = nil,
     agentStatuses: (@Sendable ([String], Date) -> [String: AgentActivityState])? = nil,
     agentProjectsRootPath: String? = nil,
-    notify: (@MainActor (String, String) -> Void)? = nil
+    notify: (@MainActor (String, String) -> Void)? = nil,
+    agentPing: AgentPingListening? = nil
 ) -> AppEnvironment {
     let storeURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("tb-test-\(UUID().uuidString)")
@@ -194,6 +218,7 @@ func makeTestEnvironment(
         makeWatcher: makeWatcher ?? { FakeWatcher() },
         agentStatuses: agentStatuses ?? { _, _ in [:] },
         agentProjectsRootPath: agentProjectsRootPath,
-        notify: notify ?? { _, _ in }
+        notify: notify ?? { _, _ in },
+        makeAgentPingListener: { agentPing ?? FakeAgentPing() }
     )
 }

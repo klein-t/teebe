@@ -55,3 +55,6 @@ skills-lock.json
 # Local screenshots / scratch captures — never committed (assets/ is tracked).
 Screenshot*.png
 Screenshot*.jpeg
+
+# Local packaging output (the release workflow builds the real one).
+*.dmg

@@ -22,6 +22,9 @@ struct AppEnvironment {
     let agentProjectsRootPath: String?
     /// Posts a user-facing notification (title, body).
     let notify: @MainActor (_ title: String, _ body: String) -> Void
+    /// Factory for the darwin-notification listener the Claude Code hook pings
+    /// (`notifyutil -p dev.teebe.agent`). Overridable with a fake in tests.
+    let makeAgentPingListener: @MainActor () -> AgentPingListening
 
     init(
         git: GitClient,
@@ -32,7 +35,8 @@ struct AppEnvironment {
         makeWatcher: @escaping @MainActor () -> FileSystemWatcher,
         agentStatuses: @escaping @Sendable ([String], Date) -> [String: AgentActivityState] = { _, _ in [:] },
         agentProjectsRootPath: String? = nil,
-        notify: @escaping @MainActor (String, String) -> Void = { _, _ in }
+        notify: @escaping @MainActor (String, String) -> Void = { _, _ in },
+        makeAgentPingListener: @escaping @MainActor () -> AgentPingListening = { DarwinAgentPingListener() }
     ) {
         self.git = git
         self.opener = opener
@@ -43,6 +47,7 @@ struct AppEnvironment {
         self.agentStatuses = agentStatuses
         self.agentProjectsRootPath = agentProjectsRootPath
         self.notify = notify
+        self.makeAgentPingListener = makeAgentPingListener
     }
 
     var worktreeService: WorktreeService { WorktreeService(git: git) }

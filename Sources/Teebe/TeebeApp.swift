@@ -16,7 +16,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Leaving it unset lets the system icon render correctly while running too.
         NSApp.activate(ignoringOtherApps: true)
     }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    /// Quit when the main window goes away, but never while a regular window is
+    /// still showing. Belt and braces for the pinned (floating-level) window, which
+    /// window-tracking code tends to overlook (#105).
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        !Self.hasVisibleWindow(in: sender.windows)
+    }
+
+    /// True if any regular (non-panel) window is still on screen.
+    static func hasVisibleWindow(in windows: [NSWindow]) -> Bool {
+        hasVisibleWindow(windows.map { (visible: $0.isVisible, isPanel: $0 is NSPanel) })
+    }
+
+    /// Pure core of the check, so it can be tested without creating `NSWindow`s
+    /// (which needs a running `NSApplication`).
+    static func hasVisibleWindow(_ windows: [(visible: Bool, isPanel: Bool)]) -> Bool {
+        windows.contains { $0.visible && !$0.isPanel }
+    }
 }
 
 /// App entry point. This shell wires the view models to a minimal, functional
@@ -49,7 +65,9 @@ struct TeebeApp: App {
         .windowResizability(.contentMinSize) // freely resizable; content scrolls inside
         .defaultSize(width: 440, height: 640)
         .commands {
-            // "Check for Updates…", "What's New", and "Keyboard Shortcuts" next to About.
+            // Custom About (adds website / GitHub / X links to the standard panel),
+            // then "Check for Updates…", "What's New", and "Keyboard Shortcuts" below it.
+            CommandGroup(replacing: .appInfo) { AboutMenuCommand() }
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesCommand(updater: updater)
                 WhatsNewMenuCommand()
@@ -78,6 +96,11 @@ struct TeebeApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+
+        // Adds "Settings…" (⌘,) to the app menu.
+        Settings {
+            SettingsView(app: app)
+        }
     }
 }
 
@@ -100,9 +123,17 @@ private struct RootWindowContent: View {
         RootView(app: app, preview: preview)
             .task {
                 await app.bootstrap()
+                app.setUpHookIfNeeded()            // one-time Claude Code hook offer
                 if whatsNew.presentIfUpdated() {   // greet once after an update
                     openWindow(id: WindowID.whatsNew)
                 }
+            }
+            // Covered window → low-power mode (stop FSEvents, ride the hook ping);
+            // visible again → restart watchers and catch up.
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSApplication.didChangeOcclusionStateNotification
+            )) { _ in
+                app.setBackgrounded(!NSApp.occlusionState.contains(.visible))
             }
     }
 }

@@ -12,8 +12,15 @@ public final class FSEventsWatcher: FileSystemWatcher, @unchecked Sendable {
     // Coalescing state — accessed only on `queue`.
     var handler: (@Sendable ([String]) -> Void)?
     var debounceInterval: TimeInterval = 0.2
+    /// Upper bound on how long a flush can be pushed back by fresh events. A pure
+    /// trailing debounce starves under continuous writes (exactly the busy-agent
+    /// case): every event re-arms the timer and nothing flushes until the burst
+    /// ends. The cap forces a flush at least this often while events keep coming.
+    var maxCoalesceInterval: TimeInterval = 2.0
     private var pending = Set<String>()
     private var flushWorkItem: DispatchWorkItem?
+    /// When the oldest still-unflushed event arrived (nil when `pending` is empty).
+    private var firstPendingAt: DispatchTime?
 
     public private(set) var isWatching = false
 
@@ -78,6 +85,7 @@ public final class FSEventsWatcher: FileSystemWatcher, @unchecked Sendable {
             self?.flushWorkItem?.cancel()
             self?.flushWorkItem = nil
             self?.pending.removeAll()
+            self?.firstPendingAt = nil
         }
     }
 
@@ -86,16 +94,22 @@ public final class FSEventsWatcher: FileSystemWatcher, @unchecked Sendable {
     func ingest(_ paths: [String]) {
         queue.async { [weak self] in
             guard let self else { return }
+            let now = DispatchTime.now()
+            if self.pending.isEmpty { self.firstPendingAt = now }
             self.pending.formUnion(paths)
             self.flushWorkItem?.cancel()
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 let batch = Array(self.pending)
                 self.pending.removeAll()
+                self.firstPendingAt = nil
                 if !batch.isEmpty { self.handler?(batch) }
             }
             self.flushWorkItem = work
-            self.queue.asyncAfter(deadline: .now() + self.debounceInterval, execute: work)
+            // Trailing debounce, but never past the cap measured from the oldest
+            // pending event — a steady write stream still flushes periodically.
+            let cap = (self.firstPendingAt ?? now) + self.maxCoalesceInterval
+            self.queue.asyncAfter(deadline: min(now + self.debounceInterval, cap), execute: work)
         }
     }
 }

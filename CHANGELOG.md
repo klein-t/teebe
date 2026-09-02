@@ -4,6 +4,60 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-09-02
+
+### Added
+- **Settings window** (⌘,) with an Appearance picker: follow the system, or
+  force Light or Dark. The choice applies immediately and persists.
+- The About panel now links to teebe.io, the GitHub repo and the author's X
+  account.
+
+### Fixed
+- A pinned window never showed up in App Exposé or Mission Control. It now
+  floats only while another app is in front, so it is listed whenever teebe is
+  active; behaviour while working in other apps is unchanged.
+- With the window pinned, closing the About panel with ⌘W could get the app
+  quit a second later by window-tracking utilities that overlook floating
+  windows. Same fix as above, plus a guard in the app's own last-window check.
+
+## [0.6.0] - 2026-08-07
+
+### Added
+- **Low-power mode.** When teebe's window is covered, every file watcher stops
+  and the app idles at near-zero CPU — while "agent needs you" notifications
+  keep arriving, now instantly, via a tiny Claude Code hook (`notifyutil` ping
+  on turn end). teebe offers to add the hook once at launch; declining keeps
+  everything working the old way.
+
+### Fixed
+- Under a continuous stream of agent writes the tree could stop updating until
+  the burst ended (the debounce never fired). Updates now land at least every
+  couple of seconds no matter how busy the agents are.
+- A session log whose scanned tail started mid-emoji (or mid-character) was
+  silently read as "no agent" — the worktree dot went gray while the agent was
+  actually working.
+
+### Changed
+- Session-log scanning is lighter: timestamp parsers are built once instead of
+  per line, and only the last relevant lines of each log are decoded.
+
+## [0.5.1] - 2026-08-04
+
+### Fixed
+- Picking an already-tracked folder from the add (+) panel now switches to that
+  repository instead of silently doing nothing.
+- The CHANGES count no longer rolls its digits when you switch worktrees — it
+  snaps to the new worktree's total, and still animates when changes happen in
+  the current worktree.
+- Agent status now follows the worktree the agent is actually working in. A
+  session that starts in the main checkout and moves into a linked worktree
+  used to show as activity on the main checkout.
+
+### Changed
+- The "working" / "needs you" chip is gone; the worktree dot now tells the
+  whole story — pulsing green while an agent is working, steady amber when it
+  needs you, gray when nothing is happening there.
+
 ## [0.5.0] - 2026-07-28
 
 ### Added

@@ -33,7 +33,7 @@ Commercial licenses are available from the copyright holder, Klein Tahiraj. They
 grant the right to use the code under terms that do not require you to
 open-source your own work.
 
-To obtain one, contact: **klein.tahiraj@gmail.com**.
+To obtain one, contact: **hello@teebe.io**.
 
 ---
 
