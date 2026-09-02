@@ -80,6 +80,11 @@ struct TeebeApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+
+        // Adds "Settings…" (⌘,) to the app menu.
+        Settings {
+            SettingsView(app: app)
+        }
     }
 }
 

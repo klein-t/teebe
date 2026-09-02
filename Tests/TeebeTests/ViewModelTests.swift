@@ -723,4 +723,22 @@ struct PreviewModelTests {
         await model.toggle(for: node, worktreePath: dir.path)
         #expect(model.content == .text("hello preview"))
     }
+
+    @Test("appearance persists and hydrates; system is stored as absent")
+    func appearanceRoundTrip() async throws {
+        let env = makeTestEnvironment(git: FakeGitClient())
+        let app = AppModel(environment: env)
+        await app.bootstrap()
+        #expect(app.appearance == .system)
+
+        app.appearance = .dark
+        #expect(env.store.load().appearance == "dark")
+
+        let reopened = AppModel(environment: env)
+        await reopened.bootstrap()
+        #expect(reopened.appearance == .dark)
+
+        reopened.appearance = .system
+        #expect(env.store.load().appearance == nil)
+    }
 }

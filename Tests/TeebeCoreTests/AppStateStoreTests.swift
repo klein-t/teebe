@@ -19,10 +19,24 @@ struct AppStateStoreTests {
                            PersistedRepository(path: "/b")],
             showChangedOnly: true,
             floatOnTop: true,
-            lastSelectedRepoPath: "/a"
+            lastSelectedRepoPath: "/a",
+            appearance: "dark"
         )
         try store.save(state)
         #expect(store.load() == state)
+    }
+
+    @Test("state without an appearance key decodes as follow-system")
+    func appearanceDefaultsToNil() throws {
+        let (url, cleanup) = tempURL(); defer { cleanup() }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let legacy = try JSONEncoder().encode(AppState(floatOnTop: true))
+        var json = try #require(JSONSerialization.jsonObject(with: legacy) as? [String: Any])
+        json.removeValue(forKey: "appearance")
+        try JSONSerialization.data(withJSONObject: json).write(to: url)
+        let loaded = AppStateStore(url: url).load()
+        #expect(loaded.appearance == nil)
+        #expect(loaded.floatOnTop == true)
     }
 
     @Test("missing file loads default state")
