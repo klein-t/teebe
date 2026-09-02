@@ -12,7 +12,7 @@ Teebe is in active development (pre-1.0). Security fixes are applied to the
 Report privately via GitHub's [private vulnerability
 reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
 (the **Security → Report a vulnerability** tab on this repository), or email
-**klein.tahiraj@gmail.com**.
+**hello@teebe.io**.
 
 Please include:
 

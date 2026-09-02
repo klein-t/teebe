@@ -49,7 +49,9 @@ struct TeebeApp: App {
         .windowResizability(.contentMinSize) // freely resizable; content scrolls inside
         .defaultSize(width: 440, height: 640)
         .commands {
-            // "Check for Updates…", "What's New", and "Keyboard Shortcuts" next to About.
+            // Custom About (adds website / GitHub / X links to the standard panel),
+            // then "Check for Updates…", "What's New", and "Keyboard Shortcuts" below it.
+            CommandGroup(replacing: .appInfo) { AboutMenuCommand() }
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesCommand(updater: updater)
                 WhatsNewMenuCommand()
