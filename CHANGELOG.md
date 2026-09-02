@@ -4,6 +4,22 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-09-02
+
+### Added
+- **Settings window** (⌘,) with an Appearance picker: follow the system, or
+  force Light or Dark. The choice applies immediately and persists.
+- The About panel now links to teebe.io, the GitHub repo and the author's X
+  account.
+
+### Fixed
+- A pinned window never showed up in App Exposé or Mission Control. It now
+  floats only while another app is in front, so it is listed whenever teebe is
+  active; behaviour while working in other apps is unchanged.
+- With the window pinned, closing the About panel with ⌘W could get the app
+  quit a second later by window-tracking utilities that overlook floating
+  windows. Same fix as above, plus a guard in the app's own last-window check.
+
 ## [0.6.0] - 2026-08-07
 
 ### Added
