@@ -25,7 +25,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// True if any regular (non-panel) window is still on screen.
     static func hasVisibleWindow(in windows: [NSWindow]) -> Bool {
-        windows.contains { $0.isVisible && !($0 is NSPanel) }
+        hasVisibleWindow(windows.map { (visible: $0.isVisible, isPanel: $0 is NSPanel) })
+    }
+
+    /// Pure core of the check, so it can be tested without creating `NSWindow`s
+    /// (which needs a running `NSApplication`).
+    static func hasVisibleWindow(_ windows: [(visible: Bool, isPanel: Bool)]) -> Bool {
+        windows.contains { $0.visible && !$0.isPanel }
     }
 }
 

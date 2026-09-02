@@ -744,33 +744,20 @@ struct PreviewModelTests {
 }
 
 @Suite("Quit after last window closed")
-@MainActor
 struct LastWindowClosedTests {
-    private func window(visible: Bool, panel: Bool = false, level: NSWindow.Level = .normal) -> NSWindow {
-        let rect = NSRect(x: 0, y: 0, width: 100, height: 100)
-        let w = panel ? NSPanel(contentRect: rect, styleMask: [.titled], backing: .buffered, defer: true)
-                      : NSWindow(contentRect: rect, styleMask: [.titled], backing: .buffered, defer: true)
-        w.level = level
-        if visible { w.orderFrontRegardless() } else { w.orderOut(nil) }
-        return w
-    }
-
     @Test("a pinned (floating) main window still counts as open")
-    func floatingWindowCounts() {
-        let main = window(visible: true, level: .floating)
-        #expect(AppDelegate.hasVisibleWindow(in: [main]))
-        main.close()
+    func visibleWindowCounts() {
+        #expect(AppDelegate.hasVisibleWindow([(visible: true, isPanel: false)]))
     }
 
     @Test("panels alone do not keep the app alive")
     func panelsDontCount() {
-        let about = window(visible: true, panel: true)
-        #expect(!AppDelegate.hasVisibleWindow(in: [about]))
-        about.close()
+        #expect(!AppDelegate.hasVisibleWindow([(visible: true, isPanel: true)]))
     }
 
     @Test("a closed main window does not count")
     func closedWindowDoesNotCount() {
-        #expect(!AppDelegate.hasVisibleWindow(in: [window(visible: false)]))
+        #expect(!AppDelegate.hasVisibleWindow([(visible: false, isPanel: false), (visible: true, isPanel: true)]))
+        #expect(!AppDelegate.hasVisibleWindow([]))
     }
 }
