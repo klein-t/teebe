@@ -742,3 +742,22 @@ struct PreviewModelTests {
         #expect(env.store.load().appearance == nil)
     }
 }
+
+@Suite("Quit after last window closed")
+struct LastWindowClosedTests {
+    @Test("a pinned (floating) main window still counts as open")
+    func visibleWindowCounts() {
+        #expect(AppDelegate.hasVisibleWindow([(visible: true, isPanel: false)]))
+    }
+
+    @Test("panels alone do not keep the app alive")
+    func panelsDontCount() {
+        #expect(!AppDelegate.hasVisibleWindow([(visible: true, isPanel: true)]))
+    }
+
+    @Test("a closed main window does not count")
+    func closedWindowDoesNotCount() {
+        #expect(!AppDelegate.hasVisibleWindow([(visible: false, isPanel: false), (visible: true, isPanel: true)]))
+        #expect(!AppDelegate.hasVisibleWindow([]))
+    }
+}
