@@ -16,7 +16,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Leaving it unset lets the system icon render correctly while running too.
         NSApp.activate(ignoringOtherApps: true)
     }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    /// Quit when the main window goes away, but never while a regular window is
+    /// still showing. Belt and braces for the pinned (floating-level) window, which
+    /// window-tracking code tends to overlook (#105).
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        !Self.hasVisibleWindow(in: sender.windows)
+    }
+
+    /// True if any regular (non-panel) window is still on screen.
+    static func hasVisibleWindow(in windows: [NSWindow]) -> Bool {
+        windows.contains { $0.isVisible && !($0 is NSPanel) }
+    }
 }
 
 /// App entry point. This shell wires the view models to a minimal, functional
