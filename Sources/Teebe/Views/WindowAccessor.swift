@@ -65,19 +65,31 @@ struct WindowController: NSViewRepresentable {
             onZoom = parent.onZoom
             if floatOnTop != parent.floatOnTop {
                 floatOnTop = parent.floatOnTop
-                window?.level = floatOnTop ? .floating : .normal
+                applyLevel()
             }
         }
 
         @objc private func zoomClicked() { onZoom?() }
+
+        private func applyLevel() {
+            window?.level = floatOnTop && !NSApp.isActive ? .floating : .normal
+        }
 
         /// One-time: bind to the window and install the live-resize observers.
         func attach(_ window: NSWindow?, parent: WindowController) {
             guard let window, self.window == nil else { return }
             self.window = window
             floatOnTop = parent.floatOnTop
-            window.level = floatOnTop ? .floating : .normal
+            applyLevel()
             parent.onResolve(window)
+            // Pinned windows only need to float while another app is in front. Keeping
+            // them at the normal level while teebe is active means App Exposé and
+            // Mission Control still list them (floating-level windows are skipped).
+            for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+                observers.append(NotificationCenter.default.addObserver(
+                    forName: name, object: nil, queue: .main
+                ) { [weak self] _ in self?.applyLevel() })
+            }
             // Take over the green zoom button so it grows to full height, not full screen.
             if let zoomButton = window.standardWindowButton(.zoomButton) {
                 zoomButton.target = self

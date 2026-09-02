@@ -42,7 +42,7 @@ enum Brand {
     /// can't keep resources at its root (codesign requires everything under
     /// `Contents/`), so in a packaged build the bundle lives in `Contents/Resources/`.
     /// Probe both that and the dir next to the executable (`swift run`).
-    private static let resourceBundle: Bundle? = {
+    static let resourceBundle: Bundle? = {
         let bundleName = "Teebe_Teebe.bundle"
         let roots = [Bundle.main.resourceURL, Bundle.main.bundleURL].compactMap { $0 }
         for root in roots {

@@ -4,17 +4,21 @@
 
 # teebe
 
-A native macOS file browser built for the multi-agent era.
+A native macOS **git worktree GUI**: browse every worktree of every repo and
+watch files change live, without touching the terminal.
 
 Gave up on your IDE and you're just vibecoding from the terminal? That's exactly
 who teebe is for. Your agents and your shell stay front and center; teebe is the
 window beside them that shows what they're touching, file by file, as it happens.
 
-When you have several AI coding agents (Claude Code, Codex/CMAX, etc.) working in
-parallel across git worktrees, **teebe** is the calm control room that shows
-you, across all your repos and worktrees, what files exist and what's changing.
-It does not replace your editor: it's the navigator that launches files into
-whatever native app you already use.
+When you run several AI coding agents (Claude Code, Codex, Cursor CLI, etc.) in
+parallel — one git worktree per agent session — **teebe** is the calm control
+room that shows you, across all your repos and worktrees, what files exist and
+what's changing. It does not replace your editor: it's the navigator that
+launches files into whatever native app you already use.
+
+Free and open source · macOS 14+ · Apple Silicon & Intel · auto-updates via
+Sparkle · [teebe.io](https://teebe.io)
 
 <p align="center">
   <img src="assets/teebe-overview.png" alt="teebe showing a worktree's files alongside an inline diff" width="760">
@@ -50,7 +54,11 @@ whatever native app you already use.
 
 ## Install
 
-Download the latest `teebe.app` from the
+```sh
+curl -fsSL https://teebe.io/install.sh | bash
+```
+
+Or download the latest `teebe.app` from the
 [Releases](https://github.com/klein-t/teebe/releases) page, unzip it, and drag
 it into `/Applications`. On first launch, right-click the app and choose **Open**
 to get past Gatekeeper. The app keeps itself up to date via Sparkle.
