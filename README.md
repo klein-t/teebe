@@ -58,10 +58,11 @@ Sparkle · [teebe.io](https://teebe.io)
 curl -fsSL https://teebe.io/install.sh | bash
 ```
 
-Or download the latest `teebe.app` from the
-[Releases](https://github.com/klein-t/teebe/releases) page, unzip it, and drag
-it into `/Applications`. On first launch, right-click the app and choose **Open**
-to get past Gatekeeper. The app keeps itself up to date via Sparkle.
+Or grab the latest build directly: [**teebe.zip**](https://dl.teebe.io) or
+[**teebe.dmg**](https://dl.teebe.io/?kind=dmg) (both redirect to the current
+[release](https://github.com/klein-t/teebe/releases)). Unzip it and drag it into
+`/Applications`. On first launch, right-click the app and choose **Open** to get
+past Gatekeeper. The app keeps itself up to date via Sparkle.
 
 ## Uninstall
 
