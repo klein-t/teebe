@@ -9,6 +9,8 @@ import TeebeCore
 final class AppModel {
     private(set) var repositories: [Repository] = []
     var floatOnTop: Bool { didSet { persist() } }
+    /// Light / dark override, or follow the system. Applied app-wide via `NSApp.appearance`.
+    var appearance: AppearanceMode { didSet { appearance.apply(); persist() } }
     private(set) var errorMessage: String?
 
     /// Which section the keyboard currently drives — arrows, Enter and Space act on
@@ -38,6 +40,7 @@ final class AppModel {
         self.state = environment.store.load()
         self.selector = SelectorModel(environment: environment)
         self.floatOnTop = false
+        self.appearance = .system
         // Persist whenever the selection changes, and clear any stale global error —
         // navigating to a different repo/worktree should dismiss the banner.
         self.selector.onSelectionChange = { [weak self] in
@@ -65,6 +68,7 @@ final class AppModel {
         // persist a half-built state back over what we just loaded.
         isHydrating = true
         floatOnTop = state.floatOnTop
+        appearance = AppearanceMode(rawValue: state.appearance ?? "") ?? .system
         repositories = state.repositories.map { Repository(path: $0.path) }
         selector.setRepositories(repositories)
         // Snapshot the restore targets before selecting anything: selection triggers
@@ -327,6 +331,7 @@ final class AppModel {
         guard !isHydrating else { return }
         state.repositories = repositories.map { PersistedRepository(path: $0.path) }
         state.floatOnTop = floatOnTop
+        state.appearance = appearance == .system ? nil : appearance.rawValue
         state.lastSelectedRepoPath = selector.selectedRepo?.path
         state.lastSelectedWorktreePath = selector.selectedWorktree?.path
         try? environment.store.save(state)
