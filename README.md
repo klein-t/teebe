@@ -1,56 +1,38 @@
 <p align="center">
-  <img src="Sources/Teebe/Resources/teebe-logo.png" alt="teebe" width="180">
+  <a href="https://teebe.io"><img src="Sources/Teebe/Resources/teebe-logo.png" alt="teebe" width="128"></a>
 </p>
 
-# teebe
+<h1 align="center">teebe</h1>
 
-A native macOS **git worktree GUI**: browse every worktree of every repo and
-watch files change live, without touching the terminal.
-
-Gave up on your IDE and you're just vibecoding from the terminal? That's exactly
-who teebe is for. Your agents and your shell stay front and center; teebe is the
-window beside them that shows what they're touching, file by file, as it happens.
-
-When you run several AI coding agents (Claude Code, Codex, Cursor CLI, etc.) in
-parallel — one git worktree per agent session — **teebe** is the calm control
-room that shows you, across all your repos and worktrees, what files exist and
-what's changing. It does not replace your editor: it's the navigator that
-launches files into whatever native app you already use.
-
-Free and open source · macOS 14+ · Apple Silicon & Intel · auto-updates via
-Sparkle · [teebe.io](https://teebe.io)
+<p align="center"><strong>Git worktrees, without the IDE.</strong></p>
 
 <p align="center">
-  <img src="assets/teebe-overview.png" alt="teebe showing a worktree's files alongside an inline diff" width="760">
+  A native macOS git worktree GUI. Pick any worktree, including the ones Claude Code,<br>
+  Codex and Cursor create for each session, and watch the files inside it, live,<br>
+  as your agents edit them, with inline diffs right beside your terminal.
 </p>
-
-## What it is
-
-- **Worktree-aware browsing:** pick any worktree of any repo and explore its
-  full file tree; switch between trees instantly.
-- **Live as your agents work:** files badge and the tree updates the moment
-  something changes on disk, so you watch edits land in real time.
-- **Sneak-peek diffs:** select a changed file to peek its diff inline, in the
-  window, without opening it or switching apps.
-- **One Changes view:** everything modified in the current worktree gathered in
-  a single list, with ahead/behind counts for the branch.
-- **Every repo at once:** add multiple repos and see all their worktrees
-  together in one overview.
-- **Opens into your tools:** click a file and it launches in the native app you
-  already use. teebe is the navigator; your editor stays the editor.
 
 <p align="center">
-  <img src="assets/teebe-collapsed.png" alt="teebe collapsed to its WORKTREES, CHANGES and FILES sections" height="260">
-  &nbsp;&nbsp;
-  <img src="assets/teebe-worktrees.png" alt="the WORKTREES list expanded across a repo's branches" height="260">
+  <a href="https://github.com/klein-t/teebe/releases/latest"><img src="https://img.shields.io/github/v/release/klein-t/teebe?label=release&color=2ea77a" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License: GPL-3.0"></a>
+  <img src="https://img.shields.io/badge/macOS-14%2B-black" alt="macOS 14 or newer">
+  <img src="https://img.shields.io/badge/Apple%20Silicon%20%C2%B7%20Intel-universal-lightgrey" alt="Universal binary">
 </p>
 
-## What it is not
+<p align="center">
+  <a href="https://teebe.io">teebe.io</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#what-it-does">What it does</a> ·
+  <a href="#keyboard">Keyboard</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-- Not a code editor: content editing happens in your native apps, not here.
-- Not a full git client: no rebase, cherry-pick, or merge-conflict resolution.
-- Not cross-platform: macOS only.
-- Not an agent orchestrator: mapping agents to worktrees is a later integration.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/teebe-dark.png">
+    <img src="assets/teebe-light.png" alt="teebe beside a Quick Look diff: the WORKTREES, CHANGES and FILES sections of a worktree, with the selected change peeked open as a side-by-side diff" width="900">
+  </picture>
+</p>
 
 ## Install
 
@@ -61,8 +43,77 @@ curl -fsSL https://teebe.io/install.sh | bash
 Or grab the latest build directly: [**teebe.zip**](https://dl.teebe.io) or
 [**teebe.dmg**](https://dl.teebe.io/?kind=dmg) (both redirect to the current
 [release](https://github.com/klein-t/teebe/releases)). Unzip it and drag it into
-`/Applications`. On first launch, right-click the app and choose **Open** to get
-past Gatekeeper. The app keeps itself up to date via Sparkle.
+`/Applications`. If macOS asks on first launch, right-click the app and choose
+**Open**. From then on teebe keeps itself up to date via Sparkle.
+
+Free and open source · macOS 14 or newer · Apple Silicon and Intel.
+
+## Why
+
+Terminal agents are the fastest way to ship with AI. They are also a black box:
+the agent says "done", and you are left tabbing between `git status` and your
+editor to find out what "done" means across five worktrees.
+
+teebe fixes exactly that, and nothing else. Point it at your worktrees and each
+one gets a full file tree in a small native window beside your terminal: browse
+what is inside every worktree, watch files light up as agents edit them, and
+peek any diff with one keystroke. It does not run your agents, does not touch
+your code, and does not replace your tools.
+
+## What it does
+
+- **Worktree-aware browsing.** Pick any worktree of any repo and explore its
+  full file tree. Switch between trees instantly.
+- **Live as your agents work.** Files badge and the tree updates the moment
+  something changes on disk, so you watch edits land in real time.
+- **Diffs, one keystroke away.** Select a changed file and press Space to peek
+  its diff in a floating window, unified or side by side, without leaving teebe.
+- **One CHANGES view.** Everything modified in the current worktree, gathered in
+  a single list with ahead/behind counts for the branch.
+- **Every repo at once.** Add multiple repos and see all their worktrees together.
+- **Opens into your tools.** Press Return on a file and it launches in the native
+  app you already use. teebe is the navigator; your editor stays the editor.
+- **Claude-ready copies.** ⌘⇧C copies the selected files as `@`-refs, ready to
+  paste into a Claude Code prompt.
+- **Stays out of the way.** Pin the window on top, collapse any section, follow
+  the system appearance or force light/dark, and let it idle at near-zero CPU
+  when covered.
+
+## What it is not
+
+- Not a code editor: content editing happens in your native apps, not here.
+- Not a full git client: no rebase, cherry-pick, or merge-conflict resolution.
+- Not cross-platform: macOS only.
+- Not an agent orchestrator: mapping agents to worktrees is a later integration.
+
+## Keyboard
+
+teebe is built to be driven without the mouse. The essentials:
+
+| Keys | Action |
+| --- | --- |
+| `⌘1` `⌘2` `⌘3` | Focus WORKTREES / CHANGES / FILES (again to collapse) |
+| `↑` `↓` | Move the selection in the active section |
+| `←` `→` | Collapse / expand a folder |
+| `Space` | Peek a change's diff, or Quick Look a file |
+| `Return` | Open the file · switch to the worktree · open the change |
+| `⌘F` | Jump to file search |
+| `⌘⇧C` | Copy the selected files as `@`-refs |
+| `⌘,` | Settings |
+
+The full list lives in the app under **teebe → Keyboard Shortcuts**.
+
+## Working with repositories
+
+teebe is multi-repo and remembers whatever you had selected last.
+
+- **Add a repo:** click **+** in the WORKTREES header, or open the **···** menu
+  and choose **Add Repository…**, then pick the repo folder.
+- **Switch repos:** open the **···** menu and choose any repo you have added.
+- **Remove the current repo:** **···** menu → **Remove _name_**.
+
+State lives in `~/Library/Application Support/teebe/state.json`. teebe never
+writes into your repositories.
 
 ## Uninstall
 
@@ -80,35 +131,19 @@ defaults delete dev.teebe.app 2>/dev/null
 rm -rf ~/Library/Caches/dev.teebe.app
 ```
 
-teebe never touches your repositories themselves, so uninstalling only removes
-the app and its own state.
-
-## Build & test
+## Build from source
 
 ```sh
 swift build           # builds TeebeCore + the Teebe app
 swift test            # runs the Swift Testing suite (unit + git integration)
-swift run Teebe  # launches the app
+swift run Teebe       # launches the app
 ```
 
-Requires macOS 14+ and a Swift 6 toolchain (built in Swift 5 language mode). Git
-integration tests shell out to the system `git` against throwaway temp repos.
+Requires macOS 14 or newer and a Swift 6 toolchain (built in Swift 5 language
+mode). Git integration tests shell out to the system `git` against throwaway
+temp repos. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full setup.
 
-## Choosing a repository
-
-teebe is multi-repo. There's no hardcoded path; it simply reopens whatever you
-had selected last (state lives in
-`~/Library/Application Support/teebe/state.json`).
-
-- **Add a repo:** in the **WORKTREES** header, click **+**, or open the **···**
-  menu → **Add Repository…**, then pick the repo folder.
-- **Switch repos:** open the **···** menu and choose any repo you've added.
-- **Remove the current repo:** **···** menu → **Remove _name_**.
-
-If it keeps reopening the same repo, that's just the restored last selection;
-add or switch to another and it'll remember that one next launch.
-
-## Project layout
+### Project layout
 
 - `Sources/TeebeCore/` is the pure, UI-independent core: models, `GitClient`
   (+ `ProcessGitClient`), porcelain/diff/worktree/branch parsers, services,
@@ -117,22 +152,22 @@ add or switch to another and it'll remember that one next launch.
 - `Tests/` holds the Swift Testing suites (`TeebeCoreTests`, `TeebeTests`),
   protocol fakes, and a `GitFixture` real-git harness.
 
-## Why
+## Why it exists
 
-There's no open-source, Finder-like, **worktree-aware** file browser.
-Existing tools are either git clients centered on a single repo (Fork, Sublime
-Merge), terminal TUIs (lazygit), or agent-session managers (Crystal, Conductor).
-None give you a live, cross-worktree "mission control" of what your agents are
+There is no open-source, Finder-like, **worktree-aware** file browser. Existing
+tools are either git clients centered on a single repo (Fork, Sublime Merge),
+terminal TUIs (lazygit), or agent-session managers (Crystal, Conductor). None
+give you a live, cross-worktree "mission control" of what your agents are
 touching right now.
 
 ## License
 
-Teebe is **dual-licensed**:
+teebe is **dual-licensed**:
 
 - **GPL-3.0-or-later** for open-source use; see [`LICENSE`](LICENSE). You may use,
   modify, and redistribute it freely, but any distributed derivative must also be
   GPL with full source. You cannot build a closed-source product on top of it.
-- **Commercial license** for embedding Teebe in a proprietary product without the
+- **Commercial license** for embedding teebe in a proprietary product without the
   GPL's obligations, available from the author.
 
 See [`LICENSING.md`](LICENSING.md) for details and contact. Contributions are
