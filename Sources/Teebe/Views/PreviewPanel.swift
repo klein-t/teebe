@@ -24,6 +24,7 @@ struct PreviewPanel: View {
         .focusEffectDisabled()
         .focused($focused)
         .onAppear { focused = true }
+        .onDisappear { preview.close() }
         .onChange(of: preview.currentPath) { focused = true }
         // Space toggles the peek shut (Quick Look convention); Esc does too.
         .onKeyPress(.space) { close(); return .handled }
@@ -72,18 +73,23 @@ struct PreviewPanel: View {
     @ViewBuilder
     private var content: some View {
         switch preview.content {
+        case .loading:
+            ProgressView("Loading preview…")
+        case .tooLarge(let url):
+            VStack(spacing: 12) {
+                ContentUnavailableView("Too large to preview", systemImage: "doc.text",
+                    description: Text("Open this file in another app to view its full contents."))
+                Button("Open in default app") {
+                    app.open(FileNode(path: url.path, isDirectory: false))
+                }
+            }
+            .padding()
         case .empty:
             ContentUnavailableView("Select a file and press space", systemImage: "eye")
         case .diff(let file):
             DiffContentView(file: file, splitView: splitView)
         case .text(let text):
-            ScrollView {
-                Text(text)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-            }
+            PreviewTextView(text: text)
         case .quickLook(let url):
             VStack(spacing: 8) {
                 Image(systemName: "doc")

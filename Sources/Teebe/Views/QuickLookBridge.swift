@@ -75,7 +75,8 @@ final class QuickLookHostView: NSView, QLPreviewPanelDataSource, QLPreviewPanelD
     func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { urls.count }
 
     func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
-        urls[index] as NSURL
+        guard urls.indices.contains(index) else { return nil }
+        return urls[index] as NSURL
     }
 }
 

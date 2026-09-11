@@ -36,7 +36,11 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
         if let statusGate { await statusGate() }
         return statusResult
     }
-    func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? { workingDiffResult }
+    var workingDiffHandler: (@Sendable (String) async -> DiffFile?)?
+    func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? {
+        if let workingDiffHandler { return await workingDiffHandler(path) }
+        return workingDiffResult
+    }
     func stage(worktreePath: String, paths: [String]) async throws { stagedPaths.append(paths) }
     func unstage(worktreePath: String, paths: [String]) async throws { unstagedPaths.append(paths) }
     func discardWorking(worktreePath: String, paths: [String]) async throws { discardedWorking.append(paths) }
