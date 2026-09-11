@@ -234,15 +234,14 @@ struct FileContextMenu: View {
         if !node.isDirectory {
             Button("Quick Look") {
                 guard let wt = worktree.worktreePath else { return }
-                // Resolve content AND surface the floating preview window — the
-                // "preview" scene only appears via openWindow.
+                // Show the window before loading so a close during loading stays closed.
                 Task {
+                    openWindow(id: "preview")
                     if preview.isVisible {
                         await preview.update(for: node, worktreePath: wt)
                     } else {
                         await preview.toggle(for: node, worktreePath: wt)
                     }
-                    openWindow(id: "preview")
                 }
             }
         }

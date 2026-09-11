@@ -568,8 +568,9 @@ struct RootView: View {
         guard let wt = worktree.worktreePath, let change = selectedChange else { return }
         let node = FileNode(path: wt + "/" + change.path, isDirectory: false, change: change)
         Task {
-            await preview.toggle(for: node, worktreePath: wt)
             openWindow(id: "preview")
+            await preview.toggle(for: node, worktreePath: wt)
+            guard preview.isVisible else { return }
             await reclaimKeyFocus()
         }
     }

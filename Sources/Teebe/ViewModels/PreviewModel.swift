@@ -9,6 +9,8 @@ import TeebeCore
 final class PreviewModel {
     enum Content: Equatable {
         case empty
+        case loading
+        case tooLarge(URL)
         case diff(DiffFile)
         case text(String)
         case quickLook(URL)
@@ -19,48 +21,62 @@ final class PreviewModel {
     private(set) var currentPath: String?
 
     private let environment: AppEnvironment
+    private var requestID = UUID()
 
     init(environment: AppEnvironment) {
         self.environment = environment
     }
 
     /// Spacebar: toggle the panel. Opening resolves content for `node`.
-    func toggle(for node: FileNode?, worktreePath: String) async {
+    @discardableResult
+    func toggle(for node: FileNode?, worktreePath: String) async -> Bool {
         if isVisible {
             close()
-            return
+            return false
         }
-        guard let node, !node.isDirectory else { return }
-        await update(for: node, worktreePath: worktreePath)
+        guard let node, !node.isDirectory else { return false }
         isVisible = true
+        return await update(for: node, worktreePath: worktreePath)
     }
 
     /// Arrow keys while open: live-update the preview to a new selection.
-    func update(for node: FileNode, worktreePath: String) async {
-        guard !node.isDirectory else { return }
+    @discardableResult
+    func update(for node: FileNode, worktreePath: String) async -> Bool {
+        guard !node.isDirectory else { return false }
+        let request = UUID()
+        requestID = request
+        content = .loading
         currentPath = node.path
         let url = URL(fileURLWithPath: node.path)
 
+        let resolved: Content
         switch PreviewResolver.kind(forFileName: node.name, change: node.change) {
         case .diff:
             if let change = node.change,
                let diff = try? await environment.diffService.diff(for: change, worktreePath: worktreePath) {
-                content = .diff(diff)
+                resolved = PreviewLimits.canRender(diff) ? .diff(diff) : .tooLarge(url)
             } else {
-                content = .quickLook(url)
+                resolved = .quickLook(url)
             }
         case .text:
-            if let text = try? String(contentsOf: url, encoding: .utf8) {
-                content = .text(text)
-            } else {
-                content = .quickLook(url)
+            switch await Task.detached(priority: .userInitiated, operation: {
+                PreviewTextLoader.load(url)
+            }).value {
+            case .text(let text): resolved = .text(text)
+            case .tooLarge: resolved = .tooLarge(url)
+            case .unreadable: resolved = .quickLook(url)
             }
         case .quickLook:
-            content = .quickLook(url)
+            resolved = .quickLook(url)
         }
+        guard requestID == request else { return false }
+        guard !Task.isCancelled else { close(); return false }
+        content = resolved
+        return true
     }
 
     func close() {
+        requestID = UUID()
         isVisible = false
         content = .empty
         currentPath = nil
