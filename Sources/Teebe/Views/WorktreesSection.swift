@@ -6,6 +6,9 @@ import TeebeCore
 struct WorktreesSection: View {
     @Bindable var app: AppModel
     @Binding var isOpen: Bool
+    @State private var hoveredWorktreePath: String?
+    @State private var pendingRemoval: Worktree?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var selector: SelectorModel { app.selector }
 
@@ -78,6 +81,23 @@ struct WorktreesSection: View {
             }
         }
         .clipped()
+        .confirmationDialog(
+            "Remove worktree \"\(pendingRemoval?.branch ?? pendingRemoval?.name ?? "")\"?",
+            isPresented: Binding(
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove Worktree", role: .destructive) {
+                guard let worktree = pendingRemoval else { return }
+                pendingRemoval = nil
+                app.removeWorktree(worktree)
+            }
+            Button("Cancel", role: .cancel) { pendingRemoval = nil }
+        } message: {
+            Text("This removes the worktree folder from your Mac. The branch is kept.")
+        }
     }
 
     /// Tallest the worktree list hugs before it scrolls internally (repo row + ~6
@@ -134,6 +154,8 @@ struct WorktreesSection: View {
     private func worktreeRow(_ worktree: Worktree) -> some View {
         let info = selector.info(for: worktree)
         let isActive = selector.selectedWorktree?.path == worktree.path
+        let isHovered = hoveredWorktreePath == worktree.path
+        let showsRemoval = isHovered && !worktree.isPrimary && !worktree.isLocked
         // The keyboard cursor (only while WORKTREES is the active section): an outline,
         // distinct from the filled accent of the committed worktree. Enter commits it.
         let isHighlighted = app.activeSection == .worktrees && selector.highlightedWorktree?.path == worktree.path
@@ -154,10 +176,22 @@ struct WorktreesSection: View {
                     .monospacedDigit()
                     .foregroundStyle(isActive ? .white.opacity(0.85) : Palette.secondaryText)
             }
+            Button(role: .destructive) { pendingRemoval = worktree } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(IconButtonStyle(size: CGSize(width: 22, height: 24)))
+            .foregroundStyle(isActive ? .white.opacity(0.85) : Palette.secondaryText)
+            .help("Remove Worktree…")
+            .accessibilityLabel("Remove worktree \(worktree.branch ?? worktree.name)")
+            .opacity(showsRemoval ? 1 : 0)
+            .disabled(!showsRemoval)
+            .allowsHitTesting(showsRemoval)
+            .accessibilityHidden(!showsRemoval)
         }
-        .padding(.leading, 25).padding(.trailing, 11).frame(height: Self.rowHeight)
+        .padding(.leading, 25).padding(.trailing, 6).frame(height: Self.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isActive ? Palette.accent : .clear)
+        .background(isActive ? Palette.accent : Color.primary.opacity(isHovered ? 0.06 : 0))
         .foregroundStyle(isActive ? .white : .primary)
         .overlay {
             if isHighlighted, !isActive {
@@ -165,6 +199,14 @@ struct WorktreesSection: View {
             }
         }
         .animation(.easeInOut(duration: 0.18), value: isActive)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovered)
+        .onHover { hovering in
+            if hovering {
+                hoveredWorktreePath = worktree.path
+            } else if hoveredWorktreePath == worktree.path {
+                hoveredWorktreePath = nil
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             app.activeSection = .worktrees
@@ -175,7 +217,8 @@ struct WorktreesSection: View {
             Button("Open in Finder") { app.revealPath(worktree.path) }
             Button("Open in Terminal") { app.openTerminal(at: worktree.path) }
             if !worktree.isPrimary {
-                Button("Remove Worktree…", role: .destructive) { app.removeWorktree(worktree) }
+                Button("Remove Worktree…", role: .destructive) { pendingRemoval = worktree }
+                    .disabled(worktree.isLocked)
             }
         }
         .id(worktree.path)   // scroll-to target for keyboard highlight
