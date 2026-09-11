@@ -30,6 +30,7 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
 /// already a one-click toggle in the main window live here.
 struct SettingsView: View {
     @Bindable var app: AppModel
+    @ObservedObject var updater: UpdaterController
 
     var body: some View {
         Form {
@@ -39,6 +40,19 @@ struct SettingsView: View {
                 }
             }
             .pickerStyle(.segmented)
+
+            Section {
+                Toggle("Automatically check for updates", isOn: Binding(
+                    get: { updater.automaticallyChecksForUpdates },
+                    set: { updater.setAutomaticallyChecksForUpdates($0) }
+                ))
+                Button("Check for Updates…") { updater.checkForUpdates() }
+                    .disabled(!updater.canCheckForUpdates)
+            } header: {
+                Text("Updates")
+            } footer: {
+                Text("When off, teebe checks only when you choose Check for Updates.")
+            }
         }
         .formStyle(.grouped)
         .frame(width: 360)

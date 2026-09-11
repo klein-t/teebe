@@ -99,7 +99,7 @@ struct TeebeApp: App {
 
         // Adds "Settings…" (⌘,) to the app menu.
         Settings {
-            SettingsView(app: app)
+            SettingsView(app: app, updater: updater)
         }
     }
 }
