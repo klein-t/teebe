@@ -156,4 +156,31 @@ struct WorktreeCleanupTests {
         #expect(!entry.canRemove(includingIgnored: true))
     }
 
+    @Test("feature branches tracking the merge target are not the target checkout")
+    func sharedUpstream() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        fixture.git(["remote", "add", "origin", fixture.repoPath])
+        fixture.git(["update-ref", "refs/remotes/origin/dev", "HEAD"])
+        fixture.git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev"])
+        let feature = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.git(["branch", "--set-upstream-to=origin/dev", "feature"])
+        let dev = fixture.addWorktree(name: "dev", branch: "dev")
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        let snapshot = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
+        let entry = try #require(snapshot.entries.first { $0.worktree.branch == "feature" })
+        let targetEntry = try #require(snapshot.entries.first { $0.worktree.branch == "dev" })
+        #expect(entry.mergeStatus == .merged)
+        #expect(!entry.isTarget)
+        #expect(entry.canRemove(includingIgnored: false))
+        #expect(targetEntry.isTarget)
+        #expect(!targetEntry.canRemove(includingIgnored: true))
+        let target = try #require(snapshot.target)
+        try await service.remove(repoPath: fixture.repoPath, entry: entry, target: target, includingIgnored: false)
+        #expect(!FileManager.default.fileExists(atPath: feature.path))
+        #expect(FileManager.default.fileExists(atPath: dev.path))
+        #expect(!fixture.git(["rev-parse", "--verify", "feature"]).isEmpty)
+    }
+
 }

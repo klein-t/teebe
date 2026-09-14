@@ -120,7 +120,7 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         var entries: [CleanupEntry] = []
         for worktree in worktrees {
             try Task.checkCancellation()
-            entries.append(await inspect(worktree, target: target, catalog: catalog, commonDirectory: commonDirectory))
+            entries.append(await inspect(worktree, target: target, commonDirectory: commonDirectory))
         }
         return CleanupSnapshot(targets: catalog, target: target, entries: entries)
     }
@@ -136,7 +136,7 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         guard let current = worktrees.first(where: { $0.path == entry.id }),
               current.head == entry.worktree.head, current.branch == entry.worktree.branch else { throw CleanupError.changed }
         let commonDirectory = try await commonDirectory(in: repoPath)
-        let checked = await inspect(current, target: target, catalog: catalog, commonDirectory: commonDirectory)
+        let checked = await inspect(current, target: target, commonDirectory: commonDirectory)
         guard checked.worktree.head == entry.worktree.head else { throw CleanupError.changed }
         guard checked.canRemove(includingIgnored: includingIgnored) else { throw CleanupError.unsafe }
         try Task.checkCancellation()
@@ -144,15 +144,14 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
     }
 
     private func inspect(
-        _ worktree: Worktree, target: CleanupBranch?, catalog: CleanupTargets, commonDirectory: String
+        _ worktree: Worktree, target: CleanupBranch?, commonDirectory: String
     ) async -> CleanupEntry {
         var entry = CleanupEntry(worktree: worktree)
         let localRef = worktree.branch.map { "refs/heads/" + $0 }
         let remoteBranch = target?.ref.hasPrefix("refs/remotes/") == true
             ? target?.name.split(separator: "/", maxSplits: 1).last.map(String.init) : nil
         entry.isTarget = target != nil && (localRef == target?.ref
-            || (remoteBranch != nil && worktree.branch == remoteBranch)
-            || catalog.branches.contains { $0.ref == localRef && $0.upstream == target?.ref })
+            || (remoteBranch != nil && worktree.branch == remoteBranch))
         guard !worktree.isBare else { entry.problem = "Bare repository"; return entry }
         do {
             guard try await self.commonDirectory(in: worktree.path) == commonDirectory else { throw CleanupError.gitFailed }
