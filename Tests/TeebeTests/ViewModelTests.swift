@@ -6,6 +6,43 @@ import TeebeCore
 @MainActor
 @Suite("AppModel")
 struct AppModelTests {
+    @Test("startup deduplicates saved history, restores selection, and persists icon visibility")
+    func historyMigration() async throws {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/a", branch: "main", isPrimary: true)]
+        let env = makeTestEnvironment(git: git)
+        try env.store.save(AppState(repositories: [PersistedRepository(path: "/a"), PersistedRepository(path: "/b"),
+                                                  PersistedRepository(path: "/a/")], lastSelectedRepoPath: "/a/"))
+        let app = AppModel(environment: env)
+        await app.bootstrap()
+        #expect(app.repositories.count == 2)
+        #expect(app.selector.selectedRepo?.path == "/a")
+        #expect(app.recentRepositories.first?.path == "/a")
+        #expect(env.store.load().repositories.count == 2)
+        #expect(app.showMergeStatus)
+        app.showMergeStatus = false
+        app.floatOnTop = true
+        #expect(AppModel(environment: env).showMergeStatus == false)
+        await app.selector.selectRepo(Repository(path: "/b"))
+        #expect(app.recentRepositories.first?.path == "/b")
+        #expect(app.repositories.count == 2)
+    }
+
+    @Test("concurrent adds cannot append the same repository twice")
+    func concurrentAdd() async {
+        let gate = AddRepositoryGate()
+        let git = FakeGitClient()
+        git.beforeWorktrees = { await gate.enter() }
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+        let first = Task { await app.addRepository(path: "/repo") }
+        let second = Task { await app.addRepository(path: "/repo") }
+        while await gate.arrivals < 2 { await Task.yield() }
+        await gate.open()
+        let results = await [first.value, second.value]
+        #expect(results.filter { $0 }.count == 1)
+        #expect(app.repositories.map(\.path) == ["/repo"])
+    }
+
     @Test("adding a valid git repo records and persists it")
     func addRepo() async {
         let git = FakeGitClient()
@@ -100,6 +137,17 @@ struct AppModelTests {
 @MainActor
 @Suite("SelectorModel")
 struct SelectorModelTests {
+    @Test("target ref changes refresh merge icons but ordinary index writes do not")
+    func mergeRefEvents() async {
+        let selector = SelectorModel(environment: makeTestEnvironment())
+        await selector.selectRepo(Repository(path: "/repo"))
+        let revision = selector.mergeRevision
+        await selector.handleRepoWatchEvent(["/repo/.git/index"])
+        #expect(selector.mergeRevision == revision)
+        await selector.handleRepoWatchEvent(["/repo/.git/refs/remotes/origin/dev"])
+        #expect(selector.mergeRevision == revision + 1)
+    }
+
     @Test("selecting a repo loads worktrees + branches and focuses primary")
     func selectRepo() async {
         let git = FakeGitClient()
@@ -760,4 +808,11 @@ struct LastWindowClosedTests {
         #expect(!AppDelegate.hasVisibleWindow([(visible: false, isPanel: false), (visible: true, isPanel: true)]))
         #expect(!AppDelegate.hasVisibleWindow([]))
     }
+}
+
+private actor AddRepositoryGate {
+    private let gate = Gate()
+    private(set) var arrivals = 0
+    func enter() async { arrivals += 1; await gate.wait() }
+    func open() async { await gate.open() }
 }

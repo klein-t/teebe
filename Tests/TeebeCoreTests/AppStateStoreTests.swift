@@ -21,7 +21,8 @@ struct AppStateStoreTests {
             floatOnTop: true,
             lastSelectedRepoPath: "/a",
             appearance: "dark",
-            cleanupTargetByRepo: ["/a": "refs/remotes/origin/dev"]
+            cleanupTargetByRepo: ["/a": "refs/remotes/origin/dev"],
+            showMergeStatus: false
         )
         try store.save(state)
         #expect(store.load() == state)
@@ -45,6 +46,7 @@ struct AppStateStoreTests {
         let data = Data(#"{"repositories":[{"path":"/repo"}],"showChangedOnly":false,"showIgnored":false,"floatOnTop":true}"#.utf8)
         let decoded = try JSONDecoder().decode(AppState.self, from: data)
         #expect(decoded.cleanupTargetByRepo == nil)
+        #expect(decoded.showMergeStatus == nil)
         #expect(decoded.repositories.first?.path == "/repo")
         #expect(decoded.floatOnTop)
     }

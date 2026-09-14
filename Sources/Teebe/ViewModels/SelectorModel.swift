@@ -29,6 +29,7 @@ final class SelectorModel {
     private(set) var branches: [Branch] = []
     /// Sync/activity info keyed by worktree path.
     private(set) var worktreeInfo: [String: WorktreeInfo] = [:]
+    private(set) var mergeRevision = 0
     var errorMessage: String?
 
     let worktree: WorktreeModel
@@ -183,6 +184,10 @@ final class SelectorModel {
     /// without real FSEvents.
     func handleRepoWatchEvent(_ changedPaths: [String]) async {
         guard selectedRepo != nil, let adminDir = worktreesAdminDir else { return }
+        let commonDir = (adminDir as NSString).deletingLastPathComponent
+        if changedPaths.contains(where: { $0.hasPrefix(commonDir + "/refs/") || $0 == commonDir + "/packed-refs" }) {
+            mergeRevision += 1
+        }
         guard changedPaths.contains(where: { $0.hasPrefix(adminDir) }) else { return }
         await refreshWorktrees()
     }
@@ -238,6 +243,7 @@ final class SelectorModel {
         let agentStatuses = environment.agentStatuses
         let worktrees = self.worktrees
         let paths = worktrees.map(\.path)
+        mergeRevision += 1
         // One batched agent-log scan for the whole repo — the scanner needs every
         // worktree path to attribute a session to the worktree it runs in, not
         // the one it was launched from. Runs off-main alongside the git reads.

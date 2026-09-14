@@ -22,15 +22,30 @@ struct WorktreesSection: View {
                         .buttonStyle(IconButtonStyle()).foregroundStyle(Palette.secondaryText)
                         .help("Add Repository")
                         Menu {
-                            ForEach(app.repositories) { repo in
-                                Button(repo.name) { Task { await selector.selectRepo(repo) } }
+                            Button { app.presentAddRepositoryPanel() } label: {
+                                Label("Add Repository…", systemImage: "folder.badge.plus")
+                            }
+                            if let selected = selector.selectedRepo {
+                                Button { app.presentNewWorktreePanel() } label: {
+                                    Label("New Worktree…", systemImage: "plus.square.on.square")
+                                }
+                                Button { cleanupRepo = selected } label: {
+                                    Label("Clean up worktrees…", systemImage: "checkmark.circle")
+                                }
+                                Button(role: .destructive) { app.removeRepository(selected) } label: {
+                                    Label("Remove Project from List", systemImage: "folder.badge.minus")
+                                }
                             }
                             Divider()
-                            Button("Add Repository…") { app.presentAddRepositoryPanel() }
-                            if let selected = selector.selectedRepo {
-                                Button("New Worktree…") { app.presentNewWorktreePanel() }
-                                Button("Clean up worktrees…") { cleanupRepo = selected }
-                                Button("Remove \(selected.name)", role: .destructive) { app.removeRepository(selected) }
+                            Button {} label: {
+                                Label("Recent Projects", systemImage: "clock")
+                            }
+                            .disabled(true)
+                            ForEach(app.recentRepositories) { repo in
+                                Button { Task { await selector.selectRepo(repo) } } label: {
+                                    Label(app.repositoryTitle(repo), systemImage: selector.selectedRepo?.id == repo.id ? "checkmark" : "folder")
+                                }
+                                .help(repo.path)
                             }
                         } label: {
                             Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
@@ -81,6 +96,11 @@ struct WorktreesSection: View {
             }
         }
         .clipped()
+        .task(id: mergeRefreshKey) {
+            let repo = selector.selectedRepo
+            await app.mergeStatus.refresh(repo: repo, targetOverride: repo.flatMap { app.cleanupTarget(for: $0.path) },
+                                          enabled: app.showMergeStatus)
+        }
         .sheet(item: $cleanupRepo) { repo in
             WorktreeCleanupView(app: app, repo: repo)
         }
@@ -101,6 +121,18 @@ struct WorktreesSection: View {
         } message: {
             Text("This removes the worktree folder from your Mac. The branch is kept.")
         }
+    }
+
+    private struct MergeRefreshKey: Equatable {
+        let repoPath: String?
+        let enabled: Bool
+        let targetRevision: Int
+        let historyRevision: Int
+    }
+
+    private var mergeRefreshKey: MergeRefreshKey {
+        MergeRefreshKey(repoPath: selector.selectedRepo?.path, enabled: app.showMergeStatus,
+                        targetRevision: app.cleanupTargetRevision, historyRevision: selector.mergeRevision)
     }
 
     /// Tallest the worktree list hugs before it scrolls internally (repo row + ~6
@@ -154,6 +186,30 @@ struct WorktreesSection: View {
         .padding(.horizontal, 11).frame(height: Self.repoRowHeight)
     }
 
+    private func mergeIndicator(_ worktree: Worktree, isActive: Bool) -> some View {
+        let entry = app.mergeStatus.entry(for: worktree.path)
+        let status = entry?.mergeStatus ?? .unknown
+        let symbol = status == .merged ? "arrow.triangle.merge" : (status == .notConfirmed ? "circle.dotted" : "questionmark.circle")
+        return Image(systemName: symbol)
+            .font(.system(size: 11, weight: .medium)).frame(width: 15)
+            .foregroundStyle(isActive ? .white.opacity(0.85) : (status == .merged ? Palette.green : Palette.secondaryText))
+            .help(mergeDescription(entry))
+            .accessibilityLabel(mergeDescription(entry))
+    }
+
+    private func mergeDescription(_ entry: CleanupEntry?) -> String {
+        guard let entry else { return app.mergeStatus.isChecking ? "Checking merge status…" : "Merge status unavailable" }
+        guard let target = app.mergeStatus.snapshot?.target else { return "Choose a merge target in Clean up worktrees." }
+        switch entry.mergeStatus {
+        case .merged:
+            return "Commits included in \(target.name)." + (entry.hasLocalChanges ? " This folder still has local changes." : " This does not mean the folder is safe to remove.")
+        case .notConfirmed:
+            return "Merge into \(target.name) not confirmed. Squash merges may not be recognized."
+        case .unknown:
+            return entry.problem ?? "Merge status unavailable"
+        }
+    }
+
     private func worktreeRow(_ worktree: Worktree) -> some View {
         let info = selector.info(for: worktree)
         let isActive = selector.selectedWorktree?.path == worktree.path
@@ -175,6 +231,9 @@ struct WorktreesSection: View {
                     .monospacedDigit()
                     .foregroundStyle(isActive ? .white.opacity(0.85) : Palette.secondaryText)
                     .help("\(info.behind) commits behind, \(info.ahead) ahead of the tracked upstream branch. Uses locally available Git data.")
+            }
+            if app.showMergeStatus, !worktree.isPrimary {
+                mergeIndicator(worktree, isActive: isActive)
             }
         }
         .padding(.leading, 30).padding(.trailing, 11).frame(height: Self.rowHeight)
