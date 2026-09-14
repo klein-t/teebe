@@ -8,7 +8,6 @@ struct WorktreesSection: View {
     @Binding var isOpen: Bool
     @State private var hoveredWorktreePath: String?
     @State private var pendingRemoval: Worktree?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var selector: SelectorModel { app.selector }
 
@@ -191,7 +190,13 @@ struct WorktreesSection: View {
         }
         .padding(.leading, 25).padding(.trailing, 6).frame(height: Self.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isActive ? Palette.accent : Color.primary.opacity(isHovered ? 0.06 : 0))
+        .rowHighlight(isSelected: isActive) { hovering in
+            if hovering {
+                hoveredWorktreePath = worktree.path
+            } else if hoveredWorktreePath == worktree.path {
+                hoveredWorktreePath = nil
+            }
+        }
         .foregroundStyle(isActive ? .white : .primary)
         .overlay {
             if isHighlighted, !isActive {
@@ -199,14 +204,6 @@ struct WorktreesSection: View {
             }
         }
         .animation(.easeInOut(duration: 0.18), value: isActive)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovered)
-        .onHover { hovering in
-            if hovering {
-                hoveredWorktreePath = worktree.path
-            } else if hoveredWorktreePath == worktree.path {
-                hoveredWorktreePath = nil
-            }
-        }
         .contentShape(Rectangle())
         .onTapGesture {
             app.activeSection = .worktrees

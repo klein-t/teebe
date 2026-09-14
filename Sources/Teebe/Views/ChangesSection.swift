@@ -90,7 +90,7 @@ struct ChangesSection: View {
         // Leading 30 lines the icon up with the FILES rows' icon column below.
         .padding(.leading, indented ? 46 : 30).padding(.trailing, 11).frame(height: Self.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(selected ? Palette.accent : .clear)
+        .rowHighlight(isSelected: selected)
         .foregroundStyle(selected ? .white : .primary)
         // Snap, no cross-fade — avoids the trailing highlight when arrowing fast.
         .contentShape(Rectangle())
