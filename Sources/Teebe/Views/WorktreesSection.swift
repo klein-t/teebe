@@ -159,22 +159,6 @@ struct WorktreesSection: View {
         // distinct from the filled accent of the committed worktree. Enter commits it.
         let isHighlighted = app.activeSection == .worktrees && selector.highlightedWorktree?.path == worktree.path
         return HStack(spacing: 7) {
-            LiveDot(active: info.isLive, agent: info.agentState)
-            Image(systemName: "point.3.connected.trianglepath.dotted")
-                .font(.system(size: 11))
-                .foregroundStyle(isActive ? .white : Palette.secondaryText)
-            Text(worktree.branch ?? worktree.name)
-                .font(.system(size: 13, weight: .medium))
-                .lineLimit(1)
-            Spacer(minLength: 4)
-            // "↓0 ↑0" is pure noise — only show the sync arrows once there is
-            // something to pull or push.
-            if info.hasSync {
-                Text(info.syncText)
-                    .font(.system(size: 11))
-                    .monospacedDigit()
-                    .foregroundStyle(isActive ? .white.opacity(0.85) : Palette.secondaryText)
-            }
             Button(role: .destructive) { pendingRemoval = worktree } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 11))
@@ -187,8 +171,22 @@ struct WorktreesSection: View {
             .disabled(!showsRemoval)
             .allowsHitTesting(showsRemoval)
             .accessibilityHidden(!showsRemoval)
+            LiveDot(active: info.isLive, agent: info.agentState)
+            Text(worktree.branch ?? worktree.name)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            // "↓0 ↑0" is pure noise — only show the sync arrows once there is
+            // something to pull or push.
+            if info.hasSync {
+                Text(info.syncText)
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundStyle(isActive ? .white.opacity(0.85) : Palette.secondaryText)
+                    .help("\(info.behind) commits behind, \(info.ahead) ahead of the tracked upstream branch. Uses locally available Git data.")
+            }
         }
-        .padding(.leading, 25).padding(.trailing, 6).frame(height: Self.rowHeight)
+        .padding(.leading, 4).padding(.trailing, 11).frame(height: Self.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .rowHighlight(isSelected: isActive) { hovering in
             if hovering {
