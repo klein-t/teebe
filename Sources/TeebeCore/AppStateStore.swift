@@ -52,6 +52,8 @@ public struct AppState: Codable, Equatable, Sendable {
     /// Appearance override: "light", "dark", or nil to follow the system. Optional so
     /// older state files decode.
     public var appearance: String?
+    /// Saved comparison refs by repository. Missing entries use automatic detection.
+    public var cleanupTargetByRepo: [String: String]?
 
     public init(
         repositories: [PersistedRepository] = [],
@@ -63,7 +65,8 @@ public struct AppState: Codable, Equatable, Sendable {
         layoutByRepo: [String: SectionLayout]? = nil,
         lastSeenVersion: String? = nil,
         hookOfferResponse: String? = nil,
-        appearance: String? = nil
+        appearance: String? = nil,
+        cleanupTargetByRepo: [String: String]? = nil
     ) {
         self.repositories = repositories
         self.showChangedOnly = showChangedOnly
@@ -75,6 +78,7 @@ public struct AppState: Codable, Equatable, Sendable {
         self.lastSeenVersion = lastSeenVersion
         self.hookOfferResponse = hookOfferResponse
         self.appearance = appearance
+        self.cleanupTargetByRepo = cleanupTargetByRepo
     }
 }
 

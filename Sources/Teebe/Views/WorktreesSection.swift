@@ -6,7 +6,7 @@ import TeebeCore
 struct WorktreesSection: View {
     @Bindable var app: AppModel
     @Binding var isOpen: Bool
-    @State private var hoveredWorktreePath: String?
+    @State private var cleanupRepo: Repository?
     @State private var pendingRemoval: Worktree?
 
     private var selector: SelectorModel { app.selector }
@@ -29,6 +29,7 @@ struct WorktreesSection: View {
                             Button("Add Repository…") { app.presentAddRepositoryPanel() }
                             if let selected = selector.selectedRepo {
                                 Button("New Worktree…") { app.presentNewWorktreePanel() }
+                                Button("Clean up worktrees…") { cleanupRepo = selected }
                                 Button("Remove \(selected.name)", role: .destructive) { app.removeRepository(selected) }
                             }
                         } label: {
@@ -80,6 +81,9 @@ struct WorktreesSection: View {
             }
         }
         .clipped()
+        .sheet(item: $cleanupRepo) { repo in
+            WorktreeCleanupView(app: app, repo: repo)
+        }
         .confirmationDialog(
             "Remove worktree \"\(pendingRemoval?.branch ?? pendingRemoval?.name ?? "")\"?",
             isPresented: Binding(
@@ -153,25 +157,12 @@ struct WorktreesSection: View {
     private func worktreeRow(_ worktree: Worktree) -> some View {
         let info = selector.info(for: worktree)
         let isActive = selector.selectedWorktree?.path == worktree.path
-        let isHovered = hoveredWorktreePath == worktree.path
-        let showsRemoval = isHovered && !worktree.isPrimary && !worktree.isLocked
         // The keyboard cursor (only while WORKTREES is the active section): an outline,
         // distinct from the filled accent of the committed worktree. Enter commits it.
         let isHighlighted = app.activeSection == .worktrees && selector.highlightedWorktree?.path == worktree.path
         return HStack(spacing: 7) {
-            Button(role: .destructive) { pendingRemoval = worktree } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11))
-            }
-            .buttonStyle(IconButtonStyle(size: CGSize(width: 22, height: 24)))
-            .foregroundStyle(isActive ? .white.opacity(0.85) : Palette.secondaryText)
-            .help("Remove Worktree…")
-            .accessibilityLabel("Remove worktree \(worktree.branch ?? worktree.name)")
-            .opacity(showsRemoval ? 1 : 0)
-            .disabled(!showsRemoval)
-            .allowsHitTesting(showsRemoval)
-            .accessibilityHidden(!showsRemoval)
             LiveDot(active: info.isLive, agent: info.agentState)
+                .frame(width: 11) // Align the label with the Changes list's icon column.
             Text(worktree.branch ?? worktree.name)
                 .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
@@ -186,15 +177,9 @@ struct WorktreesSection: View {
                     .help("\(info.behind) commits behind, \(info.ahead) ahead of the tracked upstream branch. Uses locally available Git data.")
             }
         }
-        .padding(.leading, 4).padding(.trailing, 11).frame(height: Self.rowHeight)
+        .padding(.leading, 30).padding(.trailing, 11).frame(height: Self.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .rowHighlight(isSelected: isActive) { hovering in
-            if hovering {
-                hoveredWorktreePath = worktree.path
-            } else if hoveredWorktreePath == worktree.path {
-                hoveredWorktreePath = nil
-            }
-        }
+        .rowHighlight(isSelected: isActive)
         .foregroundStyle(isActive ? .white : .primary)
         .overlay {
             if isHighlighted, !isActive {

@@ -4,7 +4,6 @@ import SwiftUI
 /// only the hover layer animates so keyboard selection never leaves a fade trail.
 private struct RowHighlightModifier: ViewModifier {
     let isSelected: Bool
-    var onHoverChange: (Bool) -> Void
     @State private var isHovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -20,17 +19,15 @@ private struct RowHighlightModifier: ViewModifier {
             .contentShape(Rectangle())
             .onHover { hovering in
                 isHovered = hovering
-                onHoverChange(hovering)
             }
             .onDisappear {
                 isHovered = false
-                onHoverChange(false)
             }
     }
 }
 
 extension View {
-    func rowHighlight(isSelected: Bool, onHoverChange: @escaping (Bool) -> Void = { _ in }) -> some View {
-        modifier(RowHighlightModifier(isSelected: isSelected, onHoverChange: onHoverChange))
+    func rowHighlight(isSelected: Bool) -> some View {
+        modifier(RowHighlightModifier(isSelected: isSelected))
     }
 }

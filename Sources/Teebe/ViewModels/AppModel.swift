@@ -303,6 +303,17 @@ final class AppModel {
         }
     }
 
+    func cleanupTarget(for repoPath: String) -> String? {
+        state.cleanupTargetByRepo?[repoPath]
+    }
+
+    func setCleanupTarget(_ ref: String?, for repoPath: String) {
+        var targets = state.cleanupTargetByRepo ?? [:]
+        targets[repoPath] = ref
+        state.cleanupTargetByRepo = targets
+        do { try environment.store.save(state) } catch { setError("Couldn't save the cleanup comparison branch.") }
+    }
+
     func removeWorktree(_ worktree: Worktree) {
         guard let repo = selector.selectedRepo else { return }
         Task {
