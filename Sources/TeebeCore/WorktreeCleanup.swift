@@ -54,6 +54,7 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
     public var isBroken = false
     public var hasLocalChanges = false
     public var hasIgnoredFiles = false
+    public var ignoredPaths: [String] = []
     public var hasSubmodules = false
     public var hasUncheckedFiles = false
     public var isTarget = false
@@ -183,7 +184,8 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
                 "status", "--porcelain=v2", "-z", "--untracked-files=normal", "--ignored=matching", "--ignore-submodules=none"
             ], in: worktree.path)
             let changes = StatusParser.parse(status.stdoutString).changes
-            entry.hasIgnoredFiles = changes.contains { $0.worktreeStatus == .ignored }
+            entry.ignoredPaths = changes.filter { $0.worktreeStatus == .ignored }.map(\.path).sorted()
+            entry.hasIgnoredFiles = !entry.ignoredPaths.isEmpty
             entry.hasLocalChanges = changes.contains { $0.worktreeStatus != .ignored }
             let index = try await checked(["ls-files", "--stage", "-v", "-z"], in: worktree.path)
             let indexedFiles = index.stdoutString.split(separator: "\u{0}")

@@ -62,6 +62,7 @@ struct WorktreeCleanupTests {
         let second = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
         let ignored = try #require(second.entries.first { !$0.worktree.isPrimary })
         #expect(ignored.hasIgnoredFiles)
+        #expect(ignored.ignoredPaths == ["cache/"])
         #expect(!ignored.canRemove(includingIgnored: false))
         #expect(ignored.canRemove(includingIgnored: true))
         await #expect(throws: (any Error).self) {

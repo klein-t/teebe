@@ -16,6 +16,7 @@ struct WorktreeStatusButton: View {
         switch presentation.tone {
         case .merged: return Palette.green
         case .attention: return .orange
+        case .error: return .red
         case .secondary: return Palette.secondaryText
         }
     }
@@ -41,6 +42,7 @@ struct WorktreeStatusButton: View {
         .popover(isPresented: $isPresented, arrowEdge: .trailing) {
             VStack(alignment: .leading, spacing: 7) {
                 Text(presentation.title).font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(presentation.tone == .error ? Color.red : Color.primary)
                 ForEach(presentation.details, id: \.self) { detail in
                     Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
                 }
@@ -93,7 +95,7 @@ struct GitStatusGlyph: View {
             }
         case .merge: Image(systemName: "checkmark.circle").font(.system(size: 13, weight: .medium))
         case .edit: Image(systemName: "square.and.pencil").font(.system(size: 13, weight: .medium))
-        case .ignored: Image(systemName: "archivebox").font(.system(size: 13))
+        case .ignored: Image(systemName: "eye.slash").font(.system(size: 13))
         case .unknown: Image(systemName: "questionmark.circle").font(.system(size: 12))
         case .warning: Image(systemName: "exclamationmark.triangle").font(.system(size: 12))
         case .checking: Image(systemName: "clock").font(.system(size: 12))
