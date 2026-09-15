@@ -104,7 +104,7 @@ struct WorktreeCleanupView: View {
                     }
                     if !unconfirmed.isEmpty {
                         groupHeader("Merge not confirmed", canSelect: false)
-                            .help("Neither commit history nor matching changed files confirmed inclusion. Later edits in the target can leave a squash merge unconfirmed.")
+                            .help("The current worktree commits have not been confirmed in the chosen target or its checked history.")
                         ForEach(unconfirmed) { cleanupRow($0) }
                     }
                 }

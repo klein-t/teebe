@@ -5,6 +5,7 @@ struct WorktreeStatusButton: View {
     let presentation: MergeIndicatorPresentation
     var isSelected = false
     var isChecking = false
+    var informationOnly = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var anchorHovered = false
     @State private var popoverHovered = false
@@ -23,7 +24,11 @@ struct WorktreeStatusButton: View {
 
     var body: some View {
         Button { hoverTask?.cancel(); isPresented.toggle() } label: {
-            GitStatusGlyph(symbol: presentation.symbol)
+            Group {
+                if informationOnly { Image(systemName: "info.circle").font(.system(size: 12)) } else {
+                    GitStatusGlyph(symbol: presentation.symbol)
+                }
+            }
                 .frame(width: 15, height: 16)
                 .foregroundStyle(tint)
                 .frame(width: 25, height: 24)
@@ -77,21 +82,26 @@ struct GitStatusGlyph: View {
         switch symbol {
         case .branch:
             Canvas { context, size in
-                let scale = min(size.width / 16, size.height / 16)
-                context.scaleBy(x: scale, y: scale)
+                context.scaleBy(x: size.width / 16, y: size.height / 16)
                 var lines = Path()
-                lines.move(to: CGPoint(x: 4, y: 5))
-                lines.addLine(to: CGPoint(x: 4, y: 11))
-                lines.move(to: CGPoint(x: 4, y: 10))
-                lines.addCurve(to: CGPoint(x: 12, y: 5),
-                               control1: CGPoint(x: 12, y: 10), control2: CGPoint(x: 12, y: 8))
-                context.stroke(lines, with: .foreground, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                lines.move(to: CGPoint(x: 4, y: 11))
+                lines.addLine(to: CGPoint(x: 4, y: 2))
+                lines.move(to: CGPoint(x: 1, y: 5))
+                lines.addLines([CGPoint(x: 4, y: 2), CGPoint(x: 7, y: 5)])
+                lines.move(to: CGPoint(x: 12, y: 5))
+                lines.addLine(to: CGPoint(x: 12, y: 14))
+                lines.move(to: CGPoint(x: 9, y: 11))
+                lines.addLines([CGPoint(x: 12, y: 14), CGPoint(x: 15, y: 11)])
+                context.stroke(lines, with: .foreground, style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
                 var nodes = Path()
-                for point in [CGPoint(x: 4, y: 3), CGPoint(x: 4, y: 13),
-                              CGPoint(x: 12, y: 3)] {
-                    nodes.addEllipse(in: CGRect(x: point.x - 2, y: point.y - 2, width: 4, height: 4))
-                }
-                context.stroke(nodes, with: .foreground, lineWidth: 1.5)
+                nodes.addEllipse(in: CGRect(x: 2, y: 11, width: 4, height: 4))
+                nodes.addEllipse(in: CGRect(x: 10, y: 1, width: 4, height: 4))
+                context.stroke(nodes, with: .foreground, lineWidth: 1.3)
+            }
+        case .broken:
+            ZStack {
+                Image(systemName: "folder").font(.system(size: 14))
+                Image(systemName: "xmark").font(.system(size: 6, weight: .bold)).offset(y: 2)
             }
         case .merge: Image(systemName: "checkmark.circle").font(.system(size: 13, weight: .medium))
         case .edit: Image(systemName: "square.and.pencil").font(.system(size: 13, weight: .medium))

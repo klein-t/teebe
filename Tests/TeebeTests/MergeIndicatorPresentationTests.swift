@@ -50,7 +50,7 @@ struct MergeIndicatorPresentationTests {
         var entry = CleanupEntry(worktree: Worktree(path: "/feature"))
         entry.isBroken = true
         entry.problem = "Broken worktree: its .git link is missing. Remaining files were not changed."
-        #expect(presentation(entry).symbol == .warning)
+        #expect(presentation(entry).symbol == .broken)
         #expect(presentation(entry).tone == .error)
         #expect(presentation(entry).details[0].contains("no longer connected to Git"))
         entry.isBroken = false
@@ -58,7 +58,7 @@ struct MergeIndicatorPresentationTests {
         #expect(presentation(entry).symbol == .unknown)
         entry.mergeStatus = .merged
         entry.hasEquivalentContent = true
-        #expect(presentation(entry).title == "Changes already in dev")
+        #expect(presentation(entry).title == "Changes included in dev")
     }
 
     @Test("multiple conditions remain short without dropping reasons")

@@ -28,7 +28,7 @@ struct GitContentInclusionTests {
         #expect(try await !check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
     }
 
-    @Test("partial content and conflicting later edits never count as included")
+    @Test("partial content is unconfirmed but later target edits preserve inclusion")
     func partialAndRewritten() async throws {
         let fixture = try GitFixture()
         defer { fixture.cleanup() }
@@ -44,7 +44,7 @@ struct GitContentInclusionTests {
         fixture.commitFile("two.txt", "two")
         #expect(try await check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
         fixture.commitFile("two.txt", "rewritten")
-        #expect(try await !check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
+        #expect(try await check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
     }
 
     @Test("renames, deletions, binary files, unusual names and modes are checked exactly")
@@ -67,6 +67,57 @@ struct GitContentInclusionTests {
         #expect(try await check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
         fixture.git(["update-index", "--chmod=-x", "script.sh"])
         fixture.commit("different mode")
+        #expect(try await check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
+    }
+
+    @Test("target footer edits preserve a squash merge; new worktree edits and commits block cleanup")
+    func laterFooterChanges() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("page.txt", "header\nfooter\n")
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.writeFile("page.txt", "header\nsearch button\nfooter\n", in: folder)
+        fixture.stage(in: folder)
+        fixture.commit("search button", in: folder)
+        fixture.git(["merge", "--squash", "feature"])
+        fixture.commit("squash")
+        fixture.commitFile("page.txt", "header\nsearch button\nnew footer\n")
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        let included = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
+        let entry = try #require(included.entries.first { !$0.worktree.isPrimary })
+        #expect(entry.mergeStatus == .merged)
+        #expect(entry.hasEquivalentContent)
+        #expect(entry.canRemove(includingIgnored: false))
+        fixture.writeFile("page.txt", "header\nsearch button\nworktree footer\n", in: folder)
+        let edited = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
+        #expect(edited.entries.first { !$0.worktree.isPrimary }?.canRemove(includingIgnored: false) == false)
+        fixture.stage(in: folder)
+        fixture.commit("new worktree footer", in: folder)
+        let advanced = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
+        #expect(advanced.entries.first { !$0.worktree.isPrimary }?.mergeStatus == .notConfirmed)
+        let target = try #require(included.target)
+        await #expect(throws: (any Error).self) {
+            try await service.remove(repoPath: fixture.repoPath, entry: entry, target: target, includingIgnored: false)
+        }
+    }
+
+    @Test("historical file matches must coexist in one target revision")
+    func noMixedHistoricalSnapshots() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("one.txt", "base one")
+        fixture.commitFile("two.txt", "base two")
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.writeFile("one.txt", "new one", in: folder)
+        fixture.writeFile("two.txt", "new two", in: folder)
+        fixture.stage(in: folder)
+        fixture.commit("both changes", in: folder)
+        fixture.commitFile("one.txt", "new one")
+        fixture.writeFile("one.txt", "base one")
+        fixture.writeFile("two.txt", "new two")
+        fixture.stage()
+        fixture.commit("replace one change with the other")
+        let check = GitContentInclusion(git: ProcessGitClient())
         #expect(try await !check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
     }
 

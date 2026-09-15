@@ -16,17 +16,23 @@ public struct SectionLayout: Codable, Equatable, Sendable {
     public var changesOpen: Bool
     public var filesOpen: Bool
     public var windowHeight: Double
+    public var worktreesHeight: Double?
+    public var collapsedWorktreeGroups: [String]?
 
     public init(
         worktreesOpen: Bool = true,
         changesOpen: Bool = true,
         filesOpen: Bool = true,
-        windowHeight: Double = 640
+        windowHeight: Double = 640,
+        worktreesHeight: Double? = nil,
+        collapsedWorktreeGroups: [String]? = nil
     ) {
         self.worktreesOpen = worktreesOpen
         self.changesOpen = changesOpen
         self.filesOpen = filesOpen
         self.windowHeight = windowHeight
+        self.worktreesHeight = worktreesHeight
+        self.collapsedWorktreeGroups = collapsedWorktreeGroups
     }
 }
 

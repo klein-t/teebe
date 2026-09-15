@@ -1,7 +1,7 @@
 import TeebeCore
 
 struct MergeIndicatorPresentation {
-    enum Symbol { case branch, merge, edit, ignored, unknown, warning, checking }
+    enum Symbol { case branch, merge, edit, ignored, unknown, warning, broken, checking }
     enum Tone { case merged, attention, error, secondary }
     let symbol: Symbol
     let tone: Tone
@@ -22,13 +22,13 @@ struct MergeIndicatorPresentation {
                 ? "This folder is no longer connected to Git: its .git link is missing."
                 : (entry.problem?.contains("folder is missing") == true
                    ? "The worktree folder no longer exists." : "Git cannot access this checkout.")
-            self.init(symbol: .warning, tone: .error, title: "Broken worktree", details: [reason])
+            self.init(symbol: .broken, tone: .error, title: "Broken worktree", details: [reason])
             return
         }
         let local = Self.localDetails(entry)
         guard let targetName else {
             self.init(symbol: .unknown, hasLocalFiles: !local.isEmpty, title: "Choose a comparison branch",
-                      details: ["Select the branch to compare against in Clean up worktrees."] + local)
+                      details: ["Select the branch to compare against above the worktree list."] + local)
             return
         }
         if !local.isEmpty, entry.mergeStatus != .unknown {
@@ -38,7 +38,7 @@ struct MergeIndicatorPresentation {
                 : (entry.hasUncheckedFiles ? "Some edits may be hidden"
                    : (entry.hasSubmodules ? "Nested Git repository" : "Files ignored by Git"))
             let merge = entry.mergeStatus == .merged
-                ? (entry.hasEquivalentContent ? "Changed files match \(targetName)." : "Commits are already in \(targetName).")
+                ? (entry.hasEquivalentContent ? "Changes were included in \(targetName)." : "Commits are already in \(targetName).")
                 : "Merge into \(targetName) not confirmed."
             self.init(symbol: symbol, tone: symbol == .ignored ? .secondary : .attention,
                       hasLocalFiles: true, title: title, details: local + [merge])
@@ -47,7 +47,7 @@ struct MergeIndicatorPresentation {
         switch entry.mergeStatus {
         case .merged:
             self.init(symbol: .merge, tone: .merged,
-                      title: entry.hasEquivalentContent ? "Changes already in \(targetName)" : "Merged into \(targetName)",
+                      title: entry.hasEquivalentContent ? "Changes included in \(targetName)" : "Merged into \(targetName)",
                       details: ["No uncommitted or ignored files found."])
         case .notConfirmed:
             self.init(symbol: .branch, title: "Merge not confirmed",

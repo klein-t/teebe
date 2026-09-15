@@ -416,10 +416,11 @@ final class SelectorModel {
     func highlightSelectedWorktree() { highlightedWorktree = selectedWorktree }
 
     /// Move the keyboard cursor one row (no switch — that happens on commit).
-    func moveWorktreeHighlight(by delta: Int) {
+    func moveWorktreeHighlight(by delta: Int, in visibleRows: [Worktree]? = nil) {
+        let worktrees = visibleRows ?? self.worktrees
         guard !worktrees.isEmpty else { return }
         let base = highlightedWorktree ?? selectedWorktree
-        let index = base.flatMap { b in worktrees.firstIndex { $0.path == b.path } } ?? 0
+        let index = base.flatMap { b in worktrees.firstIndex { $0.path == b.path } } ?? (delta > 0 ? -1 : worktrees.count)
         let next = max(0, min(worktrees.count - 1, index + delta))
         highlightedWorktree = worktrees[next]
     }

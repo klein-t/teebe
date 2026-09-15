@@ -119,6 +119,22 @@ struct WorktreeMergeModelTests {
         await refresh.value
     }
 
+    @Test("switching comparison branch cannot show a late result for the previous target")
+    func targetSwitch() async {
+        let service = MergeScanStub()
+        let gate = Gate()
+        await service.hold(gate)
+        let model = WorktreeMergeModel(service: service)
+        let repo = Repository(path: "/repo")
+        let old = Task { await model.refresh(repo: repo, targetOverride: "refs/heads/main", enabled: true) }
+        while await service.calls == 0 { await Task.yield() }
+        await model.refresh(repo: repo, targetOverride: "refs/heads/dev", enabled: true)
+        await gate.open()
+        await old.value
+        #expect(model.snapshot?.target?.ref == "refs/heads/dev")
+        #expect(!model.isChecking)
+    }
+
     @Test("active file status updates one row without scanning or masking new commits")
     func localOverlay() async {
         let service = MergeScanStub()
