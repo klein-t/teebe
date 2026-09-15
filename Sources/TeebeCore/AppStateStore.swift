@@ -16,17 +16,23 @@ public struct SectionLayout: Codable, Equatable, Sendable {
     public var changesOpen: Bool
     public var filesOpen: Bool
     public var windowHeight: Double
+    public var worktreesHeight: Double?
+    public var collapsedWorktreeGroups: [String]?
 
     public init(
         worktreesOpen: Bool = true,
         changesOpen: Bool = true,
         filesOpen: Bool = true,
-        windowHeight: Double = 640
+        windowHeight: Double = 640,
+        worktreesHeight: Double? = nil,
+        collapsedWorktreeGroups: [String]? = nil
     ) {
         self.worktreesOpen = worktreesOpen
         self.changesOpen = changesOpen
         self.filesOpen = filesOpen
         self.windowHeight = windowHeight
+        self.worktreesHeight = worktreesHeight
+        self.collapsedWorktreeGroups = collapsedWorktreeGroups
     }
 }
 
@@ -52,6 +58,9 @@ public struct AppState: Codable, Equatable, Sendable {
     /// Appearance override: "light", "dark", or nil to follow the system. Optional so
     /// older state files decode.
     public var appearance: String?
+    /// Saved comparison refs by repository. Missing entries use automatic detection.
+    public var cleanupTargetByRepo: [String: String]?
+    public var showMergeStatus: Bool?
 
     public init(
         repositories: [PersistedRepository] = [],
@@ -63,7 +72,9 @@ public struct AppState: Codable, Equatable, Sendable {
         layoutByRepo: [String: SectionLayout]? = nil,
         lastSeenVersion: String? = nil,
         hookOfferResponse: String? = nil,
-        appearance: String? = nil
+        appearance: String? = nil,
+        cleanupTargetByRepo: [String: String]? = nil,
+        showMergeStatus: Bool? = nil
     ) {
         self.repositories = repositories
         self.showChangedOnly = showChangedOnly
@@ -75,6 +86,8 @@ public struct AppState: Codable, Equatable, Sendable {
         self.lastSeenVersion = lastSeenVersion
         self.hookOfferResponse = hookOfferResponse
         self.appearance = appearance
+        self.cleanupTargetByRepo = cleanupTargetByRepo
+        self.showMergeStatus = showMergeStatus
     }
 }
 

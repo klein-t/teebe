@@ -170,7 +170,7 @@ struct FileRow: View {
         .padding(.leading, CGFloat(row.depth) * 16 + 11).padding(.trailing, 11)
         .frame(height: 24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? Palette.accent : .clear)
+        .rowHighlight(isSelected: isSelected)
         .foregroundStyle(isSelected ? .white : .primary)
         // No fade on selection: a 0.18s cross-fade leaves a visible trail of
         // half-lit rows when arrowing fast. The cursor snaps, like native file lists.

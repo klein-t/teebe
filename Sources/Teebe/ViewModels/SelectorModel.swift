@@ -29,6 +29,7 @@ final class SelectorModel {
     private(set) var branches: [Branch] = []
     /// Sync/activity info keyed by worktree path.
     private(set) var worktreeInfo: [String: WorktreeInfo] = [:]
+    private(set) var mergeRevision = 0
     var errorMessage: String?
 
     let worktree: WorktreeModel
@@ -75,7 +76,10 @@ final class SelectorModel {
         self.worktree = WorktreeModel(environment: environment)
         // An external write to the active worktree should re-light its live dot
         // immediately, without waiting for a manual refresh.
-        self.worktree.onActivity = { [weak self] _ in self?.refreshLiveState() }
+        self.worktree.onActivity = { [weak self] _ in
+            self?.refreshLiveState()
+            self?.mergeRevision += 1
+        }
     }
 
     /// Recompute only the cheap `isLive` flags from the activity monitor (no git),
@@ -183,6 +187,10 @@ final class SelectorModel {
     /// without real FSEvents.
     func handleRepoWatchEvent(_ changedPaths: [String]) async {
         guard selectedRepo != nil, let adminDir = worktreesAdminDir else { return }
+        let commonDir = (adminDir as NSString).deletingLastPathComponent
+        if changedPaths.contains(where: { $0.hasPrefix(commonDir + "/refs/") || $0 == commonDir + "/packed-refs" }) {
+            mergeRevision += 1
+        }
         guard changedPaths.contains(where: { $0.hasPrefix(adminDir) }) else { return }
         await refreshWorktrees()
     }
@@ -238,6 +246,7 @@ final class SelectorModel {
         let agentStatuses = environment.agentStatuses
         let worktrees = self.worktrees
         let paths = worktrees.map(\.path)
+        mergeRevision += 1
         // One batched agent-log scan for the whole repo — the scanner needs every
         // worktree path to attribute a session to the worktree it runs in, not
         // the one it was launched from. Runs off-main alongside the git reads.
@@ -274,6 +283,8 @@ final class SelectorModel {
         notifyAgentTransitions(from: worktreeInfo, to: info)
         worktreeInfo = info
     }
+
+    func invalidateMergeStatus() { mergeRevision += 1 }
 
     func info(for worktree: Worktree) -> WorktreeInfo {
         worktreeInfo[worktree.path] ?? WorktreeInfo()
@@ -405,10 +416,11 @@ final class SelectorModel {
     func highlightSelectedWorktree() { highlightedWorktree = selectedWorktree }
 
     /// Move the keyboard cursor one row (no switch — that happens on commit).
-    func moveWorktreeHighlight(by delta: Int) {
+    func moveWorktreeHighlight(by delta: Int, in visibleRows: [Worktree]? = nil) {
+        let worktrees = visibleRows ?? self.worktrees
         guard !worktrees.isEmpty else { return }
         let base = highlightedWorktree ?? selectedWorktree
-        let index = base.flatMap { b in worktrees.firstIndex { $0.path == b.path } } ?? 0
+        let index = base.flatMap { b in worktrees.firstIndex { $0.path == b.path } } ?? (delta > 0 ? -1 : worktrees.count)
         let next = max(0, min(worktrees.count - 1, index + delta))
         highlightedWorktree = worktrees[next]
     }

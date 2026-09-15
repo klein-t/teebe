@@ -20,7 +20,9 @@ struct AppStateStoreTests {
             showChangedOnly: true,
             floatOnTop: true,
             lastSelectedRepoPath: "/a",
-            appearance: "dark"
+            appearance: "dark",
+            cleanupTargetByRepo: ["/a": "refs/remotes/origin/dev"],
+            showMergeStatus: false
         )
         try store.save(state)
         #expect(store.load() == state)
@@ -37,6 +39,16 @@ struct AppStateStoreTests {
         let loaded = AppStateStore(url: url).load()
         #expect(loaded.appearance == nil)
         #expect(loaded.floatOnTop == true)
+    }
+
+    @Test("older state defaults cleanup to automatic without losing repositories")
+    func cleanupDefault() throws {
+        let data = Data(#"{"repositories":[{"path":"/repo"}],"showChangedOnly":false,"showIgnored":false,"floatOnTop":true}"#.utf8)
+        let decoded = try JSONDecoder().decode(AppState.self, from: data)
+        #expect(decoded.cleanupTargetByRepo == nil)
+        #expect(decoded.showMergeStatus == nil)
+        #expect(decoded.repositories.first?.path == "/repo")
+        #expect(decoded.floatOnTop)
     }
 
     @Test("missing file loads default state")

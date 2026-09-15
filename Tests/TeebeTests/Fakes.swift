@@ -26,7 +26,9 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     /// refresh "in flight" to exercise coalescing of watcher events.
     var statusGate: (@Sendable () async -> Void)?
 
+    var beforeWorktrees: (@Sendable () async -> Void)?
     func worktrees(repoPath: String) async throws -> [Worktree] {
+        if let beforeWorktrees { await beforeWorktrees() }
         if let worktreesError { throw worktreesError }
         return worktreesResult
     }

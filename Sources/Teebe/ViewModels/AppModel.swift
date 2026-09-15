@@ -8,6 +8,8 @@ import TeebeCore
 @Observable
 final class AppModel {
     private(set) var repositories: [Repository] = []
+    var showMergeStatus: Bool { didSet { persist() } }
+    private(set) var cleanupTargetRevision = 0
     var floatOnTop: Bool { didSet { persist() } }
     /// Light / dark override, or follow the system. Applied app-wide via `NSApp.appearance`.
     var appearance: AppearanceMode { didSet { appearance.apply(); persist() } }
@@ -25,6 +27,7 @@ final class AppModel {
 
     let environment: AppEnvironment
     let selector: SelectorModel
+    let mergeStatus: WorktreeMergeModel
 
     /// In-memory copy of the persisted state, loaded once at init and written back
     /// on change. Avoids a disk read-modify-write on every persist/layout update,
@@ -39,11 +42,14 @@ final class AppModel {
         self.environment = environment
         self.state = environment.store.load()
         self.selector = SelectorModel(environment: environment)
+        self.mergeStatus = WorktreeMergeModel(service: WorktreeCleanupService(git: environment.git))
+        self.showMergeStatus = self.state.showMergeStatus ?? true
         self.floatOnTop = false
         self.appearance = .system
         // Persist whenever the selection changes, and clear any stale global error —
         // navigating to a different repo/worktree should dismiss the banner.
         self.selector.onSelectionChange = { [weak self] in
+            self?.rememberSelectedRepository()
             self?.persist()
             self?.setError(nil)
         }
@@ -69,16 +75,16 @@ final class AppModel {
         isHydrating = true
         floatOnTop = state.floatOnTop
         appearance = AppearanceMode(rawValue: state.appearance ?? "") ?? .system
-        repositories = state.repositories.map { Repository(path: $0.path) }
+        repositories = RepositoryHistory.unique(state.repositories.map(\.path))
         selector.setRepositories(repositories)
         // Snapshot the restore targets before selecting anything: selection triggers
         // persist(), which overwrites these fields of the shared `state`.
-        let lastRepoPath = state.lastSelectedRepoPath
+        let lastRepoPath = state.lastSelectedRepoPath.map { PathUtil.standardized(($0 as NSString).standardizingPath) }
         let lastWorktreePath = state.lastSelectedWorktreePath
         let target = lastRepoPath.flatMap { last in repositories.first { $0.path == last } }
             ?? repositories.first
         isHydrating = false
-        guard let target else { return }
+        guard let target else { persist(); return }
         // One shot: the saved worktree (when it still exists) is selected directly,
         // never primary-then-saved — the double load crashed the first layout pass.
         await selector.selectRepo(target, preferredWorktreePath: lastWorktreePath)
@@ -158,12 +164,31 @@ final class AppModel {
             setError("Not a git repository: \(standardized)")
             return false
         }
+        // Validation suspends; another add may have completed while it ran.
+        if let existing = repositories.first(where: { $0.path == standardized }) {
+            await selector.selectRepo(existing)
+            return false
+        }
         let repo = Repository(path: standardized)
         repositories.append(repo)
         selector.setRepositories(repositories)
         persist()
         await selector.selectRepo(repo)
         return true
+    }
+
+    private func rememberSelectedRepository() {
+        guard let selected = selector.selectedRepo,
+              let index = repositories.firstIndex(where: { $0.path == selected.path }),
+              index != repositories.count - 1 else { return }
+        repositories.append(repositories.remove(at: index))
+        selector.setRepositories(repositories)
+    }
+
+    var recentRepositories: [Repository] { Array(repositories.reversed()) }
+
+    func repositoryTitle(_ repo: Repository) -> String {
+        RepositoryHistory.title(for: repo, among: repositories)
     }
 
     func removeRepository(_ repo: Repository) {
@@ -303,6 +328,18 @@ final class AppModel {
         }
     }
 
+    func cleanupTarget(for repoPath: String) -> String? {
+        state.cleanupTargetByRepo?[repoPath]
+    }
+
+    func setCleanupTarget(_ ref: String?, for repoPath: String) {
+        var targets = state.cleanupTargetByRepo ?? [:]
+        targets[repoPath] = ref
+        state.cleanupTargetByRepo = targets
+        cleanupTargetRevision += 1
+        do { try environment.store.save(state) } catch { setError("Couldn't save the cleanup comparison branch.") }
+    }
+
     func removeWorktree(_ worktree: Worktree) {
         guard let repo = selector.selectedRepo else { return }
         Task {
@@ -331,6 +368,7 @@ final class AppModel {
         guard !isHydrating else { return }
         state.repositories = repositories.map { PersistedRepository(path: $0.path) }
         state.floatOnTop = floatOnTop
+        state.showMergeStatus = showMergeStatus
         state.appearance = appearance == .system ? nil : appearance.rawValue
         state.lastSelectedRepoPath = selector.selectedRepo?.path
         state.lastSelectedWorktreePath = selector.selectedWorktree?.path
