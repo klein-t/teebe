@@ -10,41 +10,66 @@ struct MergeIndicatorPresentation {
     init(entry: CleanupEntry?, targetName: String?, isChecking: Bool) {
         guard let entry else {
             self.init(symbol: "questionmark.circle", tone: .secondary,
-                      description: isChecking ? "Checking merge status…" : "Merge status unavailable")
+                      description: isChecking ? "Checking merge status…"
+                        : "Merge status unavailable. Refresh worktrees to try again.")
             return
         }
         if entry.isBroken {
             self.init(symbol: "exclamationmark.triangle", tone: .attention,
-                      description: entry.problem ?? "Broken worktree")
+                      description: entry.problem ?? "Broken worktree: Git cannot access this checkout.")
             return
         }
-        let merge: String
-        if let targetName {
-            switch entry.mergeStatus {
-            case .merged:
-                merge = entry.hasEquivalentContent
-                    ? "Branch changes already match \(targetName), including squash-equivalent changes."
-                    : "Commits included in \(targetName)."
-            case .notConfirmed:
-                merge = "Inclusion in \(targetName) not confirmed. Unmerged work or later edits in the target can cause this."
-            case .unknown: merge = entry.problem ?? "Merge status unavailable."
-            }
-        } else {
-            merge = entry.problem ?? "Choose a merge target in Clean up worktrees."
-        }
+        let merge = Self.mergeDescription(entry, targetName: targetName)
+        let localFiles = Self.localFileDescriptions(entry)
+        let explanation = ([merge] + localFiles).joined(separator: "\n\n")
         if entry.hasLocalChanges {
-            self.init(symbol: "pencil.circle", tone: .attention,
-                      description: "Uncommitted changes or new files. " + merge)
-        } else if entry.hasIgnoredFiles || entry.hasUncheckedFiles || entry.hasSubmodules {
-            self.init(symbol: "doc.badge.ellipsis", tone: .secondary,
-                      description: "Ignored files or files requiring separate checks remain. " + merge)
+            self.init(symbol: "pencil.circle", tone: .attention, description: explanation)
+        } else if !localFiles.isEmpty {
+            self.init(symbol: "doc.badge.ellipsis", tone: .secondary, description: explanation)
         } else if entry.mergeStatus == .merged {
             self.init(symbol: "arrow.triangle.merge", tone: .merged,
-                      description: merge + " No uncommitted files found. Cleanup checks removal separately.")
+                      description: merge + "\n\nClean folder: no uncommitted changes or ignored files found.")
         } else {
             self.init(symbol: entry.mergeStatus == .notConfirmed ? "circle.dotted" : "questionmark.circle",
                       tone: .secondary, description: merge)
         }
+    }
+
+    private static func mergeDescription(_ entry: CleanupEntry, targetName: String?) -> String {
+        guard let targetName else {
+            return entry.problem ?? "No comparison branch selected. Choose one in Clean up worktrees."
+        }
+        switch entry.mergeStatus {
+        case .merged:
+            return entry.hasEquivalentContent
+                ? "Changes already in \(targetName). The changed files match, even though the commit history differs."
+                : "All commits are already in \(targetName)."
+        case .notConfirmed:
+            return "Merge into \(targetName) not confirmed. This branch may have unmerged work. "
+                + "Later changes to the same files can also prevent Teebe from recognizing a squash merge."
+        case .unknown:
+            return entry.problem ?? "Could not check the merge into \(targetName). Refresh worktrees to try again."
+        }
+    }
+
+    private static func localFileDescriptions(_ entry: CleanupEntry) -> [String] {
+        var reasons: [String] = []
+        if entry.hasLocalChanges {
+            reasons.append("Uncommitted changes: edited, deleted or new files have not been committed.")
+        }
+        if entry.hasIgnoredFiles {
+            reasons.append("Ignored files are present. Git excludes these from commits, often build output or dependencies. "
+                + "Removing this folder would also remove them.")
+        }
+        if entry.hasUncheckedFiles {
+            reasons.append("Some tracked files are excluded from Git's change checks. "
+                + "Edits to them may be hidden, so Teebe cannot confirm this folder is clean.")
+        }
+        if entry.hasSubmodules {
+            reasons.append("Contains a nested Git repository (submodule). "
+                + "Its files and uncommitted changes must be checked inside that repository.")
+        }
+        return reasons
     }
 
     private init(symbol: String, tone: Tone, description: String) {

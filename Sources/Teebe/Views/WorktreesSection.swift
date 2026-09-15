@@ -196,7 +196,8 @@ struct WorktreesSection: View {
         let color: Color = presentation.tone == .merged ? Palette.green
             : (presentation.tone == .attention ? .orange : Palette.secondaryText)
         return Image(systemName: presentation.symbol)
-            .font(.system(size: 11, weight: .medium)).frame(width: 15)
+            .font(.system(size: 11, weight: .medium)).frame(width: 15, height: Self.rowHeight)
+            .contentShape(Rectangle())
             .foregroundStyle(isActive ? .white.opacity(0.85) : color)
             .help(presentation.description)
             .accessibilityLabel(presentation.description)
