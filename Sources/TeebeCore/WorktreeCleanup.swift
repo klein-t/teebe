@@ -120,11 +120,22 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         let target = catalog.resolve(targetOverride)
         let worktrees = try await git.worktrees(repoPath: repoPath)
         let commonDirectory = try await commonDirectory(in: repoPath)
-        var entries: [CleanupEntry] = []
-        for worktree in worktrees {
-            try Task.checkCancellation()
-            entries.append(await inspect(worktree, target: target, commonDirectory: commonDirectory))
+        let entries = await withTaskGroup(of: (Int, CleanupEntry).self) { group in
+            var results = [CleanupEntry?](repeating: nil, count: worktrees.count)
+            var next = 0
+            func enqueue(_ index: Int) {
+                group.addTask {
+                    (index, await inspect(worktrees[index], target: target, commonDirectory: commonDirectory))
+                }
+            }
+            while next < min(4, worktrees.count) { enqueue(next); next += 1 }
+            for await (index, entry) in group {
+                results[index] = entry
+                if next < worktrees.count, !Task.isCancelled { enqueue(next); next += 1 }
+            }
+            return results.compactMap { $0 }
         }
+        try Task.checkCancellation()
         return CleanupSnapshot(targets: catalog, target: target, entries: entries)
     }
 

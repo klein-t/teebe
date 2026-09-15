@@ -4,22 +4,28 @@ import TeebeCore
 
 @Suite("Merge icon meaning")
 struct MergeIndicatorPresentationTests {
-    @Test("only confirmed clean entries get the green arrow")
+    @Test("distinct shapes show clean, edited and unconfirmed states without dots")
     func cleanAndDirty() {
         var entry = CleanupEntry(worktree: Worktree(path: "/feature"))
         entry.mergeStatus = .merged
-        #expect(presentation(entry).symbol == "arrow.triangle.merge")
+        #expect(presentation(entry).symbol == .merge)
+        #expect(presentation(entry).tone == .merged)
+        #expect(!presentation(entry).hasLocalFiles)
         entry.hasLocalChanges = true
-        #expect(presentation(entry).symbol == "pencil.circle")
-        #expect(presentation(entry).tone == .attention)
-        #expect(presentation(entry).description.contains("Uncommitted"))
-        #expect(presentation(entry).description.contains("All commits are already in dev"))
+        #expect(presentation(entry).symbol == .edit)
+        #expect(presentation(entry).tone != .merged)
+        #expect(presentation(entry).hasLocalFiles)
+        #expect(presentation(entry).title == "Uncommitted changes")
+        #expect(presentation(entry).details == ["Merged into dev"])
         entry.mergeStatus = .notConfirmed
-        #expect(presentation(entry).symbol == "pencil.circle")
-        #expect(presentation(entry).description.contains("not confirmed"))
+        #expect(presentation(entry).symbol == .edit)
+        #expect(presentation(entry).details == ["Merge unconfirmed against dev"])
+        entry.hasLocalChanges = false
+        #expect(presentation(entry).symbol == .branch)
+        #expect(presentation(entry).title == "Merge unconfirmed")
     }
 
-    @Test("ignored, unchecked and submodule content cannot look clean")
+    @Test("each local condition stays specific and concise")
     func otherLocalFiles() {
         for kind in 0..<3 {
             var entry = CleanupEntry(worktree: Worktree(path: "/feature"))
@@ -27,33 +33,34 @@ struct MergeIndicatorPresentationTests {
             entry.hasIgnoredFiles = kind == 0
             entry.hasUncheckedFiles = kind == 1
             entry.hasSubmodules = kind == 2
-            #expect(presentation(entry).symbol == "doc.badge.ellipsis")
-            #expect(presentation(entry).tone != .merged)
-            let text = presentation(entry).description
-            #expect(text.contains("All commits are already in dev"))
-            #expect(text.contains("Ignored files are present") == entry.hasIgnoredFiles)
-            #expect(text.contains("excluded from Git's change checks") == entry.hasUncheckedFiles)
-            #expect(text.contains("nested Git repository") == entry.hasSubmodules)
-            #expect(!text.contains("separate checks"))
+            let result = presentation(entry)
+            #expect(result.hasLocalFiles)
+            #expect(result.tone != .merged)
+            #expect(result.details.count == 2)
+            #expect(result.symbol == (entry.hasIgnoredFiles ? .ignored : .warning))
+            #expect(result.description.count < 130)
+            #expect(result.description.contains("Ignored files") == entry.hasIgnoredFiles)
+            #expect(result.description.contains("skips change checks") == entry.hasUncheckedFiles)
+            #expect(result.description.contains("Nested Git repository") == entry.hasSubmodules)
         }
     }
 
-    @Test("broken, unavailable and squash-equivalent results have distinct explanations")
+    @Test("broken and squash-equivalent results have distinct explanations")
     func explanations() {
         var entry = CleanupEntry(worktree: Worktree(path: "/feature"))
         entry.isBroken = true
-        entry.problem = "Broken worktree: its .git link is missing."
-        #expect(presentation(entry).symbol == "exclamationmark.triangle")
-        #expect(presentation(entry).description.contains(".git link is missing"))
+        entry.problem = "Broken worktree: its .git link is missing. Remaining files were not changed."
+        #expect(presentation(entry).symbol == .warning)
+        #expect(presentation(entry).details == ["its .git link is missing."])
         entry.isBroken = false
         entry.problem = nil
-        #expect(presentation(entry).symbol == "questionmark.circle")
+        #expect(presentation(entry).symbol == .unknown)
         entry.mergeStatus = .merged
         entry.hasEquivalentContent = true
-        #expect(presentation(entry).description.contains("changed files match"))
+        #expect(presentation(entry).title == "Changes already in dev")
     }
 
-    @Test("hover text includes every detected condition instead of hiding secondary reasons")
+    @Test("multiple conditions remain short without dropping reasons")
     func combinedConditions() {
         var entry = CleanupEntry(worktree: Worktree(path: "/feature"))
         entry.mergeStatus = .merged
@@ -61,23 +68,19 @@ struct MergeIndicatorPresentationTests {
         entry.hasIgnoredFiles = true
         entry.hasUncheckedFiles = true
         entry.hasSubmodules = true
-        let text = presentation(entry).description
-        #expect(text.contains("Uncommitted changes"))
-        #expect(text.contains("Ignored files are present"))
-        #expect(text.contains("excluded from Git's change checks"))
-        #expect(text.contains("nested Git repository"))
-        #expect(!text.contains("Clean folder"))
+        let result = presentation(entry)
+        #expect(result.details.count == 4)
+        #expect(result.description.count < 200)
     }
 
-    @Test("checking, unavailable and missing-target icons explain the next step")
+    @Test("checking and missing-target states remain actionable")
     func unavailableHelp() {
-        #expect(MergeIndicatorPresentation(entry: nil, targetName: nil, isChecking: true)
-            .description == "Checking merge status…")
+        #expect(MergeIndicatorPresentation(entry: nil, targetName: nil, isChecking: true).symbol == .checking)
         #expect(MergeIndicatorPresentation(entry: nil, targetName: nil, isChecking: false)
-            .description.contains("Refresh worktrees"))
+            .details == ["Refresh to try again"])
         let entry = CleanupEntry(worktree: Worktree(path: "/feature"))
         #expect(MergeIndicatorPresentation(entry: entry, targetName: nil, isChecking: false)
-            .description.contains("Choose one in Clean up worktrees"))
+            .details == ["Choose one in Clean up worktrees"])
     }
 
     private func presentation(_ entry: CleanupEntry) -> MergeIndicatorPresentation {

@@ -284,6 +284,8 @@ final class SelectorModel {
         worktreeInfo = info
     }
 
+    func invalidateMergeStatus() { mergeRevision += 1 }
+
     func info(for worktree: Worktree) -> WorktreeInfo {
         worktreeInfo[worktree.path] ?? WorktreeInfo()
     }

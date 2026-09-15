@@ -99,7 +99,12 @@ struct WorktreesSection: View {
         .task(id: mergeRefreshKey) {
             let repo = selector.selectedRepo
             await app.mergeStatus.refresh(repo: repo, targetOverride: repo.flatMap { app.cleanupTarget(for: $0.path) },
-                                          enabled: app.showMergeStatus)
+                                          enabled: app.showMergeStatus, revision: selector.mergeRevision)
+        }
+        .onChange(of: selector.worktree.status) { _, status in
+            guard let path = selector.worktree.worktreePath, let head = status?.oid,
+                  let entry = app.mergeStatus.entry(for: path), head != entry.worktree.head else { return }
+            selector.invalidateMergeStatus()
         }
         .sheet(item: $cleanupRepo) { repo in
             WorktreeCleanupView(app: app, repo: repo)
@@ -128,13 +133,11 @@ struct WorktreesSection: View {
         let enabled: Bool
         let targetRevision: Int
         let historyRevision: Int
-        let activeStatus: StatusResult?
     }
 
     private var mergeRefreshKey: MergeRefreshKey {
         MergeRefreshKey(repoPath: selector.selectedRepo?.path, enabled: app.showMergeStatus,
-                        targetRevision: app.cleanupTargetRevision, historyRevision: selector.mergeRevision,
-                        activeStatus: selector.worktree.status)
+                        targetRevision: app.cleanupTargetRevision, historyRevision: selector.mergeRevision)
     }
 
     /// Tallest the worktree list hugs before it scrolls internally (repo row + ~6
@@ -189,18 +192,13 @@ struct WorktreesSection: View {
     }
 
     private func mergeIndicator(_ worktree: Worktree, isActive: Bool) -> some View {
+        let local = selector.worktree.worktreePath == worktree.path ? selector.worktree.status : nil
         let presentation = MergeIndicatorPresentation(
-            entry: app.mergeStatus.entry(for: worktree.path),
+            entry: app.mergeStatus.entry(for: worktree.path, localStatus: local),
             targetName: app.mergeStatus.snapshot?.target?.name, isChecking: app.mergeStatus.isChecking
         )
-        let color: Color = presentation.tone == .merged ? Palette.green
-            : (presentation.tone == .attention ? .orange : Palette.secondaryText)
-        return Image(systemName: presentation.symbol)
-            .font(.system(size: 11, weight: .medium)).frame(width: 15, height: Self.rowHeight)
-            .contentShape(Rectangle())
-            .foregroundStyle(isActive ? .white.opacity(0.85) : color)
-            .help(presentation.description)
-            .accessibilityLabel(presentation.description)
+        return WorktreeStatusButton(presentation: presentation, isSelected: isActive,
+                                    isChecking: app.mergeStatus.isChecking)
     }
 
     private func worktreeRow(_ worktree: Worktree) -> some View {
