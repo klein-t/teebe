@@ -128,11 +128,13 @@ struct WorktreesSection: View {
         let enabled: Bool
         let targetRevision: Int
         let historyRevision: Int
+        let activeStatus: StatusResult?
     }
 
     private var mergeRefreshKey: MergeRefreshKey {
         MergeRefreshKey(repoPath: selector.selectedRepo?.path, enabled: app.showMergeStatus,
-                        targetRevision: app.cleanupTargetRevision, historyRevision: selector.mergeRevision)
+                        targetRevision: app.cleanupTargetRevision, historyRevision: selector.mergeRevision,
+                        activeStatus: selector.worktree.status)
     }
 
     /// Tallest the worktree list hugs before it scrolls internally (repo row + ~6
@@ -187,27 +189,17 @@ struct WorktreesSection: View {
     }
 
     private func mergeIndicator(_ worktree: Worktree, isActive: Bool) -> some View {
-        let entry = app.mergeStatus.entry(for: worktree.path)
-        let status = entry?.mergeStatus ?? .unknown
-        let symbol = status == .merged ? "arrow.triangle.merge" : (status == .notConfirmed ? "circle.dotted" : "questionmark.circle")
-        return Image(systemName: symbol)
+        let presentation = MergeIndicatorPresentation(
+            entry: app.mergeStatus.entry(for: worktree.path),
+            targetName: app.mergeStatus.snapshot?.target?.name, isChecking: app.mergeStatus.isChecking
+        )
+        let color: Color = presentation.tone == .merged ? Palette.green
+            : (presentation.tone == .attention ? .orange : Palette.secondaryText)
+        return Image(systemName: presentation.symbol)
             .font(.system(size: 11, weight: .medium)).frame(width: 15)
-            .foregroundStyle(isActive ? .white.opacity(0.85) : (status == .merged ? Palette.green : Palette.secondaryText))
-            .help(mergeDescription(entry))
-            .accessibilityLabel(mergeDescription(entry))
-    }
-
-    private func mergeDescription(_ entry: CleanupEntry?) -> String {
-        guard let entry else { return app.mergeStatus.isChecking ? "Checking merge status…" : "Merge status unavailable" }
-        guard let target = app.mergeStatus.snapshot?.target else { return "Choose a merge target in Clean up worktrees." }
-        switch entry.mergeStatus {
-        case .merged:
-            return "Commits included in \(target.name)." + (entry.hasLocalChanges ? " This folder still has local changes." : " This does not mean the folder is safe to remove.")
-        case .notConfirmed:
-            return "Merge into \(target.name) not confirmed. Squash merges may not be recognized."
-        case .unknown:
-            return entry.problem ?? "Merge status unavailable"
-        }
+            .foregroundStyle(isActive ? .white.opacity(0.85) : color)
+            .help(presentation.description)
+            .accessibilityLabel(presentation.description)
     }
 
     private func worktreeRow(_ worktree: Worktree) -> some View {

@@ -21,7 +21,7 @@ struct WorktreeCleanupTests {
         #expect(CleanupTargets.parse(main + "refs/heads/master\u{0}bbb\u{0}\u{0}\n").automatic == nil)
     }
 
-    @Test("regular merge is confirmed, squash merge is not falsely confirmed")
+    @Test("regular and squash merges are confirmed by the appropriate evidence")
     func mergeKinds() async throws {
         let fixture = try GitFixture()
         defer { fixture.cleanup() }
@@ -39,7 +39,8 @@ struct WorktreeCleanupTests {
         _ = try await git.run(["merge", "--squash", "feature"], in: fixture.repoPath)
         _ = try await git.run(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "squashed"], in: fixture.repoPath)
         let squash = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
-        #expect(squash.entries.first { $0.worktree.branch == "feature" }?.mergeStatus == .notConfirmed)
+        #expect(squash.entries.first { $0.worktree.branch == "feature" }?.mergeStatus == .merged)
+        #expect(squash.entries.first { $0.worktree.branch == "feature" }?.hasEquivalentContent == true)
         _ = try await git.run(["-c", "user.name=Test", "-c", "user.email=test@example.com", "merge", "--no-ff", "feature", "-m", "merged"], in: fixture.repoPath)
         let merged = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
         #expect(merged.entries.first { $0.worktree.branch == "feature" }?.mergeStatus == .merged)
@@ -138,6 +139,8 @@ struct WorktreeCleanupTests {
         let missingFolder = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
         let missing = try #require(missingFolder.entries.first { !$0.worktree.isPrimary })
         #expect(missing.mergeStatus == .unknown)
+        #expect(missing.isBroken)
+        #expect(missing.problem?.contains("folder is missing") == true)
         #expect(!missing.canRemove(includingIgnored: true))
     }
 

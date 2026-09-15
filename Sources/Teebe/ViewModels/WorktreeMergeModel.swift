@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import TeebeCore
 
-/// Read-only row indicators. They describe commit ancestry, never deletion eligibility.
+/// Read-only row indicators. They describe inclusion and local files, never deletion eligibility.
 @MainActor
 @Observable
 final class WorktreeMergeModel {

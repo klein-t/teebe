@@ -49,6 +49,9 @@ public enum CleanupMergeStatus: Equatable, Sendable {
 public struct CleanupEntry: Identifiable, Equatable, Sendable {
     public var worktree: Worktree
     public var mergeStatus: CleanupMergeStatus = .unknown
+    /// True when changed paths match the target despite different commit IDs.
+    public var hasEquivalentContent = false
+    public var isBroken = false
     public var hasLocalChanges = false
     public var hasIgnoredFiles = false
     public var hasSubmodules = false
@@ -153,6 +156,11 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         entry.isTarget = target != nil && (localRef == target?.ref
             || (remoteBranch != nil && worktree.branch == remoteBranch))
         guard !worktree.isBare else { entry.problem = "Bare repository"; return entry }
+        if let problem = Self.missingWorktreeProblem(worktree.path) {
+            entry.isBroken = true
+            entry.problem = problem
+            return entry
+        }
         do {
             guard try await self.commonDirectory(in: worktree.path) == commonDirectory else { throw CleanupError.gitFailed }
             let root = try await checked(["rev-parse", "--show-toplevel"], in: worktree.path)
@@ -176,7 +184,11 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             let ancestry = try await git.run(["merge-base", "--is-ancestor", entry.worktree.head, target.sha], in: worktree.path)
             switch ancestry.exitCode {
             case 0: entry.mergeStatus = .merged
-            case 1: entry.mergeStatus = .notConfirmed
+            case 1:
+                entry.hasEquivalentContent = try await GitContentInclusion(git: git).containsChanges(
+                    from: entry.worktree.head, in: target.sha, repoPath: worktree.path
+                )
+                entry.mergeStatus = entry.hasEquivalentContent ? .merged : .notConfirmed
             default: throw CleanupError.gitFailed
             }
         } catch {
@@ -184,6 +196,18 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             entry.problem = "Could not inspect this worktree"
         }
         return entry
+    }
+
+    private static func missingWorktreeProblem(_ path: String) -> String? {
+        for (candidate, message) in [
+            (path, "Broken worktree: its folder is missing."),
+            (path + "/.git", "Broken worktree: its .git link is missing. Remaining files were not changed.")
+        ] {
+            do { _ = try FileManager.default.attributesOfItem(atPath: candidate) } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+                return message
+            } catch { return nil } // Permission errors remain unavailable, not missing.
+        }
+        return nil
     }
 
     private func commonDirectory(in path: String) async throws -> String {

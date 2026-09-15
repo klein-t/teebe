@@ -252,6 +252,17 @@ struct SelectorModelTests {
         #expect(selector.info(for: git.worktreesResult[0]).isLive == false)
     }
 
+    @Test("external edits invalidate merge icons even when Git status is unchanged")
+    func editsInvalidateMergeIcons() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
+        await selector.selectRepo(Repository(path: "/repo"))
+        let before = selector.mergeRevision
+        await selector.worktree.handleFileSystemEvent()
+        #expect(selector.mergeRevision > before)
+    }
+
     @Test("refreshWorktreeInfo computes live state alongside sync counts")
     func liveDotViaRefreshInfo() async {
         let git = FakeGitClient()

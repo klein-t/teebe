@@ -76,7 +76,10 @@ final class SelectorModel {
         self.worktree = WorktreeModel(environment: environment)
         // An external write to the active worktree should re-light its live dot
         // immediately, without waiting for a manual refresh.
-        self.worktree.onActivity = { [weak self] _ in self?.refreshLiveState() }
+        self.worktree.onActivity = { [weak self] _ in
+            self?.refreshLiveState()
+            self?.mergeRevision += 1
+        }
     }
 
     /// Recompute only the cheap `isLive` flags from the activity monitor (no git),
