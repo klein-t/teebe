@@ -19,6 +19,14 @@ struct WorktreesSection: View {
 
     private var selector: SelectorModel { app.selector }
 
+    /// Fetch now, whenever it last ran, then re-read the repository.
+    private func refresh() {
+        Task {
+            await app.refreshRemotes(force: true)
+            await selector.refreshWorktrees()
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             SectionHeader(title: "WORKTREES", isOpen: isOpen, isActive: app.activeSection == .worktrees, onToggle: { isOpen.toggle() }) {
@@ -36,6 +44,12 @@ struct WorktreesSection: View {
                             if let selected = selector.selectedRepo {
                                 Button { app.presentNewWorktreePanel() } label: {
                                     Label("New Worktree…", systemImage: "plus.square.on.square")
+                                }
+                                Button { refresh() } label: {
+                                    Label("Refresh", systemImage: "arrow.clockwise")
+                                }
+                                if app.showMergeStatus {
+                                    Menu("Comparison Branch") { comparisonPicker(selected) }
                                 }
                                 Button(role: .destructive) { app.removeRepository(selected) } label: {
                                     Label("Remove Project from List", systemImage: "folder.badge.minus")
@@ -262,42 +276,43 @@ struct WorktreesSection: View {
             Image(systemName: "shippingbox").font(.system(size: 11)).foregroundStyle(Palette.secondaryText)
             Text(repo.name).font(.system(size: 12.5, weight: .semibold)).lineLimit(1)
             Spacer(minLength: 6)
-            if app.showMergeStatus { comparisonPicker(repo) }
+            // One affordance when nothing resolved: the list is flat, so the ask
+            // belongs here once, not on every row.
+            if app.showMergeStatus, list.needsTarget { chooseComparisonBranch(repo) }
         }
         .padding(.horizontal, 11).frame(height: WorktreeListPresentation.repoHeight)
     }
 
+    /// The comparison-branch choices. A Picker, so macOS draws the checkmark on the
+    /// chosen branch itself. Lives in the ⋯ menu, and inline when nothing resolved.
     private func comparisonPicker(_ repo: Repository) -> some View {
         let saved = app.cleanupTarget(for: repo.path) ?? ""
         let targets = app.mergeStatus.snapshot?.targets
-        let resolved = app.mergeStatus.snapshot?.target?.name
-        return Menu {
-            // A Picker, so macOS draws the checkmark on the chosen branch itself.
-            Picker("Comparison branch", selection: Binding(
-                get: { saved },
-                set: { app.setCleanupTarget($0.isEmpty ? nil : $0, for: repo.path) }
-            )) {
-                Text(automaticLabel(targets?.automatic?.name)).tag("")
-                ForEach(targets?.branches ?? []) { branch in Text(branch.name).tag(branch.ref) }
-                if !saved.isEmpty, targets?.branches.contains(where: { $0.ref == saved }) != true {
-                    Text("Saved branch not found. Choose another.").tag(saved)
-                }
+        return Picker("Comparison Branch", selection: Binding(
+            get: { saved },
+            set: { app.setCleanupTarget($0.isEmpty ? nil : $0, for: repo.path) }
+        )) {
+            Text(automaticLabel(targets?.automatic?.name)).tag("")
+            ForEach(targets?.branches ?? []) { branch in Text(branch.name).tag(branch.ref) }
+            if !saved.isEmpty, targets?.branches.contains(where: { $0.ref == saved }) != true {
+                Text("Saved branch not found. Choose another.").tag(saved)
             }
-            .pickerStyle(.inline)
-            .labelsHidden()
-        } label: {
-            // One affordance when nothing resolved: the list is flat, so the ask belongs
-            // here once, not on every row.
-            Text(list.needsTarget ? "Choose a comparison branch"
-                 : (resolved ?? (saved.isEmpty ? "Automatic" : String(saved.split(separator: "/").suffix(2).joined(separator: "/")))))
-                .font(.system(size: 10)).lineLimit(1).truncationMode(.middle)
-                .foregroundStyle(list.needsTarget ? Palette.accent : Palette.secondaryText)
         }
-        .menuStyle(.borderlessButton)
-        // Lower priority than the repo name: the branch is the part that may truncate.
-        .frame(maxWidth: 220, alignment: .trailing).layoutPriority(-1)
+        .pickerStyle(.inline)
+        .labelsHidden()
+    }
+
+    private func chooseComparisonBranch(_ repo: Repository) -> some View {
+        Menu {
+            comparisonPicker(repo)
+        } label: {
+            Text("Choose a comparison branch…")
+                .font(.system(size: 11)).lineLimit(1)
+                .foregroundStyle(Palette.accent)
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         .accessibilityLabel("Comparison branch")
-        .help("Comparison branch")
+        .help("Pick the branch your work is compared against.")
     }
 
     /// One name for the automatic choice, with the branch it actually resolved to.

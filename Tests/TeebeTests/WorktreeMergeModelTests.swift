@@ -187,25 +187,6 @@ struct WorktreeMergeModelTests {
         #expect(!model.isChecking)
     }
 
-    @Test("the cleanup sheet's scan is reused by the rows at the same revision")
-    func adoptedScan() async {
-        let service = MergeScanStub()
-        let model = makeModel(service)
-        let repo = Repository(path: "/repo")
-        await model.refresh(repo: repo, targetOverride: nil, enabled: true, revision: 7)
-        #expect(await service.calls == 1)
-        #expect(model.cachedSnapshot(repoPath: "/repo", target: nil) != nil)
-        #expect(model.cachedSnapshot(repoPath: "/other", target: nil) == nil)
-
-        // The comparison branch changed, so the key changed — but the cleanup sheet
-        // already scanned for it, so the rows must not scan a second time.
-        guard let shared = model.cachedSnapshot(repoPath: "/repo", target: nil) else { return }
-        model.adopt(shared, repoPath: "/repo", target: "refs/heads/dev", revision: 7)
-        await model.refresh(repo: repo, targetOverride: "refs/heads/dev", enabled: true, revision: 7)
-        #expect(await service.calls == 1)
-        #expect(model.entry(for: "/repo/feature") != nil)
-    }
-
     private func makeModel(_ service: WorktreeCleanupChecking) -> WorktreeMergeModel {
         let model = WorktreeMergeModel(service: service)
         model.scanDebounce = .zero

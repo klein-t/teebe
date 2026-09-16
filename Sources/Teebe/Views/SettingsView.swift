@@ -43,6 +43,7 @@ struct SettingsView: View {
 
             Section("Worktrees") {
                 Toggle("Show merge status for worktrees", isOn: $app.showMergeStatus)
+                Toggle("Fetch automatically", isOn: $app.fetchAutomatically)
             }
 
             Section {

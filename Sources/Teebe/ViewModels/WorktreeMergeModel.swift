@@ -14,7 +14,8 @@ struct WorktreeMergeEntry: Equatable {
     var localChangeCount = 0
 }
 
-/// Row results can be reused while refreshing; cleanup always scans independently.
+/// Row results can be reused while refreshing, keyed by repository and comparison
+/// branch, so switching back and forth does not rescan every worktree.
 @MainActor
 @Observable
 final class WorktreeMergeModel {
@@ -58,8 +59,8 @@ final class WorktreeMergeModel {
         try? await Task.sleep(for: scanDebounce)
         guard !Task.isCancelled, generation == token else { return }
         // The key changed for a reason that cannot move merge ancestry — a
-        // comparison-branch switch, or the cleanup sheet sharing the scan it just
-        // ran (which may have landed during the debounce). Show it, don't repeat it.
+        // comparison-branch switch, or a rescan after a removal. Show the result
+        // that is already in hand, don't repeat the work.
         if let revision, let cached = cache[key], cached.revision == revision,
            Date().timeIntervalSince(cached.snapshot.checkedAt) < Self.reuseWindow {
             snapshot = cached.snapshot
@@ -103,24 +104,6 @@ final class WorktreeMergeModel {
                                      entries: entries, checkedAt: previous.checkedAt)
         snapshot = merged
         store(merged, key: key, revision: cache[key]?.revision)
-    }
-
-    /// The most recent scan for exactly this repository and comparison branch, while
-    /// it is still fresh. The cleanup sheet opens on it instead of scanning again.
-    func cachedSnapshot(repoPath: String, target: String?) -> CleanupSnapshot? {
-        guard let cached = cache[Key(path: repoPath, target: target)],
-              Date().timeIntervalSince(cached.snapshot.checkedAt) < Self.reuseWindow else { return nil }
-        return cached.snapshot
-    }
-
-    /// Take over a scan someone else already ran for this repository — the cleanup
-    /// sheet's — so the rows show it without repeating the work.
-    func adopt(_ snapshot: CleanupSnapshot, repoPath: String, target: String?, revision: Int?) {
-        let key = Key(path: repoPath, target: target)
-        store(snapshot, key: key, revision: revision)
-        guard currentRepo?.path == repoPath, currentTarget == target else { return }
-        self.snapshot = snapshot
-        recheckPaths.removeAll()
     }
 
     private func store(_ snapshot: CleanupSnapshot, key: Key, revision: Int?) {

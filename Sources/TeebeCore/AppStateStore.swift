@@ -61,6 +61,9 @@ public struct AppState: Codable, Equatable, Sendable {
     /// Saved comparison refs by repository. Missing entries use automatic detection.
     public var cleanupTargetByRepo: [String: String]?
     public var showMergeStatus: Bool?
+    /// Fetch each repository's remote refs in the background. Optional so older
+    /// state files decode; nil means the default (on).
+    public var fetchAutomatically: Bool?
 
     public init(
         repositories: [PersistedRepository] = [],
@@ -74,7 +77,8 @@ public struct AppState: Codable, Equatable, Sendable {
         hookOfferResponse: String? = nil,
         appearance: String? = nil,
         cleanupTargetByRepo: [String: String]? = nil,
-        showMergeStatus: Bool? = nil
+        showMergeStatus: Bool? = nil,
+        fetchAutomatically: Bool? = nil
     ) {
         self.repositories = repositories
         self.showChangedOnly = showChangedOnly
@@ -88,6 +92,7 @@ public struct AppState: Codable, Equatable, Sendable {
         self.appearance = appearance
         self.cleanupTargetByRepo = cleanupTargetByRepo
         self.showMergeStatus = showMergeStatus
+        self.fetchAutomatically = fetchAutomatically
     }
 }
 

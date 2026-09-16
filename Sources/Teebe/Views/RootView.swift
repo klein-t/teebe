@@ -126,7 +126,12 @@ struct RootView: View {
         .onChange(of: roomBelowTop) { _, _ in
             if !isLiveResizing { applyWindowSizing(animated: false) }
         }
-        .onChange(of: app.selector.selectedRepo?.path) { _, path in applyLayout(for: path) }
+        .onChange(of: app.selector.selectedRepo?.path) { _, path in
+            applyLayout(for: path)
+            // A repository the user just opened is worth one quiet fetch, so its
+            // merge results are not answering yesterday's question.
+            Task { await app.refreshRemotes(force: false) }
+        }
         // Keep WORKTREES/CHANGES wrapped to their rows as the lists change (preserving
         // the FILES reveal below them). The file tree itself just scrolls, so its row
         // count doesn't resize the window.

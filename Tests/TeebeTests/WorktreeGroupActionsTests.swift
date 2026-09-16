@@ -14,7 +14,12 @@ private actor RemovalStub: WorktreeCleanupChecking {
         self.snapshot = snapshot
         self.refuses = refuses
     }
-    func scan(repoPath: String, targetOverride: String?) async throws -> CleanupSnapshot { snapshot }
+    private(set) var scans = 0
+    func resetScans() { scans = 0 }
+    func scan(repoPath: String, targetOverride: String?) async throws -> CleanupSnapshot {
+        scans += 1
+        return snapshot
+    }
     func fetch(repoPath: String) async throws {}
     func remove(repoPath: String, entry: CleanupEntry, target: CleanupBranch, includingIgnored: Bool) async throws {
         guard entry.id != refuses else { throw CleanupError.changed }
@@ -47,13 +52,13 @@ struct WorktreeGroupActionsTests {
         return CleanupSnapshot(targets: targets, target: targets.branches.first, entries: entries)
     }
 
-    /// Bring an app up on `repo` with `snapshot` as the merge result the rows show.
-    private func app(_ git: FakeGitClient, snapshot: CleanupSnapshot) async -> AppModel {
-        let app = AppModel(environment: makeTestEnvironment(git: git))
+    /// Bring an app up on `repo` with `stub`'s scan as the merge result the rows show.
+    private func app(_ git: FakeGitClient, stub: RemovalStub,
+                     monitor: WorktreeActivityMonitor = WorktreeActivityMonitor()) async -> AppModel {
+        let app = AppModel(environment: makeTestEnvironment(git: git, monitor: monitor), mergeService: stub)
         app.mergeStatus.scanDebounce = .zero
         _ = await app.addRepository(path: repo.path)
         await app.mergeStatus.refresh(repo: repo, targetOverride: nil, enabled: true, revision: nil)
-        app.mergeStatus.adopt(snapshot, repoPath: repo.path, target: nil, revision: nil)
         return app
     }
 
@@ -74,9 +79,10 @@ struct WorktreeGroupActionsTests {
         primaryEntry.worktree.isPrimary = true
         let entries = [primaryEntry, targetEntry, lockedEntry,
                        merged("/browsed", branch: "browsed"), merged("/free", branch: "free")]
-        let app = await app(git, snapshot: snapshot(entries))
+        let stub = RemovalStub(snapshot: snapshot(entries))
+        let app = await app(git, stub: stub)
         await app.selector.selectWorktree(browsed)
-        let actions = WorktreeGroupActions(app: app, service: RemovalStub(snapshot: snapshot(entries)))
+        let actions = WorktreeGroupActions(app: app, service: stub)
 
         #expect(actions.eligibleEntries(for: git.worktreesResult).map(\.id) == ["/free"])
     }
@@ -87,8 +93,9 @@ struct WorktreeGroupActionsTests {
         ignored.hasIgnoredFiles = true
         ignored.ignoredPaths = [".build/"]
         let plain = merged("/plain", branch: "plain")
-        let app = await app(FakeGitClient(), snapshot: snapshot([plain, ignored]))
-        let actions = WorktreeGroupActions(app: app, service: RemovalStub(snapshot: snapshot([])))
+        let stub = RemovalStub(snapshot: snapshot([plain, ignored]))
+        let app = await app(FakeGitClient(), stub: stub)
+        let actions = WorktreeGroupActions(app: app, service: stub)
 
         #expect(actions.confirmationTitle([plain]) == "Remove 1 worktree folder?")
         #expect(actions.confirmationTitle([plain, ignored]) == "Remove 2 worktree folders?")
@@ -107,20 +114,22 @@ struct WorktreeGroupActionsTests {
         git.worktreesResult = [primary, Worktree(path: "/a", branch: "a"), Worktree(path: "/b", branch: "b")]
         git.beforeWorktrees = { counter.bump() }
         let entries = [merged("/a", branch: "a"), merged("/b", branch: "b")]
-        let app = await app(git, snapshot: snapshot(entries))
         let stub = RemovalStub(snapshot: snapshot(entries), refuses: "/a")
+        let app = await app(git, stub: stub)
         let actions = WorktreeGroupActions(app: app, service: stub)
 
         // Git removed one of the two folders, so that is what a rescan must find.
         git.worktreesResult = [primary, Worktree(path: "/a", branch: "a")]
         counter.reset()
+        await stub.resetScans()
         await actions.remove(entries)?.value
 
         #expect(await stub.removed == ["/b"])
         #expect(app.errorMessage == "Couldn't remove a: " + (CleanupError.changed.errorDescription ?? ""))
         #expect(!actions.isWorking)
-        // One rescan: the worktree list, then the merge check that regroups it.
-        #expect(counter.count == 2)
+        // Rescanned once: the worktree list, then the merge check that regroups it.
+        #expect(counter.count == 1)
+        #expect(await stub.scans == 1)
         #expect(app.selector.worktrees.map(\.path) == ["/repo", "/a"])
     }
 
@@ -131,12 +140,8 @@ struct WorktreeGroupActionsTests {
         git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true),
                                Worktree(path: "/busy", branch: "busy")]
         let entries = [merged("/busy", branch: "busy")]
-        let app = AppModel(environment: makeTestEnvironment(git: git, monitor: monitor))
-        app.mergeStatus.scanDebounce = .zero
-        _ = await app.addRepository(path: repo.path)
-        await app.mergeStatus.refresh(repo: repo, targetOverride: nil, enabled: true, revision: nil)
-        app.mergeStatus.adopt(snapshot(entries), repoPath: repo.path, target: nil, revision: nil)
         let stub = RemovalStub(snapshot: snapshot(entries))
+        let app = await app(git, stub: stub, monitor: monitor)
         let actions = WorktreeGroupActions(app: app, service: stub)
 
         monitor.recordActivity(worktreePath: "/busy", at: Date())
@@ -152,14 +157,17 @@ struct WorktreeGroupActionsTests {
         let git = FakeGitClient()
         git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
         git.beforeWorktrees = { counter.bump() }
-        let app = await app(git, snapshot: snapshot([]))
-        let actions = WorktreeGroupActions(app: app, service: RemovalStub(snapshot: snapshot([])))
+        let stub = RemovalStub(snapshot: snapshot([]))
+        let app = await app(git, stub: stub)
+        let actions = WorktreeGroupActions(app: app, service: stub)
         counter.reset()
+        await stub.resetScans()
 
         await actions.prune()?.value
 
         #expect(git.prunedRepos == ["/repo"])
-        #expect(counter.count == 2)
+        #expect(counter.count == 1)
+        #expect(await stub.scans == 1)
         #expect(!actions.isWorking)
     }
 

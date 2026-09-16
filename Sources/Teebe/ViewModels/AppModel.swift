@@ -9,6 +9,9 @@ import TeebeCore
 final class AppModel {
     private(set) var repositories: [Repository] = []
     var showMergeStatus: Bool { didSet { persist() } }
+    /// Fetch remote refs in the background, so merge results reflect what was
+    /// pushed rather than what was last pulled by hand.
+    var fetchAutomatically: Bool { didSet { persist() } }
     private(set) var cleanupTargetRevision = 0
     var floatOnTop: Bool { didSet { persist() } }
     /// Light / dark override, or follow the system. Applied app-wide via `NSApp.appearance`.
@@ -28,6 +31,7 @@ final class AppModel {
     let environment: AppEnvironment
     let selector: SelectorModel
     let mergeStatus: WorktreeMergeModel
+    let remoteRefresher: RemoteRefresher
 
     /// The group-header actions. Built on first use because they need the finished
     /// model back; one instance, so a removal in flight is visible everywhere.
@@ -48,12 +52,16 @@ final class AppModel {
     /// `persist()` that property assignments would otherwise trigger during load.
     @ObservationIgnored private var isHydrating = false
 
-    init(environment: AppEnvironment) {
+    /// `mergeService` is the scanner behind the worktree groups; tests hand in a
+    /// scripted one instead of a real repository.
+    init(environment: AppEnvironment, mergeService: WorktreeCleanupChecking? = nil) {
         self.environment = environment
         self.state = environment.store.load()
         self.selector = SelectorModel(environment: environment)
-        self.mergeStatus = WorktreeMergeModel(service: WorktreeCleanupService(git: environment.git))
+        self.mergeStatus = WorktreeMergeModel(service: mergeService ?? WorktreeCleanupService(git: environment.git))
+        self.remoteRefresher = RemoteRefresher(git: environment.git)
         self.showMergeStatus = self.state.showMergeStatus ?? true
+        self.fetchAutomatically = self.state.fetchAutomatically ?? true
         self.floatOnTop = false
         self.appearance = .system
         // Persist whenever the selection changes, and clear any stale global error —
@@ -342,6 +350,14 @@ final class AppModel {
         }
     }
 
+    /// Bring the selected repository's remote refs up to date. The setting gates it;
+    /// `force` (the Refresh command) only ignores how recently it last ran. Writing
+    /// refs is what makes the merge check re-run, through the repository watcher.
+    func refreshRemotes(force: Bool, now: Date = Date()) async {
+        guard fetchAutomatically, let repo = selector.selectedRepo else { return }
+        await remoteRefresher.fetch(repoPath: repo.path, force: force, now: now)
+    }
+
     func cleanupTarget(for repoPath: String) -> String? {
         state.cleanupTargetByRepo?[repoPath]
     }
@@ -385,6 +401,7 @@ final class AppModel {
         state.repositories = repositories.map { PersistedRepository(path: $0.path) }
         state.floatOnTop = floatOnTop
         state.showMergeStatus = showMergeStatus
+        state.fetchAutomatically = fetchAutomatically
         state.appearance = appearance == .system ? nil : appearance.rawValue
         state.lastSelectedRepoPath = selector.selectedRepo?.path
         state.lastSelectedWorktreePath = selector.selectedWorktree?.path
