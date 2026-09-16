@@ -6,10 +6,18 @@ struct WorktreeStatusButton: View {
     var isSelected = false
     var isChecking = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.rowHovered) private var rowHovered
     @State private var anchorHovered = false
     @State private var popoverHovered = false
     @State private var isPresented = false
+    /// A popover the user clicked open stays open until they dismiss it; only the
+    /// hover-opened one follows the pointer.
+    @State private var openedByClick = false
     @State private var hoverTask: Task<Void, Never>?
+
+    /// The button belongs to its row: it fades in with the pointer and stays while its
+    /// own popover is open, so moving into the popover can't fade its anchor away.
+    private var isVisible: Bool { rowHovered || isPresented }
 
     private var tint: Color {
         if isSelected { return .white }
@@ -22,7 +30,11 @@ struct WorktreeStatusButton: View {
     }
 
     var body: some View {
-        Button { hoverTask?.cancel(); isPresented.toggle() } label: {
+        Button {
+            hoverTask?.cancel()
+            openedByClick = !isPresented
+            isPresented.toggle()
+        } label: {
             Image(systemName: "info.circle").font(.system(size: 12))
                 .frame(width: 15, height: 16)
                 .foregroundStyle(tint)
@@ -35,11 +47,18 @@ struct WorktreeStatusButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(presentation.description)
+        .opacity(isVisible ? 1 : 0)
+        .allowsHitTesting(isVisible)
+        // A transparent button is still an element VoiceOver stops on, so take it out
+        // of the tree entirely while it is hidden.
+        .accessibilityHidden(!isVisible)
+        .accessibilityLabel(presentation.title)
+        .accessibilityValue(presentation.details.joined(separator: " "))
         .accessibilityHint("Show merge details")
         .onHover { anchorHovered = $0; updateHover() }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: anchorHovered || isPresented)
-        .popover(isPresented: $isPresented, arrowEdge: .trailing) {
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isVisible)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: anchorHovered)
+        .popover(isPresented: $isPresented) {
             VStack(alignment: .leading, spacing: 7) {
                 Text(presentation.title).font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(presentation.tone == .error ? Color.red : Color.primary)
@@ -55,15 +74,17 @@ struct WorktreeStatusButton: View {
             .padding(12)
             .onHover { popoverHovered = $0; updateHover() }
         }
-        .onDisappear { hoverTask?.cancel(); isPresented = false }
+        .onChange(of: isPresented) { _, presented in if !presented { openedByClick = false } }
+        .onDisappear { hoverTask?.cancel(); isPresented = false; openedByClick = false }
     }
 
     private func updateHover() {
+        guard !openedByClick else { return }
         hoverTask?.cancel()
         let shouldOpen = anchorHovered || popoverHovered
         hoverTask = Task { @MainActor in
             do { try await Task.sleep(for: .milliseconds(shouldOpen ? 180 : 220)) } catch { return }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !openedByClick else { return }
             isPresented = shouldOpen
         }
     }
