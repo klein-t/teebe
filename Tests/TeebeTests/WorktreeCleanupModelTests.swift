@@ -60,6 +60,26 @@ struct WorktreeCleanupModelTests {
         #expect(env.store.load().cleanupTargetByRepo?["/repo"] == nil)
     }
 
+    @Test("removing a repository forgets its comparison branch and its layout")
+    func removalPurgesRepositoryState() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        let env = makeTestEnvironment(git: git)
+        let app = AppModel(environment: env)
+        _ = await app.addRepository(path: "/repo")
+        let model = WorktreeCleanupModel(app: app, repo: Repository(path: "/repo"), service: CleanupStub(snapshot: snapshot()))
+        await model.chooseTarget("refs/heads/dev")
+        app.saveLayout(SectionLayout(windowHeight: 400), forRepo: "/repo")
+        #expect(app.cleanupTarget(for: "/repo") == "refs/heads/dev")
+
+        app.removeRepository(Repository(path: "/repo"))
+        #expect(app.cleanupTarget(for: "/repo") == nil)
+        #expect(app.layout(forRepo: "/repo") == nil)
+        let reopened = AppModel(environment: env)
+        #expect(reopened.cleanupTarget(for: "/repo") == nil)
+        #expect(reopened.layout(forRepo: "/repo") == nil)
+    }
+
     @Test("selection is explicit, removal needs confirmation, and ignored files need consent")
     func confirmation() async {
         let stub = CleanupStub(snapshot: snapshot())

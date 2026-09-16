@@ -197,6 +197,10 @@ final class AppModel {
         if selector.selectedRepo?.path == repo.path {
             selector.clearSelection()
         }
+        // Drop everything else keyed by this repository, or the saved state grows a
+        // tail of entries for projects the user removed long ago.
+        state.cleanupTargetByRepo?[repo.path] = nil
+        state.layoutByRepo?[repo.path] = nil
         persist()
     }
 
@@ -337,7 +341,9 @@ final class AppModel {
         targets[repoPath] = ref
         state.cleanupTargetByRepo = targets
         cleanupTargetRevision += 1
-        do { try environment.store.save(state) } catch { setError("Couldn't save the cleanup comparison branch.") }
+        // Through persist(), so the write picks up the rest of the current state and
+        // honours the hydration guard instead of racing bootstrap.
+        persist()
     }
 
     func removeWorktree(_ worktree: Worktree) {
