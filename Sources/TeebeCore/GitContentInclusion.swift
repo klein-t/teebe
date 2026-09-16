@@ -14,7 +14,14 @@ struct GitContentInclusion {
         let commits = bases.stdoutString.split(whereSeparator: \.isWhitespace)
         guard commits.count == 1, let base = commits.first else { return false }
         let changes = try await diff(String(base), head, in: repoPath)
-        let desired = Dictionary(uniqueKeysWithValues: changes.map { ($0.path, $0.new) })
+        // Reaching here means the branch is not an ancestor of the target, so its
+        // commits are unmerged. A branch that adds then deletes a file, or edits
+        // then reverts one, contributes no content: there is nothing to confirm.
+        guard !changes.isEmpty else { return false }
+        var desired: [Data: Version] = [:]
+        for change in changes {
+            guard desired.updateValue(change.new, forKey: change.path) == nil else { throw CleanupError.gitFailed }
+        }
         let different = try await diff(head, target, in: repoPath)
         let mismatches = Set(different.map(\.path)).intersection(desired.keys)
         if mismatches.isEmpty { return true }

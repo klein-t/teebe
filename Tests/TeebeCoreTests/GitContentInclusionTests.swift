@@ -101,6 +101,37 @@ struct GitContentInclusionTests {
         }
     }
 
+    @Test("a branch whose net change is empty is never confirmed as included")
+    func netZeroBranches() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("base.txt", "base")
+        let added = fixture.addWorktree(name: "added", branch: "added")
+        fixture.writeFile("scratch.txt", "temp", in: added)
+        fixture.stage(in: added)
+        fixture.commit("add scratch", in: added)
+        fixture.deleteFile("scratch.txt", in: added)
+        fixture.stage(in: added)
+        fixture.commit("drop scratch", in: added)
+        let reverted = fixture.addWorktree(name: "reverted", branch: "reverted")
+        fixture.writeFile("base.txt", "edited", in: reverted)
+        fixture.stage(in: reverted)
+        fixture.commit("edit base", in: reverted)
+        fixture.writeFile("base.txt", "base", in: reverted)
+        fixture.stage(in: reverted)
+        fixture.commit("revert base", in: reverted)
+        let check = GitContentInclusion(git: ProcessGitClient())
+        #expect(try await !check.containsChanges(from: "added", in: "main", repoPath: fixture.repoPath))
+        #expect(try await !check.containsChanges(from: "reverted", in: "main", repoPath: fixture.repoPath))
+        let snapshot = try await WorktreeCleanupService(git: ProcessGitClient())
+            .scan(repoPath: fixture.repoPath, targetOverride: nil)
+        for branch in ["added", "reverted"] {
+            let entry = try #require(snapshot.entries.first { $0.worktree.branch == branch })
+            #expect(entry.mergeStatus == .notConfirmed)
+            #expect(!entry.canRemove(includingIgnored: true))
+        }
+    }
+
     @Test("historical file matches must coexist in one target revision")
     func noMixedHistoricalSnapshots() async throws {
         let fixture = try GitFixture()
