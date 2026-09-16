@@ -153,6 +153,9 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         let commonDirectory = try await commonDirectory(in: repoPath)
         let checked = await inspect(current, target: target, commonDirectory: commonDirectory)
         guard checked.worktree.head == entry.worktree.head else { throw CleanupError.changed }
+        // Consent covers the ignored files that were reviewed, not any that showed
+        // up since. A new secrets file or nested repository voids the confirmation.
+        guard !includingIgnored || checked.ignoredPaths == entry.ignoredPaths else { throw CleanupError.changed }
         guard checked.canRemove(includingIgnored: includingIgnored) else { throw CleanupError.unsafe }
         try Task.checkCancellation()
         try await git.removeWorktree(repoPath: repoPath, worktreePath: current.path, force: false)

@@ -79,6 +79,34 @@ struct WorktreeCleanupTests {
         #expect(try await ProcessGitClient().branches(repoPath: fixture.repoPath).contains { $0.name == "feature" })
     }
 
+    @Test("ignored files that appeared after the confirmation are not deleted")
+    func newIgnoredFiles() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile(".gitignore", "cache/\nsecrets.env\n")
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        let cache = folder.appendingPathComponent("cache")
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        try Data("local".utf8).write(to: cache.appendingPathComponent("data.txt"))
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        let snapshot = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
+        let entry = try #require(snapshot.entries.first { !$0.worktree.isPrimary })
+        let target = try #require(snapshot.target)
+        #expect(entry.ignoredPaths == ["cache/"])
+        #expect(entry.canRemove(includingIgnored: true))
+        let secrets = folder.appendingPathComponent("secrets.env")
+        try Data("token".utf8).write(to: secrets)
+        await #expect(throws: CleanupError.changed) {
+            try await service.remove(repoPath: fixture.repoPath, entry: entry, target: target, includingIgnored: true)
+        }
+        #expect(FileManager.default.fileExists(atPath: secrets.path))
+        let rechecked = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
+        let reviewed = try #require(rechecked.entries.first { !$0.worktree.isPrimary })
+        #expect(reviewed.ignoredPaths == ["cache/", "secrets.env"])
+        try await service.remove(repoPath: fixture.repoPath, entry: reviewed, target: target, includingIgnored: true)
+        #expect(!FileManager.default.fileExists(atPath: folder.path))
+    }
+
     @Test("changed target and primary worktree cannot be removed")
     func staleReview() async throws {
         let fixture = try GitFixture()
