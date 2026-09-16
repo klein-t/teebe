@@ -31,11 +31,11 @@ struct WorktreeMergeModelTests {
     @Test("disabled indicators skip scanning and clear previous results")
     func visibility() async {
         let service = MergeScanStub()
-        let model = WorktreeMergeModel(service: service)
+        let model = makeModel(service)
         await model.refresh(repo: Repository(path: "/repo"), targetOverride: "refs/heads/dev", enabled: false)
         #expect(await service.calls == 0)
         await model.refresh(repo: Repository(path: "/repo"), targetOverride: "refs/heads/dev", enabled: true)
-        #expect(model.entry(for: "/repo/feature")?.mergeStatus == .merged)
+        #expect(model.entry(for: "/repo/feature")?.entry.mergeStatus == .merged)
         #expect(await service.requestedTarget == "refs/heads/dev")
         await model.refresh(repo: Repository(path: "/repo"), targetOverride: nil, enabled: false)
         #expect(model.snapshot == nil)
@@ -47,14 +47,14 @@ struct WorktreeMergeModelTests {
         let service = MergeScanStub()
         let gate = Gate()
         await service.hold(gate)
-        let model = WorktreeMergeModel(service: service)
+        let model = makeModel(service)
         let first = Task { await model.refresh(repo: Repository(path: "/old"), targetOverride: nil, enabled: true) }
         while await service.calls == 0 { await Task.yield() }
         await model.refresh(repo: Repository(path: "/new"), targetOverride: "refs/heads/dev", enabled: true)
         await gate.open()
         await first.value
         #expect(model.entry(for: "/old/feature") == nil)
-        #expect(model.entry(for: "/new/feature")?.mergeStatus == .merged)
+        #expect(model.entry(for: "/new/feature")?.entry.mergeStatus == .merged)
         #expect(!model.isChecking)
     }
 
@@ -63,7 +63,7 @@ struct WorktreeMergeModelTests {
         let service = MergeScanStub()
         let gate = Gate()
         await service.hold(gate)
-        let model = WorktreeMergeModel(service: service)
+        let model = makeModel(service)
         let first = Task { await model.refresh(repo: Repository(path: "/repo"), targetOverride: nil, enabled: true) }
         while await service.calls == 0 { await Task.yield() }
         await model.refresh(repo: Repository(path: "/repo"), targetOverride: nil, enabled: false)
@@ -75,7 +75,7 @@ struct WorktreeMergeModelTests {
     @Test("unchanged refresh identity reuses recent results without another scan")
     func reuse() async {
         let service = MergeScanStub()
-        let model = WorktreeMergeModel(service: service)
+        let model = makeModel(service)
         for _ in 0..<3 {
             await model.refresh(repo: Repository(path: "/repo"), targetOverride: nil, enabled: true, revision: 1)
         }
@@ -86,7 +86,7 @@ struct WorktreeMergeModelTests {
     @Test("background refresh retains visible results but a failed check clears them")
     func backgroundRefresh() async {
         let service = MergeScanStub()
-        let model = WorktreeMergeModel(service: service)
+        let model = makeModel(service)
         await model.refresh(repo: Repository(path: "/repo"), targetOverride: nil, enabled: true, revision: 1)
         let gate = Gate()
         await service.hold(gate)
@@ -106,7 +106,7 @@ struct WorktreeMergeModelTests {
     @Test("returning to a project displays its own cached result while checking")
     func returnToProject() async {
         let service = MergeScanStub()
-        let model = WorktreeMergeModel(service: service)
+        let model = makeModel(service)
         await model.refresh(repo: Repository(path: "/one"), targetOverride: nil, enabled: true)
         await model.refresh(repo: Repository(path: "/two"), targetOverride: nil, enabled: true)
         let gate = Gate()
@@ -124,7 +124,7 @@ struct WorktreeMergeModelTests {
         let service = MergeScanStub()
         let gate = Gate()
         await service.hold(gate)
-        let model = WorktreeMergeModel(service: service)
+        let model = makeModel(service)
         let repo = Repository(path: "/repo")
         let old = Task { await model.refresh(repo: repo, targetOverride: "refs/heads/main", enabled: true) }
         while await service.calls == 0 { await Task.yield() }
@@ -138,13 +138,77 @@ struct WorktreeMergeModelTests {
     @Test("active file status updates one row without scanning or masking new commits")
     func localOverlay() async {
         let service = MergeScanStub()
-        let model = WorktreeMergeModel(service: service)
+        let model = makeModel(service)
         await model.refresh(repo: Repository(path: "/repo"), targetOverride: nil, enabled: true)
         let changed = StatusParser.parse("? new.txt\u{0}")
-        #expect(model.entry(for: "/repo/feature", localStatus: changed)?.hasLocalChanges == true)
-        #expect(model.entry(for: "/repo/feature", localStatus: StatusResult())?.hasLocalChanges == false)
-        #expect(model.entry(for: "/repo/feature", localStatus: StatusResult(oid: "new-head"))?.mergeStatus == .unknown)
+        #expect(model.entry(for: "/repo/feature", localStatus: changed)?.entry.hasLocalChanges == true)
+        #expect(model.entry(for: "/repo/feature", localStatus: changed)?.localChangeCount == 1)
+        #expect(model.entry(for: "/repo/feature", localStatus: StatusResult())?.entry.hasLocalChanges == false)
         #expect(await service.calls == 1)
     }
 
+    @Test("a commit in one worktree keeps its group and rechecks only that row")
+    func movedHeadStaysInItsGroup() async {
+        let service = MergeScanStub()
+        let model = makeModel(service)
+        await model.refresh(repo: Repository(path: "/repo"), targetOverride: nil, enabled: true)
+        let settled = model.entry(for: "/repo/feature")
+        #expect(WorktreeGroup.classify(settled) == .merged)
+
+        // The user commits in the worktree they are browsing: HEAD moves ahead of
+        // the scan. The row must not fall into the catch-all group and bounce back.
+        let committed = model.entry(for: "/repo/feature", localStatus: StatusResult(oid: "new-head"))
+        #expect(committed?.isRechecking == true)
+        #expect(committed?.entry.mergeStatus == .merged)
+        #expect(WorktreeGroup.classify(committed) == .merged)
+
+        await model.recheck(path: "/repo/feature")
+        #expect(await service.calls == 2)
+        #expect(model.entry(for: "/repo/feature")?.isRechecking == false)
+        #expect(model.entry(for: "/repo/feature")?.entry.mergeStatus == .merged)
+    }
+
+    @Test("a burst of refresh keys collapses into a single scan")
+    func burstCoalescing() async {
+        let service = MergeScanStub()
+        let model = WorktreeMergeModel(service: service)
+        model.scanDebounce = .milliseconds(40)
+        let repo = Repository(path: "/repo")
+        // SwiftUI restarts `.task(id:)` on every key change and cancels the previous
+        // run: ten bumps in a burst must still cost one scan, not ten.
+        var runs: [Task<Void, Never>] = []
+        for revision in 0..<10 {
+            runs.append(Task { await model.refresh(repo: repo, targetOverride: nil, enabled: true, revision: revision) })
+        }
+        for run in runs.dropLast() { run.cancel() }
+        for run in runs { await run.value }
+        #expect(await service.calls == 1)
+        #expect(model.snapshot != nil)
+        #expect(!model.isChecking)
+    }
+
+    @Test("the cleanup sheet's scan is reused by the rows at the same revision")
+    func adoptedScan() async {
+        let service = MergeScanStub()
+        let model = makeModel(service)
+        let repo = Repository(path: "/repo")
+        await model.refresh(repo: repo, targetOverride: nil, enabled: true, revision: 7)
+        #expect(await service.calls == 1)
+        #expect(model.cachedSnapshot(repoPath: "/repo", target: nil) != nil)
+        #expect(model.cachedSnapshot(repoPath: "/other", target: nil) == nil)
+
+        // The comparison branch changed, so the key changed — but the cleanup sheet
+        // already scanned for it, so the rows must not scan a second time.
+        guard let shared = model.cachedSnapshot(repoPath: "/repo", target: nil) else { return }
+        model.adopt(shared, repoPath: "/repo", target: "refs/heads/dev", revision: 7)
+        await model.refresh(repo: repo, targetOverride: "refs/heads/dev", enabled: true, revision: 7)
+        #expect(await service.calls == 1)
+        #expect(model.entry(for: "/repo/feature") != nil)
+    }
+
+    private func makeModel(_ service: WorktreeCleanupChecking) -> WorktreeMergeModel {
+        let model = WorktreeMergeModel(service: service)
+        model.scanDebounce = .zero
+        return model
+    }
 }

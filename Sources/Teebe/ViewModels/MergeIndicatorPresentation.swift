@@ -10,11 +10,17 @@ struct MergeIndicatorPresentation {
     let details: [String]
     var description: String { ([title] + details).joined(separator: ". ") }
 
-    init(entry: CleanupEntry?, targetName: String?, isChecking: Bool) {
-        guard let entry else {
+    init(status: WorktreeMergeEntry?, targetName: String?, isChecking: Bool) {
+        guard let status else {
             self.init(symbol: isChecking ? .checking : .unknown,
                       title: isChecking ? "Checking merge status" : "Status unavailable",
                       details: isChecking ? ["Reading local Git history"] : ["Git could not be checked. Refresh to try again."])
+            return
+        }
+        let entry = status.entry
+        if status.isRechecking {
+            self.init(symbol: .checking, title: "Checking new commits",
+                      details: ["Rechecking this worktree against \(targetName ?? "the comparison branch")."])
             return
         }
         if entry.isBroken {

@@ -76,11 +76,11 @@ struct MergeIndicatorPresentationTests {
 
     @Test("checking and missing-target states remain actionable")
     func unavailableHelp() {
-        #expect(MergeIndicatorPresentation(entry: nil, targetName: nil, isChecking: true).symbol == .checking)
-        #expect(MergeIndicatorPresentation(entry: nil, targetName: nil, isChecking: false)
+        #expect(MergeIndicatorPresentation(status: nil, targetName: nil, isChecking: true).symbol == .checking)
+        #expect(MergeIndicatorPresentation(status: nil, targetName: nil, isChecking: false)
             .details[0].contains("Refresh to try again"))
         let entry = CleanupEntry(worktree: Worktree(path: "/feature"))
-        #expect(MergeIndicatorPresentation(entry: entry, targetName: nil, isChecking: false)
+        #expect(MergeIndicatorPresentation(status: WorktreeMergeEntry(entry: entry), targetName: nil, isChecking: false)
             .details[0].contains("Select the branch to compare against"))
     }
 
@@ -100,6 +100,6 @@ struct MergeIndicatorPresentationTests {
     }
 
     private func presentation(_ entry: CleanupEntry) -> MergeIndicatorPresentation {
-        MergeIndicatorPresentation(entry: entry, targetName: "dev", isChecking: false)
+        MergeIndicatorPresentation(status: WorktreeMergeEntry(entry: entry), targetName: "dev", isChecking: false)
     }
 }

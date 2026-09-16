@@ -10,18 +10,18 @@ struct WorktreeListPresentationTests {
     func classification() {
         var entry = CleanupEntry(worktree: Worktree(path: "/feature"))
         entry.mergeStatus = .merged
-        #expect(WorktreeGroup.classify(entry) == .merged)
+        #expect(WorktreeGroup.classify(status(entry)) == .merged)
         entry.hasIgnoredFiles = true
-        #expect(WorktreeGroup.classify(entry) == .merged)
+        #expect(WorktreeGroup.classify(status(entry)) == .merged)
         #expect(!entry.canRemove(includingIgnored: false))
         entry.hasLocalChanges = true
-        #expect(WorktreeGroup.classify(entry) == .localChanges)
+        #expect(WorktreeGroup.classify(status(entry)) == .localChanges)
         entry.isBroken = true
-        #expect(WorktreeGroup.classify(entry) == .broken)
+        #expect(WorktreeGroup.classify(status(entry)) == .broken)
         entry.isBroken = false
         entry.hasLocalChanges = false
         entry.hasUncheckedFiles = true
-        #expect(WorktreeGroup.classify(entry) == .needsReview)
+        #expect(WorktreeGroup.classify(status(entry)) == .needsReview)
         #expect(WorktreeGroup.classify(nil) == .needsReview)
     }
 
@@ -38,7 +38,7 @@ struct WorktreeListPresentationTests {
         var targetEntry = CleanupEntry(worktree: target)
         targetEntry.isTarget = true
         let trees = [primary, clean, dirty, target]
-        let entries = [clean.path: cleanEntry, dirty.path: dirtyEntry, target.path: targetEntry]
+        let entries = [clean.path: status(cleanEntry), dirty.path: status(dirtyEntry), target.path: status(targetEntry)]
         let open = WorktreeListPresentation(worktrees: trees, entries: entries, grouped: true,
                                            collapsed: [], hasRepository: true)
         let closed = WorktreeListPresentation(worktrees: trees, entries: entries, grouped: true,
@@ -76,7 +76,7 @@ struct WorktreeListPresentationTests {
         targetEntry.isTarget = true
         let closed = WorktreeListPresentation(
             worktrees: git.worktreesResult,
-            entries: [clean.path: cleanEntry, dirty.path: dirtyEntry, target.path: targetEntry],
+            entries: [clean.path: status(cleanEntry), dirty.path: status(dirtyEntry), target.path: status(targetEntry)],
             grouped: true, collapsed: [.merged], hasRepository: true)
         #expect(!closed.visibleWorktrees.contains { $0.path == "/aaa" })
 
@@ -108,4 +108,6 @@ struct WorktreeListPresentationTests {
         #expect(AppModel(environment: env).layout(forRepo: "/repo") == layout)
         #expect(app.layout(forRepo: "/other") == nil)
     }
+
+    private func status(_ entry: CleanupEntry) -> WorktreeMergeEntry { WorktreeMergeEntry(entry: entry) }
 }

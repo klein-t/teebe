@@ -123,8 +123,10 @@ struct WorktreesSection: View {
         }
         .onChange(of: selector.worktree.status) { _, status in
             guard let path = selector.worktree.worktreePath, let head = status?.oid,
-                  let entry = app.mergeStatus.entry(for: path), head != entry.worktree.head else { return }
-            selector.invalidateMergeStatus()
+                  let current = app.mergeStatus.entry(for: path), head != current.entry.worktree.head else { return }
+            // Only this checkout committed, so only this row needs rechecking —
+            // invalidating the whole list would regroup and resize every row.
+            Task { await app.mergeStatus.recheck(path: path) }
         }
         .sheet(item: $cleanupRepo) { repo in
             WorktreeCleanupView(app: app, repo: repo)
@@ -258,7 +260,8 @@ struct WorktreesSection: View {
     private func mergeIndicator(_ worktree: Worktree, isActive: Bool) -> some View {
         let local = selector.worktree.worktreePath == worktree.path ? selector.worktree.status : nil
         let presentation = MergeIndicatorPresentation(
-            entry: app.mergeStatus.entry(for: worktree.path, localStatus: local),
+            status: app.mergeStatus.entry(for: worktree.path, localStatus: local,
+                                          localChangeCount: selector.info(for: worktree).changeCount),
             targetName: app.mergeStatus.snapshot?.target?.name, isChecking: app.mergeStatus.isChecking
         )
         return WorktreeStatusButton(presentation: presentation, isSelected: isActive,

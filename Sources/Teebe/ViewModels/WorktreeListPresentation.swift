@@ -23,8 +23,8 @@ enum WorktreeGroup: String, CaseIterable, Identifiable {
         case .needsReview: .unknown
         }
     }
-    static func classify(_ entry: CleanupEntry?) -> WorktreeGroup {
-        guard let entry else { return .needsReview }
+    static func classify(_ status: WorktreeMergeEntry?) -> WorktreeGroup {
+        guard let entry = status?.entry else { return .needsReview }
         if entry.isBroken { return .broken }
         if entry.hasLocalChanges { return .localChanges }
         if entry.hasUncheckedFiles || entry.hasSubmodules { return .needsReview }
@@ -52,9 +52,9 @@ struct WorktreeListPresentation {
     static let repoHeight: CGFloat = 29
     static let verticalPadding: CGFloat = 8
 
-    init(worktrees: [Worktree], entries: [String: CleanupEntry], grouped: Bool,
+    init(worktrees: [Worktree], entries: [String: WorktreeMergeEntry], grouped: Bool,
          collapsed: Set<WorktreeGroup>, hasRepository: Bool) {
-        pinned = grouped ? worktrees.filter { $0.isPrimary || entries[$0.path]?.isTarget == true } : worktrees
+        pinned = grouped ? worktrees.filter { $0.isPrimary || entries[$0.path]?.entry.isTarget == true } : worktrees
         let pinnedPaths = Set(pinned.map(\.path))
         let remaining = grouped ? worktrees.filter { !pinnedPaths.contains($0.path) } : []
         groups = WorktreeGroup.allCases.compactMap { kind in
@@ -80,12 +80,13 @@ enum WorktreeSectionSizing {
 
 extension AppModel {
     func worktreeList(collapsed: Set<WorktreeGroup>) -> WorktreeListPresentation {
-        let entries = selector.worktrees.compactMap { tree -> CleanupEntry? in
+        let entries = selector.worktrees.compactMap { tree -> WorktreeMergeEntry? in
             let local = selector.worktree.worktreePath == tree.path ? selector.worktree.status : nil
-            return mergeStatus.entry(for: tree.path, localStatus: local)
+            return mergeStatus.entry(for: tree.path, localStatus: local,
+                                     localChangeCount: selector.info(for: tree).changeCount)
         }
         return WorktreeListPresentation(worktrees: selector.worktrees,
-                                       entries: Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) }),
+                                       entries: Dictionary(uniqueKeysWithValues: entries.map { ($0.entry.id, $0) }),
                                        grouped: showMergeStatus, collapsed: collapsed,
                                        hasRepository: selector.selectedRepo != nil)
     }
