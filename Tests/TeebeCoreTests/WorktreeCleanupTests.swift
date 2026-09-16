@@ -154,6 +154,28 @@ struct WorktreeCleanupTests {
         #expect(FileManager.default.fileExists(atPath: folder.path))
     }
 
+    @Test("detached and locked worktrees say why they cannot be removed")
+    func namedBlockers() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let locked = fixture.addWorktree(name: "locked", branch: "locked")
+        let detached = fixture.root.appendingPathComponent("detached", isDirectory: true)
+        fixture.git(["worktree", "add", "-q", "--detach", detached.path, "HEAD"])
+        fixture.git(["worktree", "lock", locked.path])
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        let snapshot = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
+        let lockedEntry = try #require(snapshot.entries.first { $0.worktree.branch == "locked" })
+        #expect(lockedEntry.mergeStatus == .merged)
+        #expect(lockedEntry.problem == "Locked worktree")
+        #expect(!lockedEntry.canRemove(includingIgnored: true))
+        let detachedEntry = try #require(snapshot.entries.first { $0.worktree.isDetached })
+        #expect(detachedEntry.problem == "Detached HEAD")
+        #expect(!detachedEntry.canRemove(includingIgnored: true))
+        let plain = try #require(snapshot.entries.first { $0.worktree.isPrimary })
+        #expect(plain.problem == nil)
+    }
+
     @Test("missing saved targets and missing worktree folders never become eligible")
     func unavailable() async throws {
         let fixture = try GitFixture()

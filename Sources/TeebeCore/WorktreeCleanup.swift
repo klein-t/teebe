@@ -211,6 +211,12 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             entry.mergeStatus = .unknown
             entry.problem = "Could not inspect this worktree"
         }
+        // A worktree can be perfectly merged and still be refused. Say why, so the
+        // entry never reads as "merged, nothing wrong" behind a control that does nothing.
+        if entry.problem == nil {
+            if worktree.isDetached { entry.problem = "Detached HEAD" }
+            else if worktree.isLocked { entry.problem = "Locked worktree" }
+        }
         return entry
     }
 
