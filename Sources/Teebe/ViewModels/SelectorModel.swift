@@ -75,10 +75,13 @@ final class SelectorModel {
         self.environment = environment
         self.worktree = WorktreeModel(environment: environment)
         // An external write to the active worktree should re-light its live dot
-        // immediately, without waiting for a manual refresh.
+        // immediately, without waiting for a manual refresh. It must NOT bump
+        // `mergeRevision`: editing file content cannot change merge ancestry, and a
+        // busy agent fires a batch every 250 ms — each one would restart the whole
+        // merge scan. Ref writes go through `handleRepoWatchEvent`, worktree
+        // add/remove through `applyDiscovered`.
         self.worktree.onActivity = { [weak self] _ in
             self?.refreshLiveState()
-            self?.mergeRevision += 1
         }
     }
 
@@ -136,11 +139,11 @@ final class SelectorModel {
         await startRepoWatching(repo)
         startAgentWatching()
         do {
-            worktrees = try await environment.worktreeService.worktrees(for: repo)
+            applyDiscovered(try await environment.worktreeService.worktrees(for: repo))
             branches = try await environment.branchService.branches(for: repo)
             errorMessage = nil
         } catch {
-            worktrees = []
+            applyDiscovered([])
             branches = []
             errorMessage = WorktreeModel.describe(error)
         }
@@ -223,7 +226,7 @@ final class SelectorModel {
             errorMessage = WorktreeModel.describe(error)
             return
         }
-        worktrees = discovered
+        applyDiscovered(discovered)
         branches = discoveredBranches
         await refreshWorktreeInfo()
         // Keep the current selection if it still exists; only re-focus when it's gone.
@@ -239,6 +242,17 @@ final class SelectorModel {
         }
     }
 
+    /// Adopt a freshly discovered worktree list. Merge ancestry can only have moved
+    /// when the set of checkouts changed or one of their HEADs did, so only that
+    /// bumps `mergeRevision`. Re-discovering the same trees — which is what a manual
+    /// Refresh, a selection change, or leaving low power (alt-tab) does — reuses the
+    /// last scan instead of restarting a full N-worktree check.
+    private func applyDiscovered(_ discovered: [Worktree]) {
+        func identity(_ trees: [Worktree]) -> [String] { trees.map { $0.path + "\u{0}" + $0.head } }
+        if identity(discovered) != identity(worktrees) { mergeRevision += 1 }
+        worktrees = discovered
+    }
+
     /// Load per-worktree ahead/behind + change count + live state for the
     /// WORKTREES list (drives the sync arrows and pulse dot).
     func refreshWorktreeInfo(now: Date = Date()) async {
@@ -246,7 +260,6 @@ final class SelectorModel {
         let agentStatuses = environment.agentStatuses
         let worktrees = self.worktrees
         let paths = worktrees.map(\.path)
-        mergeRevision += 1
         // One batched agent-log scan for the whole repo — the scanner needs every
         // worktree path to attribute a session to the worktree it runs in, not
         // the one it was launched from. Runs off-main alongside the git reads.

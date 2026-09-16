@@ -252,15 +252,40 @@ struct SelectorModelTests {
         #expect(selector.info(for: git.worktreesResult[0]).isLive == false)
     }
 
-    @Test("external edits invalidate merge icons even when Git status is unchanged")
-    func editsInvalidateMergeIcons() async {
+    @Test("edits, selection changes and focus returns reuse the last merge scan")
+    func mergeScanTriggers() async {
         let git = FakeGitClient()
-        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        git.worktreesResult = [
+            Worktree(path: "/repo", branch: "main", head: "aaa", isPrimary: true),
+            Worktree(path: "/repo-wt", branch: "feature", head: "bbb")
+        ]
         let selector = SelectorModel(environment: makeTestEnvironment(git: git))
         await selector.selectRepo(Repository(path: "/repo"))
         let before = selector.mergeRevision
-        await selector.worktree.handleFileSystemEvent()
-        #expect(selector.mergeRevision > before)
+
+        // A busy agent fires a watcher batch every 250 ms. File content cannot
+        // change merge ancestry, so ten batches must not restart the scan even once.
+        for _ in 0..<10 { await selector.worktree.handleFileSystemEvent() }
+        #expect(selector.mergeRevision == before)
+
+        // Nor may clicking another worktree, or the window un-occluding on alt-tab.
+        await selector.selectWorktree(git.worktreesResult[1])
+        #expect(selector.mergeRevision == before)
+        for _ in 0..<2 {
+            await selector.setLowPower(true)
+            await selector.setLowPower(false)
+        }
+        #expect(selector.mergeRevision == before)
+
+        // A new checkout does move ancestry, so that one scans.
+        git.worktreesResult.append(Worktree(path: "/repo-new", branch: "new", head: "ccc"))
+        await selector.refreshWorktrees()
+        #expect(selector.mergeRevision == before + 1)
+
+        // And so does a commit in an existing checkout.
+        git.worktreesResult[1].head = "ddd"
+        await selector.refreshWorktrees()
+        #expect(selector.mergeRevision == before + 2)
     }
 
     @Test("refreshWorktreeInfo computes live state alongside sync counts")
