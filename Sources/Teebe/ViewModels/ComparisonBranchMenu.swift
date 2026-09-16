@@ -52,17 +52,79 @@ enum ComparisonBranchMenu {
         }
     }
 
-    /// Resolve a hand-typed ref against everything the repository has, not just the
-    /// filtered menu. A bare name also matches its `origin/` form: typing `dev` in a
-    /// repo that only tracks `origin/dev` means that branch.
-    static func resolve(_ typed: String, in branches: [CleanupBranch]) -> CleanupBranch? {
-        let name = typed.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return nil }
-        return branches.first { $0.name == name || $0.ref == name }
-            ?? branches.first { $0.name == "origin/" + name }
-    }
-
     private static func rank(_ branch: CleanupBranch) -> Int {
         leadingNames.firstIndex(of: shortName(branch)) ?? leadingNames.count
+    }
+}
+
+/// One line of the Comparison Branch picker: a branch, or the Automatic choice.
+struct ComparisonBranchRow: Identifiable, Equatable {
+    /// The ref this row saves. Empty means Automatic, which saves no override.
+    let id: String
+    /// Left-hand text: the branch name without its remote, or "Automatic".
+    let name: String
+    /// Right-hand text: where the branch lives, or what Automatic resolved to.
+    let detail: String
+    /// False for an Automatic row that resolved to nothing: there is nothing to pick.
+    let isEnabled: Bool
+}
+
+/// The picker's two lists. Suggested is the handful anyone actually means; the
+/// rest is every other ref, so no branch is unreachable.
+struct ComparisonBranchSections: Equatable {
+    var suggested: [ComparisonBranchRow] = []
+    var all: [ComparisonBranchRow] = []
+    var isEmpty: Bool { suggested.isEmpty && all.isEmpty }
+}
+
+extension ComparisonBranchMenu {
+    /// Everything the picker shows, already ordered and filtered. Search is a
+    /// case-insensitive substring of the full ref name, so both `dev` and
+    /// `origin/dev` find `origin/dev`.
+    static func sections(_ branches: [CleanupBranch], automatic: CleanupBranch?,
+                         search: String = "") -> ComparisonBranchSections {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        func matches(_ text: String) -> Bool {
+            query.isEmpty || text.lowercased().contains(query)
+        }
+
+        var sections = ComparisonBranchSections()
+        let automaticName = automatic?.name
+        if matches("automatic " + (automaticName ?? "unavailable")) {
+            sections.suggested.append(ComparisonBranchRow(
+                id: "", name: "Automatic", detail: automaticName ?? "unavailable",
+                isEnabled: automatic != nil))
+        }
+
+        // origin's copy first, then the local branches origin has no copy of.
+        var suggestedRefs: Set<String> = []
+        let originSuggested = leadingNames.compactMap { short in
+            branches.first { $0.ref == "refs/remotes/origin/" + short }
+        }
+        let localSuggested = leadingNames.compactMap { short -> CleanupBranch? in
+            guard !originSuggested.contains(where: { shortName($0) == short }) else { return nil }
+            return branches.first { $0.ref == "refs/heads/" + short }
+        }
+        for branch in originSuggested + localSuggested {
+            suggestedRefs.insert(branch.ref)
+            if matches(branch.name) { sections.suggested.append(row(branch)) }
+        }
+
+        sections.all = branches
+            .filter { !suggestedRefs.contains($0.ref) && matches($0.name) }
+            .sorted { first, second in
+                let (a, b) = (shortName(first), shortName(second))
+                guard a.localizedStandardCompare(b) == .orderedSame else {
+                    return a.localizedStandardCompare(b) == .orderedAscending
+                }
+                return first.name.localizedStandardCompare(second.name) == .orderedAscending
+            }
+            .map(row)
+        return sections
+    }
+
+    private static func row(_ branch: CleanupBranch) -> ComparisonBranchRow {
+        ComparisonBranchRow(id: branch.ref, name: shortName(branch),
+                            detail: remote(branch) ?? "local", isEnabled: true)
     }
 }

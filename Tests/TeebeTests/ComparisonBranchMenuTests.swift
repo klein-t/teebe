@@ -54,16 +54,65 @@ struct ComparisonBranchMenuTests {
         #expect(ComparisonBranchMenu.entries(refs).map(\.name) == ["main"])
     }
 
-    @Test("a typed branch resolves against every ref, or not at all")
-    func resolvesTypedNames() {
-        let refs = branches(["refs/heads/feat/spike", "refs/remotes/origin/dev"])
-        #expect(ComparisonBranchMenu.resolve("feat/spike", in: refs)?.ref == "refs/heads/feat/spike")
-        #expect(ComparisonBranchMenu.resolve("origin/dev", in: refs)?.ref == "refs/remotes/origin/dev")
-        // A bare name means its tracked copy when that is the only one there is.
-        #expect(ComparisonBranchMenu.resolve("dev", in: refs)?.ref == "refs/remotes/origin/dev")
-        #expect(ComparisonBranchMenu.resolve("  origin/dev  ", in: refs)?.ref == "refs/remotes/origin/dev")
-        #expect(ComparisonBranchMenu.resolve("nope", in: refs) == nil)
-        #expect(ComparisonBranchMenu.resolve("   ", in: refs) == nil)
+    @Test("the picker suggests Automatic, then origin's integration lines, then local orphans")
+    func picksSuggested() {
+        let refs = branches([
+            "refs/heads/main", "refs/heads/dev", "refs/heads/develop", "refs/heads/feat/x",
+            "refs/remotes/origin/main", "refs/remotes/origin/dev"
+        ])
+        let sections = ComparisonBranchMenu.sections(refs, automatic: refs.first { $0.name == "origin/main" })
+        #expect(sections.suggested.map(\.name) == ["Automatic", "main", "dev", "develop"])
+        #expect(sections.suggested.map(\.detail) == ["origin/main", "origin", "origin", "local"])
+        #expect(sections.suggested.map(\.id)
+            == ["", "refs/remotes/origin/main", "refs/remotes/origin/dev", "refs/heads/develop"])
+    }
+
+    @Test("everything else is alphabetical, local and remote interleaved by name")
+    func picksRest() {
+        let refs = branches([
+            "refs/heads/main", "refs/heads/zeta", "refs/heads/alpha", "refs/heads/beta",
+            "refs/remotes/origin/beta", "refs/remotes/upstream/alpha"
+        ])
+        let sections = ComparisonBranchMenu.sections(refs, automatic: nil)
+        #expect(sections.suggested.map(\.name) == ["Automatic", "main"])
+        #expect(sections.all.map(\.name) == ["alpha", "alpha", "beta", "beta", "zeta"])
+        #expect(sections.all.map(\.detail) == ["local", "upstream", "local", "origin", "local"])
+    }
+
+    @Test("an unresolved Automatic row says so and cannot be picked")
+    func automaticUnavailable() {
+        let sections = ComparisonBranchMenu.sections(branches(["refs/heads/spike"]), automatic: nil)
+        #expect(sections.suggested.first?.detail == "unavailable")
+        #expect(sections.suggested.first?.isEnabled == false)
+        #expect(sections.all.map(\.name) == ["spike"])
+    }
+
+    @Test("search filters both sections, case-insensitively, on the full ref name")
+    func searchFilters() {
+        let refs = branches([
+            "refs/heads/main", "refs/heads/Feature/Login", "refs/remotes/origin/main",
+            "refs/remotes/origin/hotfix"
+        ])
+        let automatic = refs.first { $0.name == "origin/main" }
+        #expect(ComparisonBranchMenu.sections(refs, automatic: automatic, search: "LOG").all.map(\.name)
+            == ["Feature/Login"])
+        // A bare name and its remote form both find the tracked copy.
+        #expect(ComparisonBranchMenu.sections(refs, automatic: automatic, search: "origin/hot").all.map(\.name)
+            == ["hotfix"])
+        #expect(ComparisonBranchMenu.sections(refs, automatic: automatic, search: "hot").all.map(\.name)
+            == ["hotfix"])
+        // Automatic answers to its own name and to the branch it resolved to.
+        #expect(ComparisonBranchMenu.sections(refs, automatic: automatic, search: "auto").suggested.map(\.name)
+            == ["Automatic"])
+        #expect(ComparisonBranchMenu.sections(refs, automatic: automatic, search: "zzz").isEmpty)
+    }
+
+    @Test("the saved choice is a row the picker can preselect")
+    func savedChoiceIsListed() {
+        let refs = branches(["refs/heads/main", "refs/heads/feat/spike"])
+        let sections = ComparisonBranchMenu.sections(refs, automatic: nil)
+        #expect(sections.all.map(\.id) == ["refs/heads/feat/spike"])
+        #expect((sections.suggested + sections.all).first { $0.id == "refs/heads/feat/spike" } != nil)
     }
 
     /// Through the real parser, so the menu is fed exactly what a repository yields.

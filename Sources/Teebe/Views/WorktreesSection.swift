@@ -16,8 +16,8 @@ struct WorktreesSection: View {
     /// The merged folders the user is being asked to confirm, captured when the
     /// header action is clicked so the list can keep changing underneath.
     @State var pendingCleanup: [CleanupEntry] = []
-    /// The repository whose comparison branch is being typed in by hand ("Other…").
-    @State var branchEntryRepo: Repository?
+    /// The repository whose comparison branch is being picked in the sheet.
+    @State var branchPickerRepo: Repository?
 
     private var selector: SelectorModel { app.selector }
 
@@ -152,9 +152,13 @@ struct WorktreesSection: View {
         } message: {
             Text("This removes the worktree folder from your Mac. The branch is kept.")
         }
-        .sheet(item: $branchEntryRepo) { repo in
-            OtherComparisonBranchSheet(branches: app.mergeStatus.snapshot?.targets.branches ?? []) { branch in
-                app.setCleanupTarget(branch.ref, for: repo.path)
+        .sheet(item: $branchPickerRepo) { repo in
+            ComparisonBranchSheet(
+                branches: app.mergeStatus.snapshot?.targets.branches ?? [],
+                automatic: app.mergeStatus.snapshot?.targets.automatic,
+                saved: app.cleanupTarget(for: repo.path) ?? ""
+            ) { ref in
+                app.setCleanupTarget(ref.isEmpty ? nil : ref, for: repo.path)
             }
         }
     }
@@ -311,13 +315,13 @@ struct WorktreesSection: View {
         .labelsHidden()
     }
 
-    /// The picker plus the way out of it: any other branch in the repository can be
-    /// named by hand.
+    /// The quick picks plus the way past them: every branch the repository has is
+    /// in the sheet.
     @ViewBuilder
     private func comparisonMenu(_ repo: Repository) -> some View {
         comparisonPicker(repo)
         Divider()
-        Button("Other…") { branchEntryRepo = repo }
+        Button("Choose Comparison Branch…") { branchPickerRepo = repo }
     }
 
     private func chooseComparisonBranch(_ repo: Repository) -> some View {
@@ -406,44 +410,128 @@ struct WorktreesSection: View {
     }
 }
 
-/// Naming a comparison branch the menu doesn't list. It must still be a branch the
-/// repository has: a typo here would silently compare against nothing.
-private struct OtherComparisonBranchSheet: View {
+/// Picking the branch worktrees are compared against. Every ref the repository has
+/// is reachable here: the handful anyone actually means first, the rest behind a
+/// search field.
+private struct ComparisonBranchSheet: View {
     let branches: [CleanupBranch]
-    let onChoose: (CleanupBranch) -> Void
+    let automatic: CleanupBranch?
+    let saved: String
+    let onChoose: (String) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var typed = ""
-    @State private var problem: String?
+    @State private var search = ""
+    @State private var selection: String?
+    @FocusState private var focus: Field?
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Branch name").font(.system(size: 12, weight: .semibold))
-            TextField("Branch name", text: $typed, prompt: Text("origin/dev"))
-                .textFieldStyle(.roundedBorder)
-                .labelsHidden()
-                .onSubmit(choose)
-                .onChange(of: typed) { _, _ in problem = nil }
-            if let problem {
-                Text(problem).font(.system(size: 11)).foregroundStyle(.red).lineLimit(2)
-            }
-            HStack(spacing: 8) {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("OK", action: choose).keyboardShortcut(.defaultAction)
-            }
-            .padding(.top, 4)
-        }
-        .padding(16)
-        .frame(width: 280)
+    private enum Field { case search, list }
+
+    private var sections: ComparisonBranchSections {
+        ComparisonBranchMenu.sections(branches, automatic: automatic, search: search)
     }
 
-    private func choose() {
-        let name = typed.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let branch = ComparisonBranchMenu.resolve(name, in: branches) else {
-            problem = name.isEmpty ? "Enter a branch name." : "No branch named \(name)."
-            return
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Comparison Branch").font(.system(size: 15, weight: .semibold))
+                Text("Worktrees are checked against this branch to decide whether they are merged.")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            searchField
+            branchList
+            HStack(spacing: 10) {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Choose") { choose(selection) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(selection == nil)
+            }
         }
-        onChoose(branch)
+        .padding(16)
+        .frame(minWidth: 440, idealWidth: 440, maxWidth: 640, minHeight: 520, idealHeight: 520, maxHeight: 760)
+        .onAppear {
+            if !saved.isEmpty || automatic != nil { selection = saved }
+            focus = .search
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(.secondary)
+            TextField("Search branches", text: $search)
+                .textFieldStyle(.plain).font(.system(size: 12))
+                .focused($focus, equals: .search)
+                .onSubmit(chooseOnlyMatch)
+                .onKeyPress(.downArrow) {
+                    moveIntoList()
+                    return .handled
+                }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondary.opacity(0.25)))
+    }
+
+    private var branchList: some View {
+        let listed = sections
+        return ScrollViewReader { proxy in
+            List(selection: $selection) {
+                if !listed.suggested.isEmpty {
+                    Section("Suggested") { ForEach(listed.suggested) { branchRow($0) } }
+                }
+                if !listed.all.isEmpty {
+                    Section("All Branches") { ForEach(listed.all) { branchRow($0) } }
+                }
+            }
+            .listStyle(.bordered)
+            .focused($focus, equals: .list)
+            .overlay {
+                if listed.isEmpty {
+                    Text("No branches match.").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+            }
+            .onAppear {
+                guard let selection else { return }
+                proxy.scrollTo(selection, anchor: .center)
+            }
+        }
+    }
+
+    private func branchRow(_ item: ComparisonBranchRow) -> some View {
+        HStack(spacing: 8) {
+            Text(item.name).font(.system(size: 13)).lineLimit(1)
+            Spacer(minLength: 8)
+            Text(item.detail).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            // Stays put while another row is highlighted, so the saved choice is
+            // still readable mid-pick.
+            Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold))
+                .opacity(item.id == saved ? 1 : 0)
+        }
+        .frame(height: 25)
+        .contentShape(Rectangle())
+        .opacity(item.isEnabled ? 1 : 0.4)
+        .tag(item.id)
+        .selectionDisabled(!item.isEnabled)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { choose(item.id) })
+    }
+
+    /// One match and a Return means that one, without a trip to the list.
+    private func chooseOnlyMatch() {
+        let visible = sections.suggested + sections.all
+        guard visible.count == 1, let only = visible.first, only.isEnabled else { return }
+        choose(only.id)
+    }
+
+    private func moveIntoList() {
+        if selection == nil {
+            selection = (sections.suggested + sections.all).first { $0.isEnabled }?.id
+        }
+        focus = .list
+    }
+
+    private func choose(_ ref: String?) {
+        guard let ref, !ref.isEmpty || automatic != nil else { return }
+        onChoose(ref)
         dismiss()
     }
 }
