@@ -64,12 +64,14 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     /// in flight long enough to watch it time out.
     var fetchGate: (@Sendable () async -> Void)?
 
-    func pruneWorktrees(repoPath: String) async throws {
-        remoteLock.lock(); prunes.append(repoPath); remoteLock.unlock()
-    }
+    /// Recorded synchronously: locking inside an async function is not allowed.
+    private func record(prune path: String) { remoteLock.lock(); prunes.append(path); remoteLock.unlock() }
+    private func record(fetch path: String) { remoteLock.lock(); fetches.append(path); remoteLock.unlock() }
+
+    func pruneWorktrees(repoPath: String) async throws { record(prune: repoPath) }
 
     func fetchOrigin(repoPath: String) async throws {
-        remoteLock.lock(); fetches.append(repoPath); remoteLock.unlock()
+        record(fetch: repoPath)
         if let fetchGate { await fetchGate() }
         if let fetchError { throw fetchError }
     }

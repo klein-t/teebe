@@ -29,6 +29,16 @@ final class AppModel {
     let selector: SelectorModel
     let mergeStatus: WorktreeMergeModel
 
+    /// The group-header actions. Built on first use because they need the finished
+    /// model back; one instance, so a removal in flight is visible everywhere.
+    @ObservationIgnored private var groupActionsStorage: WorktreeGroupActions?
+    var groupActions: WorktreeGroupActions {
+        if let groupActionsStorage { return groupActionsStorage }
+        let actions = WorktreeGroupActions(app: self)
+        groupActionsStorage = actions
+        return actions
+    }
+
     /// In-memory copy of the persisted state, loaded once at init and written back
     /// on change. Avoids a disk read-modify-write on every persist/layout update,
     /// and lets `persist()` and `saveLayout()` mutate disjoint fields of one value

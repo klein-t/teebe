@@ -18,11 +18,29 @@ struct WorktreeListPresentationTests {
         #expect(WorktreeGroup.classify(status(entry)) == .localChanges)
         entry.isBroken = true
         #expect(WorktreeGroup.classify(status(entry)) == .broken)
-        entry.isBroken = false
-        entry.hasLocalChanges = false
-        entry.hasUncheckedFiles = true
-        #expect(WorktreeGroup.classify(status(entry)) == .notChecked)
-        #expect(WorktreeGroup.classify(nil) == .notChecked)
+    }
+
+    @Test("a status Git cannot confirm is not merged, and says why in its own line")
+    func unconfirmedFoldsIntoNotMerged() {
+        var skipped = CleanupEntry(worktree: Worktree(path: "/skipped"))
+        skipped.mergeStatus = .merged
+        skipped.hasUncheckedFiles = true
+        #expect(WorktreeGroup.classify(status(skipped)) == .notMerged)
+        #expect(detail(skipped) == "Some files are marked unchanged in Git.")
+
+        var submodule = CleanupEntry(worktree: Worktree(path: "/submodule"))
+        submodule.mergeStatus = .merged
+        submodule.hasSubmodules = true
+        #expect(WorktreeGroup.classify(status(submodule)) == .notMerged)
+        #expect(detail(submodule) == "Contains a submodule.")
+
+        var unknown = CleanupEntry(worktree: Worktree(path: "/unknown"))
+        unknown.problem = "Could not inspect this worktree"
+        #expect(WorktreeGroup.classify(status(unknown)) == .notMerged)
+        #expect(detail(unknown) == "Could not inspect this worktree.")
+
+        // No result at all is the same answer: nothing confirmed it merged.
+        #expect(WorktreeGroup.classify(nil) == .notMerged)
     }
 
     @Test("group order, collapsed navigation, and the comparison checkout stay consistent")
@@ -61,7 +79,7 @@ struct WorktreeListPresentationTests {
     @Test("groups read in a fixed order and their rows sort by branch name")
     func groupOrderAndRowSorting() {
         #expect(WorktreeGroup.allCases.map(\.title)
-            == ["Merged", "Local changes", "Not merged", "Broken", "Not checked"])
+            == ["Merged", "Local changes", "Not merged", "Broken"])
         let zed = Worktree(path: "/one", branch: "zed")
         let alpha = Worktree(path: "/two", branch: "alpha")
         let unnamed = Worktree(path: "/mid")   // detached: falls back to the folder name
@@ -127,6 +145,31 @@ struct WorktreeListPresentationTests {
                 + 2 * WorktreeListPresentation.groupHeight)
     }
 
+    @Test("a header that carries an action costs exactly what a plain header costs")
+    func headerActionsDoNotChangeHeight() {
+        // Merged and Broken headers hold a button; Not merged holds none. The window
+        // is sized from this number, so an action must not make its header taller.
+        let merged = Worktree(path: "/merged", branch: "merged")
+        let broken = Worktree(path: "/broken", branch: "broken")
+        let stale = Worktree(path: "/stale", branch: "stale")
+        var mergedEntry = CleanupEntry(worktree: merged)
+        mergedEntry.mergeStatus = .merged
+        var brokenEntry = CleanupEntry(worktree: broken)
+        brokenEntry.isBroken = true
+        var staleEntry = CleanupEntry(worktree: stale)
+        staleEntry.mergeStatus = .notConfirmed
+        let list = WorktreeListPresentation(
+            worktrees: [merged, broken, stale],
+            entries: [merged.path: status(mergedEntry), broken.path: status(brokenEntry),
+                      stale.path: status(staleEntry)],
+            grouped: true, collapsed: [], hasRepository: true)
+        #expect(list.groups.map(\.kind) == [.merged, .notMerged, .broken])
+        #expect(list.naturalHeight == WorktreeListPresentation.repoHeight
+                + WorktreeListPresentation.verticalPadding
+                + 3 * WorktreeListPresentation.rowHeight
+                + 3 * WorktreeListPresentation.groupHeight)
+    }
+
     @Test("the cursor steps out of a collapsed group instead of jumping to the top")
     func navigationFromHiddenRow() async {
         let git = FakeGitClient()
@@ -170,6 +213,12 @@ struct WorktreeListPresentationTests {
         let decoded = try JSONDecoder().decode(SectionLayout.self, from: old)
         #expect(decoded.worktreesHeight == nil)
         #expect(decoded.collapsedWorktreeGroups == nil)
+        // A group that no longer exists was saved as collapsed: the layout still
+        // decodes, and the stale name is simply dropped.
+        let stale = Data(#"{"worktreesOpen":true,"changesOpen":true,"filesOpen":true,"windowHeight":300,"collapsedWorktreeGroups":["merged","notChecked"]}"#.utf8)
+        let staleLayout = try JSONDecoder().decode(SectionLayout.self, from: stale)
+        #expect(staleLayout.collapsedWorktreeGroups == ["merged", "notChecked"])
+        #expect(Set((staleLayout.collapsedWorktreeGroups ?? []).compactMap(WorktreeGroup.init(rawValue:))) == [.merged])
         let env = makeTestEnvironment()
         let app = AppModel(environment: env)
         let layout = SectionLayout(windowHeight: 300, worktreesHeight: 340, collapsedWorktreeGroups: ["merged"])
@@ -193,4 +242,8 @@ struct WorktreeListPresentationTests {
     }
 
     private func status(_ entry: CleanupEntry) -> WorktreeMergeEntry { WorktreeMergeEntry(entry: entry) }
+
+    private func detail(_ entry: CleanupEntry) -> String {
+        MergeIndicatorPresentation(status: status(entry), targetName: "dev", isChecking: false).detail
+    }
 }

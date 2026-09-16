@@ -1,58 +1,21 @@
 import TeebeCore
 
-/// What one worktree's status button says: the group's own title, plus at most one
-/// detail line — the single highest-precedence reason, in the same precedence order
-/// `WorktreeGroup.classify` uses. Six-line popovers are what this replaced.
+/// The one line a worktree row's tooltip says about a checkout: the single
+/// highest-precedence reason, in the same precedence order `WorktreeGroup.classify`
+/// uses. The group header already says which group the row is in.
 struct MergeIndicatorPresentation {
-    enum Symbol { case branch, merge, edit, ignored, unknown, warning, broken, checking }
-    enum Tone { case merged, attention, error, secondary }
-    let symbol: Symbol
-    let tone: Tone
-    let title: String
-    /// At most one line. The title carries no trailing punctuation, so the spoken
-    /// form never doubles up a period.
-    let details: [String]
-    var description: String { details.isEmpty ? title : title + ". " + details.joined(separator: " ") }
+    let detail: String
 
     static let checkingDetail = "Checking new commits…"
 
     init(status: WorktreeMergeEntry?, targetName: String?, isChecking: Bool) {
+        // Nothing scanned this checkout yet. While a scan is running that is a
+        // wait, not a failure — don't call it unavailable.
         guard let status else {
-            // Nothing scanned this checkout yet. While a scan is running that is a
-            // wait, not a failure — don't call it unavailable.
-            self.init(symbol: isChecking ? .checking : .unknown,
-                      tone: .secondary,
-                      title: WorktreeGroup.notChecked.title,
-                      detail: isChecking ? Self.checkingDetail : "Git could not check this worktree.")
+            detail = isChecking ? Self.checkingDetail : "Git could not check this worktree."
             return
         }
-        let group = WorktreeGroup.classify(status)
-        self.init(symbol: Self.symbol(for: group, status: status),
-                  tone: Self.tone(for: group, status: status),
-                  title: group.title,
-                  detail: Self.detail(status, targetName: targetName))
-    }
-
-    private static func symbol(for group: WorktreeGroup, status: WorktreeMergeEntry) -> Symbol {
-        if status.isRechecking { return .checking }
-        switch group {
-        case .merged: return status.entry.hasIgnoredFiles ? .ignored : .merge
-        case .notChecked:
-            return status.entry.hasUncheckedFiles || status.entry.hasSubmodules ? .warning : .unknown
-        case .localChanges, .notMerged, .broken: return group.symbol
-        }
-    }
-
-    private static func tone(for group: WorktreeGroup, status: WorktreeMergeEntry) -> Tone {
-        if status.isRechecking { return .secondary }
-        switch group {
-        case .broken: return .error
-        case .localChanges: return .attention
-        case .merged: return status.entry.hasIgnoredFiles ? .secondary : .merged
-        case .notChecked:
-            return status.entry.hasUncheckedFiles || status.entry.hasSubmodules ? .attention : .secondary
-        case .notMerged: return .secondary
-        }
+        detail = Self.detail(status, targetName: targetName)
     }
 
     /// The one line worth reading, picked in the order the grouping itself uses.
@@ -88,7 +51,11 @@ struct MergeIndicatorPresentation {
     }
 
     private static func brokenReason(_ entry: CleanupEntry) -> String {
-        if entry.problem?.contains(".git link is missing") == true { return "The .git link is missing." }
+        // The folder is still there, so Prune will leave this row alone: say what
+        // does clear it instead of letting the button look broken.
+        if entry.problem?.contains(".git link is missing") == true {
+            return "The .git link is missing. Remove the folder in Finder, then prune."
+        }
         if entry.problem?.contains("folder is missing") == true { return "The folder no longer exists." }
         return "Git cannot access this checkout."
     }
@@ -99,12 +66,5 @@ struct MergeIndicatorPresentation {
         }.joined(separator: ", ")
         guard !examples.isEmpty else { return "Ignored files remain." }
         return "Ignored files remain (" + examples + (entry.ignoredPaths.count > 2 ? ", …" : "") + ")."
-    }
-
-    private init(symbol: Symbol, tone: Tone, title: String, detail: String) {
-        self.symbol = symbol
-        self.tone = tone
-        self.title = title
-        self.details = [detail]
     }
 }

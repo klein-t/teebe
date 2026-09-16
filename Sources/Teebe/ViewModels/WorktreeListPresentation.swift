@@ -1,11 +1,11 @@
 import Foundation
 import TeebeCore
 
-/// The one vocabulary for a checkout's state: group headers, status popovers and the
-/// cleanup sheet all read these names, so nothing is called three different things.
-/// Case order is display order. Ignored files remain a detail, not a merge state.
+/// The one vocabulary for a checkout's state: group headers and row tooltips read
+/// these names, so nothing is called two different things. Case order is display
+/// order. Ignored files remain a detail, not a merge state.
 enum WorktreeGroup: String, CaseIterable, Identifiable {
-    case merged, localChanges, notMerged, broken, notChecked
+    case merged, localChanges, notMerged, broken
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -15,28 +15,17 @@ enum WorktreeGroup: String, CaseIterable, Identifiable {
         // deletes one, so hedging the label buys nothing and reads as doubt.
         case .notMerged: "Not merged"
         case .broken: "Broken"
-        case .notChecked: "Not checked"
         }
     }
-    var symbol: MergeIndicatorPresentation.Symbol {
-        switch self {
-        case .merged: .merge
-        case .localChanges: .edit
-        case .notMerged: .branch
-        case .broken: .broken
-        case .notChecked: .unknown
-        }
-    }
+    /// A status Git could not confirm — a skipped file, a submodule, no result at
+    /// all — is not merged as far as anything here is concerned. The row's tooltip
+    /// carries the reason; a group of its own only asked the user to judge it.
     static func classify(_ status: WorktreeMergeEntry?) -> WorktreeGroup {
-        guard let entry = status?.entry else { return .notChecked }
+        guard let entry = status?.entry else { return .notMerged }
         if entry.isBroken { return .broken }
         if entry.hasLocalChanges { return .localChanges }
-        if entry.hasUncheckedFiles || entry.hasSubmodules { return .notChecked }
-        switch entry.mergeStatus {
-        case .merged: return .merged
-        case .notConfirmed: return .notMerged
-        case .unknown: return .notChecked
-        }
+        if entry.hasUncheckedFiles || entry.hasSubmodules { return .notMerged }
+        return entry.mergeStatus == .merged ? .merged : .notMerged
     }
 }
 
