@@ -128,8 +128,8 @@ struct LiveDot: View {
     private var helpText: String {
         switch agent {
         case .working: return "A coding agent is working in this worktree"
-        case .needsAttention: return "The coding agent needs your attention: its turn ended or it stopped making progress."
-        case .idle: return active ? "Files are changing in this worktree" : "No recent activity detected in this worktree"
+        case .needsAttention: return "The coding agent is waiting for you."
+        case .idle: return active ? "Files are changing in this worktree" : "No recent activity"
         }
     }
 
