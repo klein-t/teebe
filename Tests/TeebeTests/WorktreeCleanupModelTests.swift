@@ -9,14 +9,19 @@ private actor CleanupStub: WorktreeCleanupChecking {
     var fetchCount = 0
     var gate: Gate?
     var started = false
+    var scans = 0
+    var fails = false
     init(snapshot: CleanupSnapshot) { self.snapshot = snapshot }
     func hold(_ value: Gate) { gate = value }
+    func fail() { fails = true }
     func scan(repoPath: String, targetOverride: String?) async throws -> CleanupSnapshot {
         started = true
+        scans += 1
         if let gate {
             self.gate = nil
             await gate.wait()
         }
+        if fails { throw CleanupError.gitFailed }
         return CleanupSnapshot(targets: snapshot.targets, target: snapshot.targets.resolve(targetOverride), entries: snapshot.entries)
     }
     func fetch(repoPath: String) { fetchCount += 1 }
@@ -122,6 +127,57 @@ struct WorktreeCleanupModelTests {
         #expect(model.targetOverride == "refs/heads/missing")
         #expect(model.snapshot?.target == nil)
         #expect(!model.isChecking)
+    }
+
+    @Test("opening the sheet reuses the scan the worktree rows already ran")
+    func sharedScan() async {
+        let stub = CleanupStub(snapshot: snapshot())
+        let app = AppModel(environment: makeTestEnvironment())
+        let repo = Repository(path: "/repo")
+        let model = WorktreeCleanupModel(app: app, repo: repo, service: stub)
+        await model.load()
+        #expect(await stub.scans == 1)
+
+        // Closing and reopening the sheet — or the rows having scanned first — must
+        // show the same result rather than scanning the whole repository again.
+        let reopened = WorktreeCleanupModel(app: app, repo: repo, service: stub)
+        await reopened.load()
+        #expect(await stub.scans == 1)
+        #expect(reopened.snapshot != nil)
+
+        // Recheck is explicit, so it does scan.
+        await reopened.refresh()
+        #expect(await stub.scans == 2)
+    }
+
+    @Test("a recheck keeps the list on screen and the selection; only a failure clears it")
+    func recheckKeepsResults() async {
+        let stub = CleanupStub(snapshot: snapshot())
+        let model = WorktreeCleanupModel(app: AppModel(environment: makeTestEnvironment()),
+                                         repo: Repository(path: "/repo"), service: stub)
+        await model.load()
+        model.selectEligible()
+        #expect(model.selectedPaths == ["/clean"])
+
+        let gate = Gate()
+        await stub.hold(gate)
+        let recheck = Task { await model.refresh() }
+        while await stub.scans < 2 { await Task.yield() }
+        #expect(model.isChecking)
+        #expect(model.snapshot != nil)          // the sheet does not blank mid-recheck
+        await gate.open()
+        await recheck.value
+        #expect(model.selectedPaths == ["/clean"])
+
+        // Choosing a different comparison branch does drop the selection.
+        await model.chooseTarget("refs/heads/dev")
+        #expect(model.selectedPaths.isEmpty)
+
+        // An unconfirmable result must not stay on screen as if it had been checked.
+        await stub.fail()
+        await model.refresh()
+        #expect(model.snapshot == nil)
+        #expect(model.errorMessage != nil)
     }
 
     @Test("agent activity is read again before deleting a previously eligible worktree")

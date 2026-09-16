@@ -21,7 +21,7 @@ struct WorktreeCleanupView: View {
         }
         .frame(width: 620, height: 480)
         .background(Color(nsColor: .windowBackgroundColor))
-        .task { await model.refresh() }
+        .task { await model.load() }
         .onDisappear { model.cancel() }
         .interactiveDismissDisabled(model.isRemoving)
         .confirmationDialog(

@@ -52,16 +52,19 @@ final class WorktreeMergeModel {
         currentTarget = targetOverride
         let key = Key(path: repo.path, target: targetOverride)
         snapshot = cache[key]?.snapshot
-        // The key changed for a reason that cannot move merge ancestry — a
-        // comparison-branch switch, or the cleanup sheet sharing the scan it just
-        // ran. Same revision, recent result: show it rather than scanning again.
-        if let revision, let cached = cache[key], cached.revision == revision,
-           Date().timeIntervalSince(cached.snapshot.checkedAt) < Self.reuseWindow { return }
         // `.task(id:)` restarts on every key change, and a commit or a `git worktree
         // add` can bump the key repeatedly within a second. Let the burst settle so
         // one scan runs instead of a queue of cancelled ones.
         try? await Task.sleep(for: scanDebounce)
         guard !Task.isCancelled, generation == token else { return }
+        // The key changed for a reason that cannot move merge ancestry — a
+        // comparison-branch switch, or the cleanup sheet sharing the scan it just
+        // ran (which may have landed during the debounce). Show it, don't repeat it.
+        if let revision, let cached = cache[key], cached.revision == revision,
+           Date().timeIntervalSince(cached.snapshot.checkedAt) < Self.reuseWindow {
+            snapshot = cached.snapshot
+            return
+        }
         isChecking = true
         defer { if generation == token { isChecking = false } }
         do {

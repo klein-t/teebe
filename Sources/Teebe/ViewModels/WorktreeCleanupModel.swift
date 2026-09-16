@@ -78,7 +78,24 @@ final class WorktreeCleanupModel {
         guard !isRemoving else { return }
         targetOverride = ref
         app.setCleanupTarget(ref.isEmpty ? nil : ref, for: repo.path)
+        // A different comparison branch means different results — what was ticked
+        // before it was not chosen against this target.
+        selectedPaths.removeAll()
         await refresh()
+    }
+
+    /// Opening the sheet shows the scan the worktree rows already ran: same
+    /// repository, same comparison branch, one scan. Recheck, Fetch & recheck and a
+    /// target change are the only things that force a fresh one.
+    func load() async {
+        guard !isRemoving else { return }
+        let override = targetOverride.isEmpty ? nil : targetOverride
+        guard let shared = app.mergeStatus.cachedSnapshot(repoPath: repo.path, target: override) else {
+            await refresh()
+            return
+        }
+        snapshot = shared
+        targets = shared.targets
     }
 
     func refresh(fetch: Bool = false) async {
@@ -86,8 +103,8 @@ final class WorktreeCleanupModel {
         let token = UUID()
         generation = token
         let override = targetOverride.isEmpty ? nil : targetOverride
-        snapshot = nil
-        selectedPaths.removeAll()
+        // The previous results stay on screen while the new scan runs — blanking the
+        // list on every recheck loses the user's place for no reason.
         pendingRemoval = nil
         errorMessage = nil
         isChecking = true
@@ -98,8 +115,14 @@ final class WorktreeCleanupModel {
             guard generation == token, !Task.isCancelled else { return }
             snapshot = result
             targets = result.targets
+            // The rows need exactly this scan; hand it over so they don't repeat it.
+            app.mergeStatus.adopt(result, repoPath: repo.path, target: override,
+                                  revision: app.selector.mergeRevision)
         } catch {
             guard generation == token, !Task.isCancelled else { return }
+            // Results that could not be confirmed must not stay on screen as if they
+            // had been: this is the one case that clears the list.
+            snapshot = nil
             errorMessage = fetch ? "Couldn't fetch and recheck. Check your remote access, then try again."
                 : "Couldn't check this repository. Its folder may have moved or become unavailable."
         }
@@ -152,6 +175,7 @@ final class WorktreeCleanupModel {
             await app.selector.refreshWorktrees()
         }
         isRemoving = false
+        selectedPaths.removeAll()
         await refresh()
         resultMessage = "Removed \(removed) \(removed == 1 ? "worktree" : "worktrees"). Branches were kept."
         if !failures.isEmpty { errorMessage = failures.joined(separator: "\n") }
