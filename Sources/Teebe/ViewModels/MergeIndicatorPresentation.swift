@@ -1,90 +1,101 @@
 import TeebeCore
 
+/// What one worktree's status button says: the group's own title, plus at most one
+/// detail line — the single highest-precedence reason, in the same precedence order
+/// `WorktreeGroup.classify` uses. Six-line popovers are what this replaced.
 struct MergeIndicatorPresentation {
     enum Symbol { case branch, merge, edit, ignored, unknown, warning, broken, checking }
     enum Tone { case merged, attention, error, secondary }
     let symbol: Symbol
     let tone: Tone
-    let hasLocalFiles: Bool
     let title: String
+    /// At most one line. The title carries no trailing punctuation, so the spoken
+    /// form never doubles up a period.
     let details: [String]
-    var description: String { ([title] + details).joined(separator: ". ") }
+    var description: String { details.isEmpty ? title : title + ". " + details.joined(separator: " ") }
+
+    static let checkingDetail = "Checking new commits…"
 
     init(status: WorktreeMergeEntry?, targetName: String?, isChecking: Bool) {
         guard let status else {
+            // Nothing scanned this checkout yet. While a scan is running that is a
+            // wait, not a failure — don't call it unavailable.
             self.init(symbol: isChecking ? .checking : .unknown,
-                      title: isChecking ? "Checking merge status" : "Status unavailable",
-                      details: isChecking ? ["Reading local Git history"] : ["Git could not be checked. Refresh to try again."])
+                      tone: .secondary,
+                      title: WorktreeGroup.notChecked.title,
+                      detail: isChecking ? Self.checkingDetail : "Git could not check this worktree.")
             return
         }
+        let group = WorktreeGroup.classify(status)
+        self.init(symbol: Self.symbol(for: group, status: status),
+                  tone: Self.tone(for: group, status: status),
+                  title: group.title,
+                  detail: Self.detail(status, targetName: targetName))
+    }
+
+    private static func symbol(for group: WorktreeGroup, status: WorktreeMergeEntry) -> Symbol {
+        if status.isRechecking { return .checking }
+        switch group {
+        case .merged: return status.entry.hasIgnoredFiles ? .ignored : .merge
+        case .notChecked:
+            return status.entry.hasUncheckedFiles || status.entry.hasSubmodules ? .warning : .unknown
+        case .localChanges, .notMerged, .broken: return group.symbol
+        }
+    }
+
+    private static func tone(for group: WorktreeGroup, status: WorktreeMergeEntry) -> Tone {
+        if status.isRechecking { return .secondary }
+        switch group {
+        case .broken: return .error
+        case .localChanges: return .attention
+        case .merged: return status.entry.hasIgnoredFiles ? .secondary : .merged
+        case .notChecked:
+            return status.entry.hasUncheckedFiles || status.entry.hasSubmodules ? .attention : .secondary
+        case .notMerged: return .secondary
+        }
+    }
+
+    /// The one line worth reading, picked in the order the grouping itself uses.
+    private static func detail(_ status: WorktreeMergeEntry, targetName: String?) -> String {
         let entry = status.entry
-        if status.isRechecking {
-            self.init(symbol: .checking, title: "Checking new commits",
-                      details: ["Rechecking this worktree against \(targetName ?? "the comparison branch")."])
-            return
+        let target = targetName ?? "the comparison branch"
+        if status.isRechecking { return checkingDetail }
+        if entry.isBroken { return brokenReason(entry) }
+        if entry.hasLocalChanges {
+            guard status.localChangeCount > 0 else { return "Uncommitted changes in this folder." }
+            return "\(status.localChangeCount) uncommitted file\(status.localChangeCount == 1 ? "" : "s")."
         }
-        if entry.isBroken {
-            let reason = entry.problem?.contains(".git link is missing") == true
-                ? "This folder is no longer connected to Git: its .git link is missing."
-                : (entry.problem?.contains("folder is missing") == true
-                   ? "The worktree folder no longer exists." : "Git cannot access this checkout.")
-            self.init(symbol: .broken, tone: .error, title: "Broken worktree", details: [reason])
-            return
-        }
-        let local = Self.localDetails(entry)
-        guard let targetName else {
-            self.init(symbol: .unknown, hasLocalFiles: !local.isEmpty, title: "Choose a comparison branch",
-                      details: ["Select the branch to compare against above the worktree list."] + local)
-            return
-        }
-        if !local.isEmpty, entry.mergeStatus != .unknown {
-            let symbol: Symbol = entry.hasLocalChanges ? .edit
-                : (entry.hasUncheckedFiles || entry.hasSubmodules ? .warning : .ignored)
-            let title = entry.hasLocalChanges ? "Uncommitted changes"
-                : (entry.hasUncheckedFiles ? "Some edits may be hidden"
-                   : (entry.hasSubmodules ? "Nested Git repository" : "Files ignored by Git"))
-            let merge = entry.mergeStatus == .merged
-                ? (entry.hasEquivalentContent ? "Changes were included in \(targetName)." : "Commits are already in \(targetName).")
-                : "Merge into \(targetName) not confirmed."
-            self.init(symbol: symbol, tone: symbol == .ignored ? .secondary : .attention,
-                      hasLocalFiles: true, title: title, details: local + [merge])
-            return
-        }
+        if entry.hasIgnoredFiles { return ignoredReason(entry) }
+        if entry.hasUncheckedFiles { return "Some files are marked unchanged in Git." }
+        if entry.hasSubmodules { return "Contains a submodule." }
         switch entry.mergeStatus {
-        case .merged:
-            self.init(symbol: .merge, tone: .merged,
-                      title: entry.hasEquivalentContent ? "Changes included in \(targetName)" : "Merged into \(targetName)",
-                      details: ["No uncommitted or ignored files found."])
-        case .notConfirmed:
-            self.init(symbol: .branch, title: "Merge not confirmed",
-                      details: ["Could not verify this branch's changes in \(targetName)."])
+        case .merged: return "All commits are in \(target)."
+        case .notConfirmed: return "Commits not found in \(target)."
         case .unknown:
-            self.init(symbol: .unknown, hasLocalFiles: !local.isEmpty, title: "Status unavailable",
-                      details: [entry.problem ?? "Git could not check this worktree. Refresh to try again."] + local)
+            guard targetName != nil else { return "Choose a comparison branch." }
+            guard let problem = entry.problem else { return "Git could not check this worktree." }
+            return problem.hasSuffix(".") ? problem : problem + "."
         }
     }
 
-    private static func localDetails(_ entry: CleanupEntry) -> [String] {
-        var result: [String] = []
-        if entry.hasLocalChanges { result.append("Changes in this folder have not been committed.") }
-        if entry.hasIgnoredFiles {
-            let examples = entry.ignoredPaths.prefix(2).map { path in
-                path.count > 36 ? String(path.prefix(16)) + "…" + String(path.suffix(16)) : path
-            }.joined(separator: ", ")
-            result.append(examples.isEmpty ? "Git ignore rules exclude files from commits."
-                          : "Not included in commits: " + examples + (entry.ignoredPaths.count > 2 ? ", …" : ""))
-        }
-        if entry.hasUncheckedFiles { result.append("Git is set to skip checking some tracked files for edits.") }
-        if entry.hasSubmodules { result.append("A submodule has its own files and changes to check.") }
-        return result
+    private static func brokenReason(_ entry: CleanupEntry) -> String {
+        if entry.problem?.contains(".git link is missing") == true { return "The .git link is missing." }
+        if entry.problem?.contains("folder is missing") == true { return "The folder no longer exists." }
+        return "Git cannot access this checkout."
     }
 
-    private init(symbol: Symbol, tone: Tone = .secondary, hasLocalFiles: Bool = false,
-                 title: String, details: [String]) {
+    private static func ignoredReason(_ entry: CleanupEntry) -> String {
+        let examples = entry.ignoredPaths.prefix(2).map { path in
+            path.count > 36 ? String(path.prefix(16)) + "…" + String(path.suffix(16)) : path
+        }.joined(separator: ", ")
+        guard !examples.isEmpty else { return "Ignored files remain." }
+        return "Ignored files remain (" + examples + (entry.ignoredPaths.count > 2 ? ", …" : "") + ")."
+    }
+
+    private init(symbol: Symbol, tone: Tone, title: String, detail: String) {
         self.symbol = symbol
         self.tone = tone
-        self.hasLocalFiles = hasLocalFiles
         self.title = title
-        self.details = details
+        self.details = [detail]
     }
 }

@@ -93,19 +93,20 @@ struct WorktreeCleanupView: View {
                 } else if model.snapshot != nil, model.snapshot?.target == nil {
                     emptyState("Choose a merge target", detail: "Select the branch your work merges into.")
                 } else if model.visibleEntries.isEmpty {
-                    emptyState(model.mergedOnly ? "No confirmed merged worktrees" : "No worktrees to show",
+                    emptyState(model.mergedOnly ? "No merged worktrees" : "No worktrees to show",
                                detail: model.mergedOnly ? "Show all worktrees from the options menu." : "Linked worktrees will appear here.")
                 } else {
                     let merged = model.visibleEntries.filter { $0.mergeStatus == .merged }
-                    let unconfirmed = model.visibleEntries.filter { $0.mergeStatus != .merged }
+                    let unmerged = model.visibleEntries.filter { $0.mergeStatus != .merged }
                     if !merged.isEmpty {
-                        groupHeader("Merged into \(model.snapshot?.target?.name ?? "target")", canSelect: true)
+                        groupHeader("\(WorktreeGroup.merged.title) into \(model.snapshot?.target?.name ?? "target")",
+                                    canSelect: true)
                         ForEach(merged) { cleanupRow($0) }
                     }
-                    if !unconfirmed.isEmpty {
-                        groupHeader("Merge not confirmed", canSelect: false)
-                            .help("The current worktree commits have not been confirmed in the chosen target or its checked history.")
-                        ForEach(unconfirmed) { cleanupRow($0) }
+                    if !unmerged.isEmpty {
+                        groupHeader(WorktreeGroup.notMerged.title, canSelect: false)
+                            .help("Commits not found in \(model.snapshot?.target?.name ?? "the comparison branch").")
+                        ForEach(unmerged) { cleanupRow($0) }
                     }
                 }
             }

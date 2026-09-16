@@ -21,8 +21,8 @@ struct WorktreeListPresentationTests {
         entry.isBroken = false
         entry.hasLocalChanges = false
         entry.hasUncheckedFiles = true
-        #expect(WorktreeGroup.classify(status(entry)) == .needsReview)
-        #expect(WorktreeGroup.classify(nil) == .needsReview)
+        #expect(WorktreeGroup.classify(status(entry)) == .notChecked)
+        #expect(WorktreeGroup.classify(nil) == .notChecked)
     }
 
     @Test("group order, collapsed navigation, and the comparison checkout stay consistent")
@@ -43,7 +43,7 @@ struct WorktreeListPresentationTests {
                                            collapsed: [], hasRepository: true)
         let closed = WorktreeListPresentation(worktrees: trees, entries: entries, grouped: true,
                                              collapsed: [.merged], hasRepository: true)
-        #expect(open.visibleWorktrees.map(\.path) == ["/primary", "/dev", "/dirty", "/merged"])
+        #expect(open.visibleWorktrees.map(\.path) == ["/primary", "/dev", "/merged", "/dirty"])
         #expect(closed.visibleWorktrees.map(\.path) == ["/primary", "/dev", "/dirty"])
         #expect(open.naturalHeight - closed.naturalHeight == WorktreeListPresentation.rowHeight)
         let selector = AppModel(environment: makeTestEnvironment()).selector
@@ -56,6 +56,75 @@ struct WorktreeListPresentationTests {
                                            collapsed: [.merged], hasRepository: true)
         #expect(flat.groups.isEmpty)
         #expect(flat.visibleWorktrees == trees)
+    }
+
+    @Test("groups read in a fixed order and their rows sort by branch name")
+    func groupOrderAndRowSorting() {
+        #expect(WorktreeGroup.allCases.map(\.title)
+            == ["Merged", "Local changes", "Not merged", "Broken", "Not checked"])
+        let zed = Worktree(path: "/one", branch: "zed")
+        let alpha = Worktree(path: "/two", branch: "alpha")
+        let unnamed = Worktree(path: "/mid")   // detached: falls back to the folder name
+        var entries: [String: WorktreeMergeEntry] = [:]
+        for tree in [zed, alpha, unnamed] {
+            var entry = CleanupEntry(worktree: tree)
+            entry.mergeStatus = .merged
+            entries[tree.path] = status(entry)
+        }
+        let list = WorktreeListPresentation(worktrees: [zed, alpha, unnamed], entries: entries,
+                                            grouped: true, collapsed: [], hasRepository: true)
+        #expect(list.groups.map(\.kind) == [.merged])
+        #expect(list.groups[0].worktrees.map { $0.branch ?? $0.name } == ["alpha", "mid", "zed"])
+    }
+
+    @Test("with no comparison branch the list stays flat and asks for one once")
+    func noComparisonBranch() {
+        let trees = [Worktree(path: "/primary", isPrimary: true), Worktree(path: "/feature", branch: "feature")]
+        var unresolved = CleanupEntry(worktree: trees[1])
+        unresolved.problem = "Choose a comparison branch"
+        let list = WorktreeListPresentation(worktrees: trees, entries: [trees[1].path: status(unresolved)],
+                                            grouped: true, collapsed: [], hasRepository: true, needsTarget: true)
+        #expect(list.needsTarget)
+        #expect(list.groups.isEmpty)
+        #expect(list.visibleWorktrees == trees)
+    }
+
+    @Test("a worktree removed mid-scan leaves no row behind")
+    func removedWorktreeLeavesNoRow() {
+        let kept = Worktree(path: "/kept", branch: "kept")
+        let gone = Worktree(path: "/gone", branch: "gone")
+        var keptEntry = CleanupEntry(worktree: kept)
+        keptEntry.mergeStatus = .merged
+        var goneEntry = CleanupEntry(worktree: gone)
+        goneEntry.mergeStatus = .merged
+        // The scan finished after the worktree was removed, so its result outlives it.
+        let list = WorktreeListPresentation(worktrees: [kept],
+                                            entries: [kept.path: status(keptEntry), gone.path: status(goneEntry)],
+                                            grouped: true, collapsed: [], hasRepository: true)
+        #expect(list.visibleWorktrees.map(\.path) == ["/kept"])
+        #expect(!list.groups.contains { $0.worktrees.contains { $0.path == "/gone" } })
+        #expect(list.naturalHeight == WorktreeListPresentation.repoHeight
+                + WorktreeListPresentation.verticalPadding
+                + WorktreeListPresentation.rowHeight + WorktreeListPresentation.groupHeight)
+    }
+
+    @Test("collapsing every group with nothing pinned leaves only the headers")
+    func heightWithEverythingCollapsed() {
+        let merged = Worktree(path: "/merged", branch: "merged")
+        let dirty = Worktree(path: "/dirty", branch: "dirty")
+        var mergedEntry = CleanupEntry(worktree: merged)
+        mergedEntry.mergeStatus = .merged
+        var dirtyEntry = CleanupEntry(worktree: dirty)
+        dirtyEntry.hasLocalChanges = true
+        let list = WorktreeListPresentation(
+            worktrees: [merged, dirty],
+            entries: [merged.path: status(mergedEntry), dirty.path: status(dirtyEntry)],
+            grouped: true, collapsed: [.merged, .localChanges], hasRepository: true)
+        #expect(list.pinned.isEmpty)
+        #expect(list.visibleWorktrees.isEmpty)
+        #expect(list.naturalHeight == WorktreeListPresentation.repoHeight
+                + WorktreeListPresentation.verticalPadding
+                + 2 * WorktreeListPresentation.groupHeight)
     }
 
     @Test("the cursor steps out of a collapsed group instead of jumping to the top")
