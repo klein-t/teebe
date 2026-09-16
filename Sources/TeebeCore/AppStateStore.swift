@@ -110,9 +110,22 @@ public final class AppStateStore: @unchecked Sendable {
 
     /// Load persisted state, returning a default `AppState` when the file is
     /// missing or unreadable (graceful first-run / corruption handling).
+    /// A file that exists but cannot be decoded is moved aside first: the app
+    /// saves again soon after loading, which would otherwise destroy the only
+    /// copy of a recoverable list of repositories.
     public func load() -> AppState {
         guard let data = try? Data(contentsOf: url) else { return AppState() }
-        return (try? JSONDecoder().decode(AppState.self, from: data)) ?? AppState()
+        if let state = try? JSONDecoder().decode(AppState.self, from: data) { return state }
+        setAside()
+        return AppState()
+    }
+
+    private func setAside() {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withTimeZone]
+        let name = url.lastPathComponent + ".corrupt-" + formatter.string(from: Date())
+        try? FileManager.default.moveItem(at: url, to: url.deletingLastPathComponent()
+            .appendingPathComponent(name))
     }
 
     public func save(_ state: AppState) throws {

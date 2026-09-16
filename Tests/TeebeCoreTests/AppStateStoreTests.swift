@@ -57,12 +57,22 @@ struct AppStateStoreTests {
         #expect(AppStateStore(url: url).load() == AppState())
     }
 
-    @Test("corrupt file loads default state")
+    @Test("corrupt file loads default state and is kept aside instead of overwritten")
     func corruptDefaults() throws {
         let (url, cleanup) = tempURL(); defer { cleanup() }
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try "{ not json".data(using: .utf8)!.write(to: url)
-        #expect(AppStateStore(url: url).load() == AppState())
+        let folder = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: url)
+        let store = AppStateStore(url: url)
+        #expect(store.load() == AppState())
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        let kept = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+            .filter { $0.hasPrefix("state.json.corrupt-") }
+        #expect(kept.count == 1)
+        let saved = try #require(kept.first)
+        #expect(try String(contentsOf: folder.appendingPathComponent(saved), encoding: .utf8) == "{ not json")
+        try store.save(AppState(floatOnTop: true))
+        #expect(store.load().floatOnTop)
     }
 }
 
