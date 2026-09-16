@@ -335,7 +335,6 @@ struct WorktreesSection: View {
         let info = selector.info(for: worktree)
         let isActive = selector.selectedWorktree?.path == worktree.path
         let entry = group == nil ? nil : mergeEntry(worktree)
-        let uncommitted = group == .localChanges ? (entry?.localChangeCount ?? 0) : 0
         // The keyboard cursor (only while WORKTREES is the active section): an outline,
         // distinct from the filled accent of the committed worktree. Enter commits it.
         let isHighlighted = app.activeSection == .worktrees && selector.highlightedWorktree?.path == worktree.path
@@ -346,13 +345,6 @@ struct WorktreesSection: View {
                 .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
             Spacer(minLength: 4)
-            // The count of uncommitted files is the one detail worth a glance rather
-            // than a tooltip, and only where the group already says it exists.
-            if uncommitted > 0 {
-                Text("\(uncommitted) file\(uncommitted == 1 ? "" : "s")")
-                    .font(.system(size: 11)).monospacedDigit()
-                    .foregroundStyle(isActive ? .white.opacity(0.85) : Palette.secondaryText)
-            }
             // "↓0 ↑0" is pure noise — only show the sync arrows once there is
             // something to pull or push.
             if info.hasSync {
