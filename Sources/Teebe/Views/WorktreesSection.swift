@@ -16,6 +16,8 @@ struct WorktreesSection: View {
     /// The merged folders the user is being asked to confirm, captured when the
     /// header action is clicked so the list can keep changing underneath.
     @State var pendingCleanup: [CleanupEntry] = []
+    /// The repository whose comparison branch is being typed in by hand ("Other…").
+    @State var branchEntryRepo: Repository?
 
     private var selector: SelectorModel { app.selector }
 
@@ -49,7 +51,7 @@ struct WorktreesSection: View {
                                     Label("Refresh", systemImage: "arrow.clockwise")
                                 }
                                 if app.showMergeStatus {
-                                    Menu("Comparison Branch") { comparisonPicker(selected) }
+                                    Menu("Comparison Branch") { comparisonMenu(selected) }
                                 }
                                 Button(role: .destructive) { app.removeRepository(selected) } label: {
                                     Label("Remove Project from List", systemImage: "folder.badge.minus")
@@ -149,6 +151,11 @@ struct WorktreesSection: View {
             Button("Cancel", role: .cancel) { pendingRemoval = nil }
         } message: {
             Text("This removes the worktree folder from your Mac. The branch is kept.")
+        }
+        .sheet(item: $branchEntryRepo) { repo in
+            OtherComparisonBranchSheet(branches: app.mergeStatus.snapshot?.targets.branches ?? []) { branch in
+                app.setCleanupTarget(branch.ref, for: repo.path)
+            }
         }
     }
 
@@ -293,7 +300,9 @@ struct WorktreesSection: View {
             set: { app.setCleanupTarget($0.isEmpty ? nil : $0, for: repo.path) }
         )) {
             Text(automaticLabel(targets?.automatic?.name)).tag("")
-            ForEach(targets?.branches ?? []) { branch in Text(branch.name).tag(branch.ref) }
+            ForEach(ComparisonBranchMenu.entries(targets?.branches ?? [], saved: saved)) { branch in
+                Text(branch.name).tag(branch.ref)
+            }
             if !saved.isEmpty, targets?.branches.contains(where: { $0.ref == saved }) != true {
                 Text("Saved branch not found. Choose another.").tag(saved)
             }
@@ -302,9 +311,18 @@ struct WorktreesSection: View {
         .labelsHidden()
     }
 
+    /// The picker plus the way out of it: any other branch in the repository can be
+    /// named by hand.
+    @ViewBuilder
+    private func comparisonMenu(_ repo: Repository) -> some View {
+        comparisonPicker(repo)
+        Divider()
+        Button("Other…") { branchEntryRepo = repo }
+    }
+
     private func chooseComparisonBranch(_ repo: Repository) -> some View {
         Menu {
-            comparisonPicker(repo)
+            comparisonMenu(repo)
         } label: {
             Text("Choose a comparison branch…")
                 .font(.system(size: 11)).lineLimit(1)
@@ -385,6 +403,48 @@ struct WorktreesSection: View {
             }
         }
         .id(worktree.path)   // scroll-to target for keyboard highlight
+    }
+}
+
+/// Naming a comparison branch the menu doesn't list. It must still be a branch the
+/// repository has: a typo here would silently compare against nothing.
+private struct OtherComparisonBranchSheet: View {
+    let branches: [CleanupBranch]
+    let onChoose: (CleanupBranch) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var typed = ""
+    @State private var problem: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Branch name").font(.system(size: 12, weight: .semibold))
+            TextField("Branch name", text: $typed, prompt: Text("origin/dev"))
+                .textFieldStyle(.roundedBorder)
+                .labelsHidden()
+                .onSubmit(choose)
+                .onChange(of: typed) { _, _ in problem = nil }
+            if let problem {
+                Text(problem).font(.system(size: 11)).foregroundStyle(.red).lineLimit(2)
+            }
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("OK", action: choose).keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 4)
+        }
+        .padding(16)
+        .frame(width: 280)
+    }
+
+    private func choose() {
+        let name = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let branch = ComparisonBranchMenu.resolve(name, in: branches) else {
+            problem = name.isEmpty ? "Enter a branch name." : "No branch named \(name)."
+            return
+        }
+        onChoose(branch)
+        dismiss()
     }
 }
 
