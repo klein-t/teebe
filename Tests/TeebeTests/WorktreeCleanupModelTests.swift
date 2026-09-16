@@ -105,6 +105,24 @@ struct WorktreeCleanupModelTests {
         #expect(await stub.fetchCount == 0)
     }
 
+    @Test("rows are marked as each removal completes, and select-all is a two-state control")
+    func removalProgress() async {
+        let stub = CleanupStub(snapshot: snapshot())
+        let model = WorktreeCleanupModel(app: AppModel(environment: makeTestEnvironment()), repo: Repository(path: "/repo"), service: stub)
+        await model.refresh()
+        #expect(!model.allEligibleSelected)
+        model.selectedPaths = ["/clean"]
+        #expect(model.allEligibleSelected)   // "/clean" is the only removable row
+        model.includeIgnored = true
+        #expect(!model.allEligibleSelected)  // …until the ignored one joins it
+        model.selectEligible()
+        #expect(model.allEligibleSelected)
+        #expect(model.removedPaths.isEmpty)
+        model.requestRemoval()
+        await model.confirmRemoval()?.value
+        #expect(model.removedPaths == ["/clean", "/ignored"])
+    }
+
     @Test("a fresh activity signal blocks previously selected worktrees")
     func activeGuard() async {
         let monitor = WorktreeActivityMonitor()

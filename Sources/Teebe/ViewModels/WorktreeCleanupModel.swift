@@ -60,6 +60,9 @@ final class WorktreeCleanupModel {
     private(set) var targets = CleanupTargets.parse("")
     private(set) var isChecking = false
     private(set) var isRemoving = false
+    /// Folders already gone in the current removal pass, so the list can mark each row
+    /// as it completes instead of blanking itself behind a spinner.
+    private(set) var removedPaths: Set<String> = []
     private(set) var errorMessage: String?
     private(set) var resultMessage: String?
     var selectedPaths: Set<String> = []
@@ -89,7 +92,8 @@ final class WorktreeCleanupModel {
     var visibleEntries: [CleanupEntry] { entries.filter { !mergedOnly || $0.mergeStatus == .merged } }
     var eligibleEntries: [CleanupEntry] { entries.filter { blocker(for: $0) == nil } }
     var selectedEntries: [CleanupEntry] { eligibleEntries.filter { selectedPaths.contains($0.id) } }
-    var automaticLabel: String { targets.automatic.map { "Auto (\($0.name))" } ?? "Auto (choose a branch)" }
+    /// One name for the automatic choice, everywhere, with the branch it resolved to.
+    var automaticLabel: String { targets.automatic.map { "Automatic (\($0.name))" } ?? "Automatic" }
     var isBusy: Bool { isChecking || isRemoving }
 
     private func protection(for entry: CleanupEntry) -> CleanupBlocker? {
@@ -118,6 +122,13 @@ final class WorktreeCleanupModel {
 
     func selectEligible() {
         selectedPaths = Set(eligibleEntries.map(\.id))
+    }
+
+    /// Every removable row is ticked, so the control can offer the opposite action —
+    /// rather than flipping to "Clear selection" the moment one box is ticked.
+    var allEligibleSelected: Bool {
+        let eligible = Set(eligibleEntries.map(\.id))
+        return !eligible.isEmpty && selectedPaths == eligible
     }
 
     func chooseTarget(_ ref: String) async {
@@ -193,6 +204,7 @@ final class WorktreeCleanupModel {
     func confirmRemoval() -> Task<Void, Never>? {
         guard !isBusy, let plan = pendingRemoval else { return nil }
         pendingRemoval = nil
+        removedPaths = []
         isRemoving = true
         return Task { await remove(plan) }
     }
@@ -205,13 +217,14 @@ final class WorktreeCleanupModel {
             let scanAgent = app.environment.agentStatuses
             let states = await Task.detached { scanAgent([entry.id], Date()) }.value
             if blocker(for: entry) != nil || states[entry.id] == .working {
-                failures.append("\(entry.worktree.branch ?? entry.worktree.name): now active or no longer eligible.")
+                failures.append("\(entry.worktree.branch ?? entry.worktree.name) is now in use.")
                 continue
             }
             do {
                 try await service.remove(repoPath: repo.path, entry: entry, target: plan.target,
                                          includingIgnored: plan.includingIgnored)
                 removed += 1
+                removedPaths.insert(entry.id)
             } catch {
                 let reason = (error as? CleanupError)?.errorDescription ?? "Git refused removal; the worktree was kept."
                 failures.append("\(entry.worktree.branch ?? entry.worktree.name): \(reason)")

@@ -19,21 +19,29 @@ struct WorktreeCleanupView: View {
             Divider()
             footer
         }
-        .frame(width: 620, height: 480)
+        // Sized, not pinned: the main window can be as narrow as 250pt, and a hard frame
+        // that wide simply overflowed it.
+        .frame(minWidth: 480, idealWidth: 620, minHeight: 380, idealHeight: 480)
         .background(Color(nsColor: .windowBackgroundColor))
         .task { await model.load() }
         .onDisappear { model.cancel() }
         .interactiveDismissDisabled(model.isRemoving)
         .confirmationDialog(
-            "Remove \(model.pendingRemoval?.entries.count ?? 0) worktree folders?",
+            removalTitle,
             isPresented: Binding(get: { model.pendingRemoval != nil }, set: { if !$0 { model.pendingRemoval = nil } }),
             titleVisibility: .visible
         ) {
-            Button("Remove Worktrees", role: .destructive) { model.confirmRemoval() }
+            Button(model.pendingRemoval?.entries.count == 1 ? "Remove Worktree" : "Remove Worktrees",
+                   role: .destructive) { model.confirmRemoval() }
             Button("Cancel", role: .cancel) { model.pendingRemoval = nil }
         } message: {
             if let plan = model.pendingRemoval { Text(confirmationText(plan)) }
         }
+    }
+
+    private var removalTitle: String {
+        let count = model.pendingRemoval?.entries.count ?? 0
+        return count == 1 ? "Remove this worktree folder?" : "Remove \(count) worktree folders?"
     }
 
     private var header: some View {
@@ -47,18 +55,18 @@ struct WorktreeCleanupView: View {
 
     private var targetControls: some View {
         HStack(spacing: 8) {
-            Picker("Merge target", selection: Binding(
+            Picker("Comparison branch", selection: Binding(
                 get: { model.targetOverride },
                 set: { ref in Task { await model.chooseTarget(ref) } }
             )) {
                 Text(model.automaticLabel).tag("")
                 ForEach(model.targets.branches) { branch in Text(branch.name).tag(branch.ref) }
                 if !model.targetOverride.isEmpty, !model.targets.branches.contains(where: { $0.ref == model.targetOverride }) {
-                    Text("Saved branch unavailable").tag(model.targetOverride)
+                    Text("Saved branch not found. Choose another.").tag(model.targetOverride)
                 }
             }
             .frame(maxWidth: 440, alignment: .leading).disabled(model.isBusy)
-            .help("Automatic uses Git's recorded default branch. Choose dev or another branch if that is where you merge your work.")
+            .help("Uses the repository's default branch.")
             Spacer(minLength: 0)
             Button { Task { await model.refresh() } } label: {
                 Image(systemName: "arrow.clockwise").frame(width: 28, height: 28)
@@ -87,14 +95,10 @@ struct WorktreeCleanupView: View {
     private var worktreeList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if model.isBusy {
-                    ProgressView(model.isRemoving ? "Rechecking and removing…" : "Checking worktrees…")
-                        .controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 50)
-                } else if model.snapshot != nil, model.snapshot?.target == nil {
-                    emptyState("Choose a merge target", detail: "Select the branch your work merges into.")
+                if model.snapshot != nil, model.snapshot?.target == nil {
+                    emptyState("Choose a comparison branch", detail: "Select the branch your work merges into.")
                 } else if model.visibleEntries.isEmpty {
-                    emptyState(model.mergedOnly ? "No merged worktrees" : "No worktrees to show",
-                               detail: model.mergedOnly ? "Show all worktrees from the options menu." : "Linked worktrees will appear here.")
+                    mergedOnlyEmptyState
                 } else {
                     let merged = model.visibleEntries.filter { $0.mergeStatus == .merged }
                     let unmerged = model.visibleEntries.filter { $0.mergeStatus != .merged }
@@ -111,8 +115,27 @@ struct WorktreeCleanupView: View {
                 }
             }
             .padding(.vertical, 8)
+            // The previous results stay put while a recheck runs: dimmed and inert, so
+            // the user keeps their place instead of watching the list vanish.
+            .opacity(model.isChecking ? 0.4 : 1)
+            .disabled(model.isChecking)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Nothing to show because the list is filtered: the control that changes that is
+    /// right here, rather than a sentence pointing at a menu.
+    private var mergedOnlyEmptyState: some View {
+        VStack(spacing: 6) {
+            Text(model.mergedOnly ? "No merged worktrees" : "No worktrees to show")
+                .font(.callout.weight(.medium))
+            if model.mergedOnly {
+                Button("Show All Worktrees") { model.mergedOnly = false }
+            } else {
+                Text("Worktrees will appear here.").font(.callout).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 50)
     }
 
     private func groupHeader(_ title: String, canSelect: Bool) -> some View {
@@ -120,8 +143,10 @@ struct WorktreeCleanupView: View {
             Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
             Spacer()
             if canSelect {
-                Button(model.selectedPaths.isEmpty ? "Select eligible" : "Clear selection") {
-                    if model.selectedPaths.isEmpty { model.selectEligible() } else { model.selectedPaths.removeAll() }
+                // Two states, not a flip on the first tick: it offers "select all the
+                // removable ones" until they *are* all selected.
+                Button(model.allEligibleSelected ? "Clear selection" : "Select eligible") {
+                    if model.allEligibleSelected { model.selectedPaths.removeAll() } else { model.selectEligible() }
                 }
                 .buttonStyle(.borderless).font(.system(size: 11))
                 .disabled(model.isBusy || model.eligibleEntries.isEmpty)
@@ -132,20 +157,20 @@ struct WorktreeCleanupView: View {
 
     private func cleanupRow(_ entry: CleanupEntry) -> some View {
         let blocker = model.blocker(for: entry)
+        // A blocked row keeps a real (disabled) checkbox: an empty gap reads as a
+        // missing control, and VoiceOver skipped it entirely.
         return HStack(spacing: 5) {
-            if blocker == nil {
-                Toggle(isOn: Binding(
-                    get: { model.selectedPaths.contains(entry.id) },
-                    set: { selected in
-                        if selected { model.selectedPaths.insert(entry.id) } else { model.selectedPaths.remove(entry.id) }
-                    }
-                )) { rowLabel(entry, blocker: nil) }
-                .toggleStyle(.checkbox).disabled(model.isBusy)
-                .accessibilityLabel("Select \(entry.worktree.branch ?? entry.worktree.name)")
-            } else {
-                Color.clear.frame(width: 16, height: 16).accessibilityHidden(true)
-                rowLabel(entry, blocker: blocker)
-            }
+            Toggle(isOn: Binding(
+                get: { model.selectedPaths.contains(entry.id) },
+                set: { selected in
+                    guard blocker == nil else { return }
+                    if selected { model.selectedPaths.insert(entry.id) } else { model.selectedPaths.remove(entry.id) }
+                }
+            )) { rowLabel(entry, blocker: blocker) }
+            .toggleStyle(.checkbox)
+            .disabled(model.isBusy || blocker != nil)
+            .accessibilityLabel("Select \(entry.worktree.branch ?? entry.worktree.name)")
+            .accessibilityValue(blocker?.shortLabel ?? "")
         }
         .padding(.horizontal, 20).frame(minHeight: 36)
         .background(Palette.accent.opacity(model.selectedPaths.contains(entry.id) ? 0.08 : 0))
@@ -158,6 +183,10 @@ struct WorktreeCleanupView: View {
                 .font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle)
                 .help(entry.worktree.path)
             Spacer(minLength: 0)
+            if model.removedPaths.contains(entry.id) {
+                Label("Removed", systemImage: "checkmark")
+                    .labelStyle(.titleAndIcon).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
             // The group header above already says these rows are not merged.
             if let blocker, blocker != .notMerged {
                 Text(blocker.shortLabel).font(.system(size: 11)).foregroundStyle(.secondary)
@@ -195,10 +224,15 @@ struct WorktreeCleanupView: View {
     }
 
     private var footer: some View {
-        HStack {
-            Text("Branches are kept.").font(.system(size: 11)).foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+            // The progress lives here while the rows stay readable above it.
+            if model.isBusy {
+                ProgressView().controlSize(.small)
+                Text(model.isRemoving ? "Removing…" : "Checking worktrees…")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
             Spacer()
-            Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).disabled(model.isRemoving)
+            Button("Close") { dismiss() }.keyboardShortcut(.cancelAction).disabled(model.isRemoving)
             Button(model.selectedEntries.isEmpty ? "Remove…" : "Remove \(model.selectedEntries.count)…", role: .destructive) {
                 model.requestRemoval()
             }
@@ -208,11 +242,11 @@ struct WorktreeCleanupView: View {
         .padding(.horizontal, 20).padding(.vertical, 14)
     }
 
+    /// The branches are listed in the sheet behind the dialog, so the message says what
+    /// will happen rather than repeating five of their names.
     private func confirmationText(_ plan: WorktreeCleanupModel.RemovalPlan) -> String {
-        var text = "The selected folders will be deleted from your Mac. Branches will be kept. Each worktree will be checked again before removal."
+        var text = "The selected folders will be deleted from your Mac. Branches will be kept."
         if plan.includingIgnored { text += " Ignored files inside those folders will also be deleted." }
-        text += "\n\n" + plan.entries.prefix(5).map { $0.worktree.branch ?? $0.worktree.name }.joined(separator: "\n")
-        if plan.entries.count > 5 { text += "\nAnd \(plan.entries.count - 5) more." }
         return text
     }
 }
