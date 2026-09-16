@@ -23,10 +23,8 @@ struct GitContentInclusion {
         // commits are unmerged. A branch that adds then deletes a file, or edits
         // then reverts one, contributes no content: there is nothing to confirm.
         guard !changes.isEmpty else { return false }
-        var desired: [Data: Version] = [:]
-        for change in changes {
-            guard desired.updateValue(change.new, forKey: change.path) == nil else { throw CleanupError.gitFailed }
-        }
+        let desired = Dictionary(changes.map { ($0.path, $0.new) }, uniquingKeysWith: { first, _ in first })
+        guard desired.count == changes.count else { throw CleanupError.gitFailed }
         let different = try await diff(head, target, in: repoPath)
         let mismatches = Set(different.map(\.path)).intersection(desired.keys)
         if mismatches.isEmpty { return true }
@@ -49,7 +47,8 @@ struct GitContentInclusion {
         for candidate in candidates.prefix(Self.confirmationLimit) {
             // Proof, not a guess: every desired path must match this revision
             // exactly, including deletions and file modes.
-            if try await diff(candidate, head, in: repoPath, limitedTo: paths).isEmpty { return true }
+            let unmatched = try await diff(candidate, head, in: repoPath, limitedTo: paths)
+            if unmatched.isEmpty { return true }
         }
         return false
     }

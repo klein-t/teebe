@@ -171,6 +171,7 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         entry.isTarget = target != nil && (localRef == target?.ref
             || (remoteBranch != nil && worktree.branch == remoteBranch))
         guard !worktree.isBare else { entry.problem = "Bare repository"; return entry }
+        entry.problem = Self.refusal(for: worktree)
         if let problem = Self.missingWorktreeProblem(worktree.path) {
             entry.isBroken = true
             entry.problem = problem
@@ -211,13 +212,15 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             entry.mergeStatus = .unknown
             entry.problem = "Could not inspect this worktree"
         }
-        // A worktree can be perfectly merged and still be refused. Say why, so the
-        // entry never reads as "merged, nothing wrong" behind a control that does nothing.
-        if entry.problem == nil {
-            if worktree.isDetached { entry.problem = "Detached HEAD" }
-            else if worktree.isLocked { entry.problem = "Locked worktree" }
-        }
         return entry
+    }
+
+    /// A worktree can be perfectly merged and still be refused. Naming the reason
+    /// keeps an entry from reading as "merged, nothing wrong" behind a dead control.
+    private static func refusal(for worktree: Worktree) -> String? {
+        if worktree.isDetached { return "Detached HEAD" }
+        if worktree.isLocked { return "Locked worktree" }
+        return nil
     }
 
     private static func missingWorktreeProblem(_ path: String) -> String? {
