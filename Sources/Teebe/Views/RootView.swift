@@ -304,7 +304,7 @@ struct RootView: View {
 
     private func resizeWorktrees(_ requested: CGFloat) {
         zoomRestore = nil
-        worktreesReveal = WorktreeSectionSizing.height(preferred: requested, natural: 0, available: maximumWorktreeHeight)
+        worktreesReveal = WorktreeSectionSizing.height(preferred: requested, available: maximumWorktreeHeight)
         applyWindowSizing(animated: false)
     }
 

@@ -5,7 +5,6 @@ struct WorktreeStatusButton: View {
     let presentation: MergeIndicatorPresentation
     var isSelected = false
     var isChecking = false
-    var informationOnly = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var anchorHovered = false
     @State private var popoverHovered = false
@@ -24,11 +23,7 @@ struct WorktreeStatusButton: View {
 
     var body: some View {
         Button { hoverTask?.cancel(); isPresented.toggle() } label: {
-            Group {
-                if informationOnly { Image(systemName: "info.circle").font(.system(size: 12)) } else {
-                    GitStatusGlyph(symbol: presentation.symbol)
-                }
-            }
+            Image(systemName: "info.circle").font(.system(size: 12))
                 .frame(width: 15, height: 16)
                 .foregroundStyle(tint)
                 .frame(width: 25, height: 24)

@@ -98,7 +98,7 @@ struct WorktreesSection: View {
                 ScrollViewReader { proxy in
                     ScrollView { worktreeListBody }
                         .scrollBounceBehavior(.basedOnSize)
-                        .frame(height: max(0, listContentHeight - (selector.selectedRepo == nil ? 0 : Self.repoRowHeight)))
+                        .frame(height: max(0, listContentHeight - (selector.selectedRepo == nil ? 0 : WorktreeListPresentation.repoHeight)))
                         // Keep the keyboard cursor visible as ↑/↓ move it. Snap, not
                         // animate (see FilesSection) — avoids the bounce-then-settle.
                         .onChange(of: selector.highlightedWorktree?.path) { _, path in
@@ -162,13 +162,8 @@ struct WorktreesSection: View {
                         targetRevision: app.cleanupTargetRevision, historyRevision: selector.mergeRevision)
     }
 
-    static let maxListHeight = WorktreeSectionSizing.defaultHeight
-    static let rowHeight = WorktreeListPresentation.rowHeight
-    static let repoRowHeight = WorktreeListPresentation.repoHeight
-    static let listVerticalPadding = WorktreeListPresentation.verticalPadding / 2
-
     private var listContentHeight: CGFloat {
-        revealHeight ?? min(list.naturalHeight, Self.maxListHeight)
+        revealHeight ?? min(list.naturalHeight, WorktreeSectionSizing.defaultHeight)
     }
 
     private var worktreeListBody: some View {
@@ -187,7 +182,7 @@ struct WorktreesSection: View {
                     .padding(.horizontal, 25).padding(.vertical, 5)
             }
         }
-        .padding(.vertical, Self.listVerticalPadding)
+        .padding(.vertical, WorktreeListPresentation.verticalPadding / 2)
     }
 
     private func groupHeader(_ group: WorktreeListPresentation.Group) -> some View {
@@ -227,7 +222,7 @@ struct WorktreesSection: View {
             Spacer(minLength: 6)
             if app.showMergeStatus { comparisonPicker(repo) }
         }
-        .padding(.horizontal, 11).frame(height: Self.repoRowHeight)
+        .padding(.horizontal, 11).frame(height: WorktreeListPresentation.repoHeight)
     }
 
     private func comparisonPicker(_ repo: Repository) -> some View {
@@ -265,7 +260,7 @@ struct WorktreesSection: View {
             targetName: app.mergeStatus.snapshot?.target?.name, isChecking: app.mergeStatus.isChecking
         )
         return WorktreeStatusButton(presentation: presentation, isSelected: isActive,
-                                    isChecking: app.mergeStatus.isChecking, informationOnly: true)
+                                    isChecking: app.mergeStatus.isChecking)
     }
 
     private func worktreeRow(_ worktree: Worktree) -> some View {
@@ -296,7 +291,7 @@ struct WorktreesSection: View {
                     .allowsHitTesting(hoveredPath == worktree.path)
             }
         }
-        .padding(.leading, 30).padding(.trailing, 11).frame(height: Self.rowHeight)
+        .padding(.leading, 30).padding(.trailing, 11).frame(height: WorktreeListPresentation.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .rowHighlight(isSelected: isActive)
         .foregroundStyle(isActive ? .white : .primary)

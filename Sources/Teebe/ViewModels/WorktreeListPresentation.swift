@@ -85,7 +85,9 @@ struct WorktreeListPresentation {
 enum WorktreeSectionSizing {
     static let defaultHeight: CGFloat = 200
     static let dividerExtra: CGFloat = 7
-    static func height(preferred: CGFloat?, natural: CGFloat, available: CGFloat) -> CGFloat {
+    /// `natural` only matters when nothing was chosen by hand — a drag always
+    /// supplies `preferred`, so it can leave `natural` out entirely.
+    static func height(preferred: CGFloat?, natural: CGFloat = 0, available: CGFloat) -> CGFloat {
         let desired = preferred.flatMap { $0.isFinite ? max(80, $0) : nil } ?? min(natural, defaultHeight)
         return max(0, min(desired, max(0, available)))
     }
