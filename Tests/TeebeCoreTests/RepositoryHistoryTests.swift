@@ -10,6 +10,21 @@ struct RepositoryHistoryTests {
         #expect(repos.map(\.path) == ["/projects/a", "/projects/b"])
     }
 
+    @Test("a case variant of a real folder is the same project")
+    func caseVariants() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Project")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let variant = root.appendingPathComponent("project")
+        // On a case-sensitive volume the variant is a different folder, so there is
+        // nothing to collapse and nothing to assert.
+        guard FileManager.default.fileExists(atPath: variant.path) else { return }
+        let repos = RepositoryHistory.unique([folder.path, variant.path])
+        #expect(repos.count == 1)
+        #expect(repos.first?.name == "Project")
+    }
+
     @Test("aliases resolve to one project and equal folder names stay distinct")
     func aliasesAndNames() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
