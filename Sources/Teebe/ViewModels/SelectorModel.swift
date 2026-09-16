@@ -430,12 +430,30 @@ final class SelectorModel {
 
     /// Move the keyboard cursor one row (no switch — that happens on commit).
     func moveWorktreeHighlight(by delta: Int, in visibleRows: [Worktree]? = nil) {
-        let worktrees = visibleRows ?? self.worktrees
-        guard !worktrees.isEmpty else { return }
-        let base = highlightedWorktree ?? selectedWorktree
-        let index = base.flatMap { b in worktrees.firstIndex { $0.path == b.path } } ?? (delta > 0 ? -1 : worktrees.count)
-        let next = max(0, min(worktrees.count - 1, index + delta))
-        highlightedWorktree = worktrees[next]
+        let rows = visibleRows ?? worktrees
+        guard !rows.isEmpty else { return }
+        let edge = delta > 0 ? rows.count - 1 : 0
+        guard let base = highlightedWorktree ?? selectedWorktree else {
+            highlightedWorktree = rows[delta > 0 ? 0 : rows.count - 1]
+            return
+        }
+        if let index = rows.firstIndex(where: { $0.path == base.path }) {
+            highlightedWorktree = rows[max(0, min(rows.count - 1, index + delta))]
+            return
+        }
+        // The cursor sits on a row hidden inside a collapsed group, so it has no
+        // position in the visible list. Place it by the full worktree order and step
+        // to the nearest visible neighbour in the direction of travel — falling back
+        // to the first row would silently jump the cursor to the top of the list.
+        guard let origin = worktrees.firstIndex(where: { $0.path == base.path }) else {
+            highlightedWorktree = rows[delta > 0 ? 0 : rows.count - 1]
+            return
+        }
+        let visiblePaths = Set(rows.map(\.path))
+        let neighbour = delta > 0
+            ? worktrees[(origin + 1)...].first { visiblePaths.contains($0.path) }
+            : worktrees[..<origin].last { visiblePaths.contains($0.path) }
+        highlightedWorktree = neighbour ?? rows[edge]
     }
 
     /// Commit the highlighted worktree (Enter): switch to it unless it's already current.
