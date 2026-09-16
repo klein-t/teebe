@@ -5,6 +5,11 @@ import Foundation
 /// Later target edits do not undo historical inclusion; a new branch tip is checked afresh.
 /// This reads trees only, without creating commits, running merge drivers or using a network.
 struct GitContentInclusion {
+    /// How many historical revisions may be compared against the branch tip.
+    /// Proposing is cheap, proving costs a tree comparison each, so the walk
+    /// stays bounded and an exhausted budget simply confirms nothing.
+    private static let confirmationLimit = 20
+
     let git: GitClient
 
     func containsChanges(from head: String, in target: String, repoPath: String) async throws -> Bool {
@@ -30,14 +35,23 @@ struct GitContentInclusion {
         let paths = desired.keys.compactMap { String(data: $0, encoding: .utf8) }
         guard paths.count == desired.count,
               paths.reduce(0, { $0 + $1.utf8.count + 1 }) < 64_000 else { return false }
+        // Walk the whole reachable history, not just the first-parent chain: a
+        // squash commit usually lands on an integration branch that reaches the
+        // compared branch through a merge commit, so it is never a first parent.
         let history = try await run([
-            "--literal-pathspecs", "log", "--first-parent", "--full-history", "--ancestry-path",
+            "--literal-pathspecs", "log", "--full-history",
             "--format=%x00%H", "-z", "--raw", "--no-abbrev", "--no-renames",
             "--no-ext-diff", "--no-textconv", "--diff-merges=first-parent",
             "--max-count=1000", "\(base)..\(target)", "--"
         ] + paths, in: repoPath)
         guard history.succeeded else { throw CleanupError.gitFailed }
-        return try Self.historicalMatch(history.standardOutput, desired: desired, mismatches: mismatches)
+        let candidates = try Self.candidates(history.standardOutput, desired: desired)
+        for candidate in candidates.prefix(Self.confirmationLimit) {
+            // Proof, not a guess: every desired path must match this revision
+            // exactly, including deletions and file modes.
+            if try await diff(candidate, head, in: repoPath, limitedTo: paths).isEmpty { return true }
+        }
+        return false
     }
 
     private struct Version: Equatable {
@@ -51,11 +65,14 @@ struct GitContentInclusion {
         let new: Version
     }
 
-    private func diff(_ from: String, _ to: String, in path: String) async throws -> [Change] {
+    private func diff(
+        _ from: String, _ to: String, in path: String, limitedTo paths: [String] = []
+    ) async throws -> [Change] {
         let result = try await run([
+            "--literal-pathspecs",
             "diff-tree", "--no-commit-id", "-r", "--raw", "--no-abbrev", "-z", "--no-renames",
             "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", from, to, "--"
-        ], in: path)
+        ] + paths, in: path)
         guard result.succeeded else { throw CleanupError.gitFailed }
         let tokens = result.standardOutput.split(separator: 0).map { Data($0) }
         guard tokens.count.isMultiple(of: 2) else { throw CleanupError.gitFailed }
@@ -73,37 +90,43 @@ struct GitContentInclusion {
                       new: Version(mode: String(fields[1]), object: String(fields[3])))
     }
 
-    private static func historicalMatch(_ data: Data, desired: [Data: Version], mismatches: Set<Data>) throws -> Bool {
+    /// Revisions worth an exact comparison, most recent first: each one touched at
+    /// least one desired path and set every path it touched to the desired version.
+    /// A revision that rewrites a desired path to something else cannot match, so it
+    /// is dropped here rather than costing a tree comparison.
+    private static func candidates(_ data: Data, desired: [Data: Version]) throws -> [String] {
         let tokens = data.split(separator: 0).map { Data($0) }
-        var remaining = mismatches
+        var result: [String] = []
+        var revision: String?
+        var touched = false
+        var plausible = false
         var index = 0
-        var hasRevision = false
         while index < tokens.count {
             try Task.checkCancellation()
             let token = tokens[index]
             guard let text = String(data: token, encoding: .utf8) else { throw CleanupError.gitFailed }
             let header = text.trimmingCharacters(in: .newlines)
             if header.first == ":" {
-                guard hasRevision, index + 1 < tokens.count else { throw CleanupError.gitFailed }
+                guard revision != nil, index + 1 < tokens.count else { throw CleanupError.gitFailed }
                 let change = try change(header: token, path: tokens[index + 1])
                 if let wanted = desired[change.path] {
-                    if change.old == wanted { remaining.remove(change.path) } else { remaining.insert(change.path) }
+                    touched = true
+                    if change.new != wanted { plausible = false }
                 }
                 index += 2
             } else {
                 guard [40, 64].contains(header.count), header.allSatisfy(\.isHexDigit) else {
                     throw CleanupError.gitFailed
                 }
-                // Only check complete revisions. Matching individual files at different
-                // times, or halfway through undoing a commit, does not prove inclusion.
-                if hasRevision, remaining.isEmpty { return true }
-                hasRevision = true
+                if let revision, touched, plausible { result.append(revision) }
+                revision = header
+                touched = false
+                plausible = true
                 index += 1
             }
         }
-        // The final rewind may be the excluded base or outside the bounded history.
-        // Only a revision actually returned by Git is accepted as evidence.
-        return false
+        if let revision, touched, plausible { result.append(revision) }
+        return result
     }
 
     private func run(_ arguments: [String], in path: String) async throws -> GitInvocationResult {

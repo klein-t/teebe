@@ -132,6 +132,28 @@ struct GitContentInclusionTests {
         }
     }
 
+    @Test("a squash on an integration branch survives a merge commit into the release branch")
+    func squashReachedThroughMergeCommit() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("page.txt", "v1")
+        fixture.createBranch("dev")
+        let feature = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.writeFile("page.txt", "v2", in: feature)
+        fixture.stage(in: feature)
+        fixture.commit("feature work", in: feature)
+        let dev = fixture.root.appendingPathComponent("dev", isDirectory: true)
+        fixture.git(["worktree", "add", "-q", dev.path, "dev"])
+        fixture.git(["merge", "--squash", "feature"], in: dev)
+        fixture.commit("squash feature", in: dev)
+        fixture.writeFile("page.txt", "v3", in: dev)
+        fixture.stage(in: dev)
+        fixture.commit("follow-up edit", in: dev)
+        fixture.git(["merge", "--no-ff", "dev", "-m", "release"])
+        let check = GitContentInclusion(git: ProcessGitClient())
+        #expect(try await check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
+    }
+
     @Test("historical file matches must coexist in one target revision")
     func noMixedHistoricalSnapshots() async throws {
         let fixture = try GitFixture()
