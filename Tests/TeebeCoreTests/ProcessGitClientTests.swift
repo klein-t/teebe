@@ -99,6 +99,33 @@ struct ProcessGitClientTests {
         #expect(!FileManager.default.fileExists(atPath: folder.path))
     }
 
+    @Test("prune drops a worktree whose folder is gone and keeps one that is still there")
+    func prune() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let gone = fixture.addWorktree(name: "gone", branch: "gone")
+        let kept = fixture.addWorktree(name: "kept", branch: "kept")
+        try FileManager.default.removeItem(at: gone)
+
+        try await git.pruneWorktrees(repoPath: fixture.repoPath)
+
+        let paths = try await git.worktrees(repoPath: fixture.repoPath).map(\.path)
+        #expect(!paths.contains { $0.hasSuffix("/gone") })
+        #expect(paths.contains { $0.hasSuffix("/kept") })
+        #expect(FileManager.default.fileExists(atPath: kept.path))
+    }
+
+    @Test("fetching a repository with no origin fails without waiting on a prompt")
+    func fetchWithoutOrigin() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        await #expect(throws: GitError.self) {
+            try await git.fetchOrigin(repoPath: fixture.repoPath)
+        }
+    }
+
     @Test("status on a non-git directory throws notAGitRepository")
     func notARepo() async throws {
         let tmp = FileManager.default.temporaryDirectory

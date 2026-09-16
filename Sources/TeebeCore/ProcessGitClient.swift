@@ -85,16 +85,40 @@ public struct ProcessGitClient: GitClient {
         _ = try await runChecked(args, in: repoPath, interruptible: false)
     }
 
+    public func pruneWorktrees(repoPath: String) async throws {
+        _ = try await runChecked(["worktree", "prune"], in: repoPath, interruptible: false)
+    }
+
+    // MARK: - Remotes
+
+    public func fetchOrigin(repoPath: String) async throws {
+        // A read of the remote, so it stays interruptible. The extra environment
+        // makes every credential path fail fast rather than waiting on a prompt.
+        let result = try await run(["fetch", "--quiet", "origin"], in: repoPath,
+                                   extraEnvironment: ["GIT_SSH_COMMAND": "ssh -o BatchMode=yes"])
+        guard result.succeeded else {
+            throw Self.mapError(arguments: result.arguments, directory: repoPath, result: result)
+        }
+    }
+
     // MARK: - Low-level
 
     @discardableResult
     public func run(_ arguments: [String], in directory: String) async throws -> GitInvocationResult {
+        try await run(arguments, in: directory, extraEnvironment: [:])
+    }
+
+    @discardableResult
+    private func run(
+        _ arguments: [String], in directory: String, extraEnvironment: [String: String]
+    ) async throws -> GitInvocationResult {
         let invocation = Invocation()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 queue.async {
                     do {
-                        continuation.resume(returning: try Self.execute(arguments, in: directory, as: invocation))
+                        continuation.resume(returning: try Self.execute(
+                            arguments, in: directory, as: invocation, extraEnvironment: extraEnvironment))
                     } catch {
                         continuation.resume(throwing: error)
                     }
@@ -138,7 +162,8 @@ public struct ProcessGitClient: GitClient {
     // MARK: - Process execution (blocking; called off the main thread)
 
     private static func execute(
-        _ arguments: [String], in directory: String, as invocation: Invocation
+        _ arguments: [String], in directory: String, as invocation: Invocation,
+        extraEnvironment: [String: String] = [:]
     ) throws -> GitInvocationResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -152,6 +177,7 @@ public struct ProcessGitClient: GitClient {
         environment["PATH"] = (environment["PATH"].map { "\($0):\(extraPath)" }) ?? extraPath
         environment["GIT_TERMINAL_PROMPT"] = "0"
         environment["GIT_OPTIONAL_LOCKS"] = "0"
+        environment.merge(extraEnvironment) { _, extra in extra }
         process.environment = environment
 
         let outPipe = Pipe()
