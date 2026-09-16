@@ -20,7 +20,6 @@ private actor RemovalStub: WorktreeCleanupChecking {
         scans += 1
         return snapshot
     }
-    func fetch(repoPath: String) async throws {}
     func remove(repoPath: String, entry: CleanupEntry, target: CleanupBranch, includingIgnored: Bool) async throws {
         guard entry.id != refuses else { throw CleanupError.changed }
         removed.append(entry.id)

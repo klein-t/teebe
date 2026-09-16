@@ -86,7 +86,6 @@ public struct CleanupSnapshot: Sendable {
 
 public protocol WorktreeCleanupChecking: Sendable {
     func scan(repoPath: String, targetOverride: String?) async throws -> CleanupSnapshot
-    func fetch(repoPath: String) async throws
     func remove(repoPath: String, entry: CleanupEntry, target: CleanupBranch, includingIgnored: Bool) async throws
 }
 
@@ -102,8 +101,9 @@ public enum CleanupError: Error, LocalizedError {
     }
 }
 
-/// All scans are local. Fetching is a separate, explicit action. Removal is
-/// non-forced and revalidates both the reviewed commit and target immediately.
+/// All scans are local: fetching is the `RemoteRefresher`'s job, in the background.
+/// Removal is non-forced and revalidates both the reviewed commit and target
+/// immediately.
 public struct WorktreeCleanupService: WorktreeCleanupChecking {
     private let git: GitClient
     public init(git: GitClient) { self.git = git }
@@ -138,10 +138,6 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         }
         try Task.checkCancellation()
         return CleanupSnapshot(targets: catalog, target: target, entries: entries)
-    }
-
-    public func fetch(repoPath: String) async throws {
-        _ = try await checked(["fetch", "--all", "--no-recurse-submodules"], in: repoPath)
     }
 
     public func remove(repoPath: String, entry: CleanupEntry, target: CleanupBranch, includingIgnored: Bool) async throws {

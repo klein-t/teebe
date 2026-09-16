@@ -19,7 +19,6 @@ private actor MergeScanStub: WorktreeCleanupChecking {
         entry.mergeStatus = .merged
         return CleanupSnapshot(targets: targets, target: targets.resolve(targetOverride), entries: [entry])
     }
-    func fetch(repoPath: String) { Issue.record("Row indicators must never fetch") }
     func remove(repoPath: String, entry: CleanupEntry, target: CleanupBranch, includingIgnored: Bool) {
         Issue.record("Row indicators must never remove a worktree")
     }
