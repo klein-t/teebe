@@ -3,17 +3,19 @@ import TeebeCore
 
 /// The one vocabulary for a checkout's state: group headers and row tooltips read
 /// these names, so nothing is called two different things. Case order is display
-/// order. Ignored files remain a detail, not a merge state.
+/// order. Ignored files remain a detail, not a merge state. The raw values are
+/// persisted (collapsed groups per repo), so they outlive any rename of the titles.
 enum WorktreeGroup: String, CaseIterable, Identifiable {
     case merged, localChanges, notMerged, broken
     var id: String { rawValue }
     var title: String {
         switch self {
         case .merged: "Merged"
-        case .localChanges: "Local changes"
-        // Plainly "Not merged": a false negative only keeps a folder, it never
-        // deletes one, so hedging the label buys nothing and reads as doubt.
-        case .notMerged: "Not merged"
+        // The names say what is in the folder, not a verdict: "Uncommitted changes"
+        // is files you have not committed, "Unmerged commits" is commits the
+        // comparison branch does not have. No tooltip needed to tell them apart.
+        case .localChanges: "Uncommitted changes"
+        case .notMerged: "Unmerged commits"
         case .broken: "Broken"
         }
     }

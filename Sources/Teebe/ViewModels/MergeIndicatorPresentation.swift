@@ -19,10 +19,16 @@ struct MergeIndicatorPresentation {
     }
 
     /// The one line worth reading, picked in the order the grouping itself uses.
+    /// Uncommitted work takes the group, so when the commits are also unmerged the
+    /// line says both — one line, two short sentences.
     private static func detail(_ status: WorktreeMergeEntry, targetName: String?) -> String {
         if status.isRechecking { return checkingDetail }
         if status.entry.isBroken { return brokenReason(status.entry) }
-        return localReason(status) ?? mergeReason(status.entry, targetName: targetName)
+        guard let local = localReason(status) else {
+            return mergeReason(status.entry, targetName: targetName)
+        }
+        guard status.entry.hasLocalChanges, status.entry.mergeStatus == .notConfirmed else { return local }
+        return local + " " + mergeReason(status.entry, targetName: targetName)
     }
 
     /// What is in the folder, in the order that decides the group.

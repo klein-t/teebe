@@ -79,7 +79,11 @@ struct WorktreeListPresentationTests {
     @Test("groups read in a fixed order and their rows sort by branch name")
     func groupOrderAndRowSorting() {
         #expect(WorktreeGroup.allCases.map(\.title)
-            == ["Merged", "Local changes", "Not merged", "Broken"])
+            == ["Merged", "Uncommitted changes", "Unmerged commits", "Broken"])
+        // The raw values back the persisted collapsed-group state: renaming the
+        // titles must not silently reset a saved layout.
+        #expect(WorktreeGroup.allCases.map(\.rawValue)
+            == ["merged", "localChanges", "notMerged", "broken"])
         let zed = Worktree(path: "/one", branch: "zed")
         let alpha = Worktree(path: "/two", branch: "alpha")
         let unnamed = Worktree(path: "/mid")   // detached: falls back to the folder name
@@ -147,7 +151,7 @@ struct WorktreeListPresentationTests {
 
     @Test("a header that carries an action costs exactly what a plain header costs")
     func headerActionsDoNotChangeHeight() {
-        // Merged and Broken headers hold a button; Not merged holds none. The window
+        // Merged and Broken headers hold a button; Unmerged commits holds none. The window
         // is sized from this number, so an action must not make its header taller.
         let merged = Worktree(path: "/merged", branch: "merged")
         let broken = Worktree(path: "/broken", branch: "broken")

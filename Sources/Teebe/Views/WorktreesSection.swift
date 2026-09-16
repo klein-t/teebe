@@ -207,7 +207,7 @@ struct WorktreesSection: View {
             .buttonStyle(.plain)
             .accessibilityLabel("\(group.kind.title), \(group.worktrees.count) worktrees")
             .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
-            .help("\(collapsed ? "Expand" : "Collapse") \(group.kind.title.lowercased()) worktrees")
+            .help("\(collapsed ? "Expand" : "Collapse") the \(group.kind.title) group")
             groupAction(group)
         }
         .padding(.horizontal, 12).frame(height: WorktreeListPresentation.groupHeight)

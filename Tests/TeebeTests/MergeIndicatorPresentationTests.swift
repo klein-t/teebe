@@ -13,8 +13,13 @@ struct MergeIndicatorPresentationTests {
         entry.mergeStatus = .notConfirmed
         #expect(detail(entry) == "Commits not found in dev.")
 
+        // Uncommitted work wins the group, but the unmerged commits are still true:
+        // say both, shortest first.
         entry.hasLocalChanges = true
-        #expect(detail(entry) == "Uncommitted changes in this folder.")
+        #expect(detail(entry) == "Uncommitted changes in this folder. Commits not found in dev.")
+        #expect(MergeIndicatorPresentation(
+            status: WorktreeMergeEntry(entry: entry, localChangeCount: 3), targetName: "dev", isChecking: false)
+            .detail == "3 uncommitted files. Commits not found in dev.")
     }
 
     @Test("a squash merge is stated as merged, with no hedging")
