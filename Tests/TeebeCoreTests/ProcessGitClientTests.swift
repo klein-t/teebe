@@ -64,6 +64,41 @@ struct ProcessGitClientTests {
         #expect(file.hunks.first?.lines.contains { $0.content == "line2 CHANGED" && $0.kind == .addition } == true)
     }
 
+    // MARK: Cancellation
+
+    @Test("cancelling a task stops the git subprocess instead of waiting it out")
+    func cancellationStopsGit() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        // A FIFO nobody writes to: `git apply` blocks on the open until it is killed.
+        let blocker = fixture.root.appendingPathComponent("blocking.patch").path
+        #expect(mkfifo(blocker, 0o600) == 0)
+        let started = Date()
+        let task = Task { try await git.run(["apply", blocker], in: fixture.repoPath) }
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(!fixture.git(["status", "--porcelain"]).contains("blocking"))
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(Date().timeIntervalSince(started) < 5)
+    }
+
+    @Test("a cancelled task still finishes a worktree removal")
+    func removalIgnoresCancellation() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        let task = Task {
+            try? await Task.sleep(for: .seconds(60))
+            #expect(Task.isCancelled)
+            try await git.removeWorktree(repoPath: fixture.repoPath, worktreePath: folder.path, force: false)
+        }
+        task.cancel()
+        try await task.value
+        #expect(!FileManager.default.fileExists(atPath: folder.path))
+    }
+
     @Test("status on a non-git directory throws notAGitRepository")
     func notARepo() async throws {
         let tmp = FileManager.default.temporaryDirectory
