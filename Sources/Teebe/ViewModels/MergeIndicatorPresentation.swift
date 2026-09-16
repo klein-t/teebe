@@ -57,10 +57,14 @@ struct MergeIndicatorPresentation {
 
     /// The one line worth reading, picked in the order the grouping itself uses.
     private static func detail(_ status: WorktreeMergeEntry, targetName: String?) -> String {
-        let entry = status.entry
-        let target = targetName ?? "the comparison branch"
         if status.isRechecking { return checkingDetail }
-        if entry.isBroken { return brokenReason(entry) }
+        if status.entry.isBroken { return brokenReason(status.entry) }
+        return localReason(status) ?? mergeReason(status.entry, targetName: targetName)
+    }
+
+    /// What is in the folder, in the order that decides the group.
+    private static func localReason(_ status: WorktreeMergeEntry) -> String? {
+        let entry = status.entry
         if entry.hasLocalChanges {
             guard status.localChangeCount > 0 else { return "Uncommitted changes in this folder." }
             return "\(status.localChangeCount) uncommitted file\(status.localChangeCount == 1 ? "" : "s")."
@@ -68,6 +72,11 @@ struct MergeIndicatorPresentation {
         if entry.hasIgnoredFiles { return ignoredReason(entry) }
         if entry.hasUncheckedFiles { return "Some files are marked unchanged in Git." }
         if entry.hasSubmodules { return "Contains a submodule." }
+        return nil
+    }
+
+    private static func mergeReason(_ entry: CleanupEntry, targetName: String?) -> String {
+        let target = targetName ?? "the comparison branch"
         switch entry.mergeStatus {
         case .merged: return "All commits are in \(target)."
         case .notConfirmed: return "Commits not found in \(target)."
