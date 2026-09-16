@@ -180,6 +180,47 @@ struct WorktreeCleanupModelTests {
         #expect(model.errorMessage != nil)
     }
 
+    @Test("each reason a worktree cannot be removed is a value, not a sentence")
+    func blockerMapping() async {
+        let monitor = WorktreeActivityMonitor()
+        let stub = CleanupStub(snapshot: snapshot())
+        let app = AppModel(environment: makeTestEnvironment(monitor: monitor))
+        let model = WorktreeCleanupModel(app: app, repo: Repository(path: "/repo"), service: stub)
+        await model.load()
+
+        var entry = CleanupEntry(worktree: Worktree(path: "/x", branch: "x"))
+        entry.mergeStatus = .merged
+        #expect(model.blocker(for: entry) == nil)
+        entry.mergeStatus = .notConfirmed
+        #expect(model.blocker(for: entry) == .notMerged)
+        entry.mergeStatus = .merged
+        entry.hasIgnoredFiles = true
+        #expect(model.blocker(for: entry) == .ignoredFiles)
+        model.includeIgnored = true
+        #expect(model.blocker(for: entry) == nil)
+        entry.hasUncheckedFiles = true
+        #expect(model.blocker(for: entry) == .uncheckedFiles)
+        entry.hasSubmodules = true
+        #expect(model.blocker(for: entry) == .submodules)
+        entry.hasLocalChanges = true
+        #expect(model.blocker(for: entry) == .localChanges)
+        entry.problem = "Broken worktree: its .git link is missing."
+        #expect(model.blocker(for: entry) == .problem("Broken worktree: its .git link is missing."))
+        entry.worktree.isPrimary = true
+        #expect(model.blocker(for: entry) == .primaryCheckout)
+
+        monitor.recordActivity(worktreePath: "/busy", at: Date())
+        var busy = CleanupEntry(worktree: Worktree(path: "/busy", branch: "busy"))
+        busy.mergeStatus = .merged
+        #expect(model.blocker(for: busy) == .active)
+
+        // Every reason carries its own words, sharing the group vocabulary.
+        #expect(CleanupBlocker.notMerged.shortLabel == WorktreeGroup.notMerged.title)
+        #expect(CleanupBlocker.localChanges.shortLabel == WorktreeGroup.localChanges.title)
+        #expect(CleanupBlocker.uncheckedFiles.detail == "Some files are marked unchanged in Git.")
+        #expect(CleanupBlocker.problem("Folder is missing.").detail == "Folder is missing.")
+    }
+
     @Test("agent activity is read again before deleting a previously eligible worktree")
     func freshAgentGuard() async {
         let stub = CleanupStub(snapshot: snapshot())

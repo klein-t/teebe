@@ -152,27 +152,19 @@ struct WorktreeCleanupView: View {
         .rowHighlight(isSelected: false)
     }
 
-    private func rowLabel(_ entry: CleanupEntry, blocker: String?) -> some View {
+    private func rowLabel(_ entry: CleanupEntry, blocker: CleanupBlocker?) -> some View {
         HStack(spacing: 12) {
             Text(entry.worktree.branch ?? entry.worktree.name)
                 .font(.system(size: 13, weight: .medium)).lineLimit(1).truncationMode(.middle)
                 .help(entry.worktree.path)
             Spacer(minLength: 0)
-            if let blocker, blocker != "Merge not confirmed" {
-                Text(shortReason(blocker)).font(.system(size: 11)).foregroundStyle(.secondary)
-                    .lineLimit(1).help(blocker)
+            // The group header above already says these rows are not merged.
+            if let blocker, blocker != .notMerged {
+                Text(blocker.shortLabel).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .lineLimit(1).help(blocker.detail)
             }
         }
         .frame(maxWidth: .infinity)
-    }
-
-    private func shortReason(_ reason: String) -> String {
-        switch reason {
-        case "Has local changes or untracked files": return "Local changes"
-        case "Contains ignored files": return "Ignored files"
-        case "Some files are excluded from Git checks": return "Files excluded from checks"
-        default: return reason
-        }
     }
 
     private func emptyState(_ title: String, detail: String) -> some View {

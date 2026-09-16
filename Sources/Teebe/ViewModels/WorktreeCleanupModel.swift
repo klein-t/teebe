@@ -2,6 +2,52 @@ import Foundation
 import Observation
 import TeebeCore
 
+/// Why a worktree cannot be removed. A value, not a sentence: the view used to
+/// compare against the English text, so rewording a label silently broke the rows.
+enum CleanupBlocker: Equatable {
+    case primaryCheckout, currentlyBrowsing, comparisonBranch, locked, bare, detached
+    case problem(String)
+    case localChanges, submodules, uncheckedFiles, ignoredFiles, active, notMerged
+
+    /// The badge on the row. Shares the worktree-group vocabulary wherever the
+    /// state is the same one.
+    var shortLabel: String {
+        switch self {
+        case .primaryCheckout: "Primary checkout"
+        case .currentlyBrowsing: "Currently browsing"
+        case .comparisonBranch: "Comparison branch"
+        case .locked: "Locked"
+        case .bare: "Bare repository"
+        case .detached: "Detached checkout"
+        case .problem: WorktreeGroup.broken.title
+        case .localChanges: WorktreeGroup.localChanges.title
+        case .submodules, .uncheckedFiles: WorktreeGroup.notChecked.title
+        case .ignoredFiles: "Ignored files"
+        case .active: "Active"
+        case .notMerged: WorktreeGroup.notMerged.title
+        }
+    }
+
+    /// The sentence behind the badge, for the row's tooltip.
+    var detail: String {
+        switch self {
+        case .primaryCheckout: "The repository's primary checkout is never removed."
+        case .currentlyBrowsing: "This is the worktree you have open."
+        case .comparisonBranch: "This is the branch everything else is compared against."
+        case .locked: "The worktree is locked in Git."
+        case .bare: "A bare repository has no working files to remove."
+        case .detached: "The checkout is not on a branch."
+        case .problem(let problem): problem
+        case .localChanges: "Uncommitted changes in this folder."
+        case .submodules: "Contains a submodule."
+        case .uncheckedFiles: "Some files are marked unchanged in Git."
+        case .ignoredFiles: "Ignored files remain. Include them from the options menu to remove anyway."
+        case .active: "Something is writing to this worktree right now."
+        case .notMerged: "Commits not found in the comparison branch."
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class WorktreeCleanupModel {
@@ -46,27 +92,27 @@ final class WorktreeCleanupModel {
     var automaticLabel: String { targets.automatic.map { "Auto (\($0.name))" } ?? "Auto (choose a branch)" }
     var isBusy: Bool { isChecking || isRemoving }
 
-    private func protection(for entry: CleanupEntry) -> String? {
-        if entry.worktree.isPrimary { return "Primary checkout" }
-        if entry.id == app.selector.selectedWorktree?.path { return "Currently browsing" }
-        if entry.isTarget { return "Comparison branch" }
-        if entry.worktree.isLocked { return "Locked worktree" }
-        if entry.worktree.isBare { return "Bare repository" }
-        if entry.worktree.isDetached { return "Detached checkout" }
+    private func protection(for entry: CleanupEntry) -> CleanupBlocker? {
+        if entry.worktree.isPrimary { return .primaryCheckout }
+        if entry.id == app.selector.selectedWorktree?.path { return .currentlyBrowsing }
+        if entry.isTarget { return .comparisonBranch }
+        if entry.worktree.isLocked { return .locked }
+        if entry.worktree.isBare { return .bare }
+        if entry.worktree.isDetached { return .detached }
         return nil
     }
 
-    func blocker(for entry: CleanupEntry) -> String? {
+    func blocker(for entry: CleanupEntry) -> CleanupBlocker? {
         if let reason = protection(for: entry) { return reason }
-        if let problem = entry.problem { return problem }
-        if entry.hasLocalChanges { return "Has local changes or untracked files" }
-        if entry.hasSubmodules { return "Contains submodules" }
-        if entry.hasUncheckedFiles { return "Some files are excluded from Git checks" }
-        if entry.hasIgnoredFiles && !includeIgnored { return "Contains ignored files" }
+        if let problem = entry.problem { return .problem(problem) }
+        if entry.hasLocalChanges { return .localChanges }
+        if entry.hasSubmodules { return .submodules }
+        if entry.hasUncheckedFiles { return .uncheckedFiles }
+        if entry.hasIgnoredFiles && !includeIgnored { return .ignoredFiles }
         let info = app.selector.info(for: entry.worktree)
         if info.agentState == .working || info.isLive
-            || app.environment.activityMonitor.isBusy(worktreePath: entry.id, within: 5, now: Date()) { return "Worktree is active" }
-        if entry.mergeStatus != .merged { return "Merge not confirmed" }
+            || app.environment.activityMonitor.isBusy(worktreePath: entry.id, within: 5, now: Date()) { return .active }
+        if entry.mergeStatus != .merged { return .notMerged }
         return nil
     }
 
