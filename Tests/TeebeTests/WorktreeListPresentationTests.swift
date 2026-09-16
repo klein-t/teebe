@@ -209,13 +209,14 @@ struct WorktreeListPresentationTests {
 
     @Test("resizing preserves the chosen reveal, clamps to available screen, and accepts old layouts")
     func resizeAndPersistence() throws {
-        #expect(WorktreeSectionSizing.height(preferred: nil, natural: 400, available: 700) == 200)
-        #expect(WorktreeSectionSizing.height(preferred: 340, natural: 600, available: 700) == 340)
-        #expect(WorktreeSectionSizing.height(preferred: 900, natural: 600, available: 370) == 370)
-        #expect(WorktreeSectionSizing.height(preferred: -50, natural: 200, available: 370) == 80)
+        #expect(SectionSizing.worktrees.height(preferred: nil, natural: 400, available: 700) == 200)
+        #expect(SectionSizing.worktrees.height(preferred: 340, natural: 600, available: 700) == 340)
+        #expect(SectionSizing.worktrees.height(preferred: 900, natural: 600, available: 370) == 370)
+        #expect(SectionSizing.worktrees.height(preferred: -50, natural: 200, available: 370) == 80)
         let old = Data(#"{"worktreesOpen":true,"changesOpen":true,"filesOpen":true,"windowHeight":300}"#.utf8)
         let decoded = try JSONDecoder().decode(SectionLayout.self, from: old)
         #expect(decoded.worktreesHeight == nil)
+        #expect(decoded.changesHeight == nil)
         #expect(decoded.collapsedWorktreeGroups == nil)
         // A group that no longer exists was saved as collapsed: the layout still
         // decodes, and the stale name is simply dropped.
@@ -225,7 +226,8 @@ struct WorktreeListPresentationTests {
         #expect(Set((staleLayout.collapsedWorktreeGroups ?? []).compactMap(WorktreeGroup.init(rawValue:))) == [.merged])
         let env = makeTestEnvironment()
         let app = AppModel(environment: env)
-        let layout = SectionLayout(windowHeight: 300, worktreesHeight: 340, collapsedWorktreeGroups: ["merged"])
+        let layout = SectionLayout(windowHeight: 300, worktreesHeight: 340, changesHeight: 260,
+                                   collapsedWorktreeGroups: ["merged"])
         app.saveLayout(layout, forRepo: "/repo")
         #expect(AppModel(environment: env).layout(forRepo: "/repo") == layout)
         #expect(app.layout(forRepo: "/other") == nil)
@@ -235,14 +237,29 @@ struct WorktreeListPresentationTests {
     func heightHugsContent() {
         // A group collapsed after a drag leaves fewer rows: the pane follows them down
         // instead of holding the dragged height open with blank material…
-        #expect(WorktreeSectionSizing.height(preferred: 340, natural: 120, available: 700) == 120)
+        #expect(SectionSizing.worktrees.height(preferred: 340, natural: 120, available: 700) == 120)
         // …and the 80pt floor never pads out content that is genuinely shorter.
-        #expect(WorktreeSectionSizing.height(preferred: 340, natural: 55, available: 700) == 55)
-        #expect(WorktreeSectionSizing.height(preferred: nil, natural: 55, available: 700) == 55)
+        #expect(SectionSizing.worktrees.height(preferred: 340, natural: 55, available: 700) == 55)
+        #expect(SectionSizing.worktrees.height(preferred: nil, natural: 55, available: 700) == 55)
         // The preference survives a small window: it is clamped for display only, so the
         // same preference renders tall again once there is room.
-        #expect(WorktreeSectionSizing.height(preferred: 340, natural: 600, available: 150) == 150)
-        #expect(WorktreeSectionSizing.height(preferred: 340, natural: 600, available: 700) == 340)
+        #expect(SectionSizing.worktrees.height(preferred: 340, natural: 600, available: 150) == 150)
+        #expect(SectionSizing.worktrees.height(preferred: 340, natural: 600, available: 700) == 340)
+    }
+
+    @Test("the change list sizes the same way, from its own default and floor")
+    func changeListSizing() {
+        let changes = SectionSizing.changes
+        // Unresized it is exactly what it was before the divider existed: six rows,
+        // then scroll — and shorter when there are fewer rows than that.
+        #expect(changes.height(preferred: nil, natural: 600, available: 700) == 144)
+        #expect(changes.height(preferred: nil, natural: 72, available: 700) == 72)
+        // Dragged past the old cap it keeps what was asked for, still hugging the rows.
+        #expect(changes.height(preferred: 300, natural: 600, available: 700) == 300)
+        #expect(changes.height(preferred: 300, natural: 96, available: 700) == 96)
+        // Clamped for display only: the preference survives a window with no room.
+        #expect(changes.height(preferred: 300, natural: 600, available: 120) == 120)
+        #expect(changes.height(preferred: -50, natural: 600, available: 700) == 48)
     }
 
     private func status(_ entry: CleanupEntry) -> WorktreeMergeEntry { WorktreeMergeEntry(entry: entry) }

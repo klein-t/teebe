@@ -72,23 +72,6 @@ struct WorktreeListPresentation {
     private static func sortKey(_ worktree: Worktree) -> String { worktree.branch ?? worktree.name }
 }
 
-/// Keep the divider and window in agreement, including on a small screen.
-enum WorktreeSectionSizing {
-    static let defaultHeight: CGFloat = 200
-    /// Shortest the pane may be dragged while it still has that many points of rows.
-    static let minimumHeight: CGFloat = 80
-    static let dividerExtra: CGFloat = 7
-
-    /// The chosen height is a *maximum*: the pane hugs its rows rather than padding
-    /// them out with blank material, stays inside the room left on screen, and only
-    /// dips below `minimumHeight` when the content itself is shorter than that.
-    static func height(preferred: CGFloat?, natural: CGFloat, available: CGFloat) -> CGFloat {
-        let wanted = preferred.flatMap { $0.isFinite ? $0 : nil } ?? defaultHeight
-        let floor = min(minimumHeight, natural)
-        return max(0, min(max(floor, min(wanted, natural)), max(0, available)))
-    }
-}
-
 extension AppModel {
     func worktreeList(collapsed: Set<WorktreeGroup>) -> WorktreeListPresentation {
         let entries = selector.worktrees.compactMap { tree -> WorktreeMergeEntry? in

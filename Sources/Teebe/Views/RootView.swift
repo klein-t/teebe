@@ -19,6 +19,7 @@ struct RootView: View {
     /// it's remembered per repo.
     @State private var filesReveal: CGFloat = 300
     @State private var worktreesReveal: CGFloat?
+    @State private var changesReveal: CGFloat?
     @State private var collapsedWorktreeGroups: Set<WorktreeGroup> = []
     /// True only while the user is actively dragging the window's edge. FILES is a
     /// fixed-height pane the rest of the time (so a CHANGES reflow can't make it balloon
@@ -85,11 +86,16 @@ struct RootView: View {
                                      collapsedGroups: $collapsedWorktreeGroups, list: list, revealHeight: listHeight)
                         .layoutPriority(1)
                     if openWorktrees {
-                        WorktreeResizeHandle(height: listHeight, onResize: resizeWorktrees, onEnd: persistLayout)
+                        SectionResizeHandle(section: "Worktrees", height: listHeight,
+                                            onResize: resizeWorktrees, onEnd: persistLayout)
                     } else { Divider() }
-                    ChangesSection(app: app, worktree: worktree, preview: preview, isOpen: sectionBinding(.changes, openChanges))
+                    ChangesSection(app: app, worktree: worktree, preview: preview,
+                                   isOpen: sectionBinding(.changes, openChanges), revealHeight: changesListHeight)
                         .layoutPriority(1)
-                    Divider()
+                    if openChanges {
+                        SectionResizeHandle(section: "Changes", height: changesListHeight,
+                                            onResize: resizeChanges, onEnd: persistLayout)
+                    } else { Divider() }
                     FilesSection(app: app, worktree: worktree, preview: preview, isOpen: sectionBinding(.files, openFiles), searchFocused: $searchFocused, revealHeight: filesRevealHeight, liveResizing: isLiveResizing)
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -262,6 +268,7 @@ struct RootView: View {
         openChanges = layout?.changesOpen ?? true
         openFiles = layout?.filesOpen ?? true
         worktreesReveal = layout?.worktreesHeight.map { CGFloat($0) }
+        changesReveal = layout?.changesHeight.map { CGFloat($0) }
         collapsedWorktreeGroups = Set((layout?.collapsedWorktreeGroups ?? []).compactMap(WorktreeGroup.init(rawValue:)))
         if let saved = layout.map({ CGFloat($0.windowHeight) }) {
             filesReveal = min(max(saved, minFilesReveal), screenHeight - collapsedHeight)
@@ -318,22 +325,23 @@ struct RootView: View {
     }
 
     private func worktreeHeight(for list: WorktreeListPresentation) -> CGFloat {
-        WorktreeSectionSizing.height(preferred: worktreesReveal, natural: list.naturalHeight,
-                                     available: maximumWorktreeHeight)
+        SectionSizing.worktrees.height(preferred: worktreesReveal, natural: list.naturalHeight,
+                                       available: maximumWorktreeHeight)
     }
 
     /// The ceiling for the worktree list. Measured against FILES' *minimum* reveal, never
     /// its current one: deriving the budget from `filesReveal` while `filesReveal` is
     /// derived back from the worktree height made the two chase each other, and an
-    /// edge-drag sprang the window straight back to its pre-drag height.
+    /// edge-drag sprang the window straight back to its pre-drag height. CHANGES is
+    /// counted at its floor for the same reason — see `changesFloorHeight`.
     private var maximumWorktreeHeight: CGFloat {
-        max(WorktreeSectionSizing.minimumHeight,
-            roomBelowTop - collapsedHeight - changesContentHeight
-            - (openFiles ? minFilesReveal : 0) - WorktreeSectionSizing.dividerExtra)
+        max(SectionSizing.worktrees.minimumHeight,
+            roomBelowTop - collapsedHeight - changesFloorHeight
+            - (openFiles ? minFilesReveal : 0) - SectionSizing.dividerExtra)
     }
 
     private var worktreesContentHeight: CGFloat {
-        openWorktrees ? worktreeListHeight + WorktreeSectionSizing.dividerExtra : 0
+        openWorktrees ? worktreeListHeight + SectionSizing.dividerExtra : 0
     }
 
     /// FILES takes what is left below the worktree list — one direction only, so there is
@@ -348,17 +356,56 @@ struct RootView: View {
     /// let one drag with the window low on screen collapse the preference for good.
     private func resizeWorktrees(_ requested: CGFloat) {
         zoomRestore = nil
-        worktreesReveal = max(WorktreeSectionSizing.minimumHeight, requested)
+        worktreesReveal = max(SectionSizing.worktrees.minimumHeight, requested)
         applyWindowSizing(animated: false)
     }
 
-    /// Height of the open change list (mirrors ChangesSection, including its cap); 0
-    /// when closed. Built from the section's own metrics so the two can't desync.
-    private var changesContentHeight: CGFloat {
+    /// Same deal for CHANGES: the preference is stored unclamped and only the render
+    /// is bounded, so a drag made while the window sits low on screen is not lost.
+    private func resizeChanges(_ requested: CGFloat) {
+        zoomRestore = nil
+        changesReveal = max(SectionSizing.changes.minimumHeight, requested)
+        applyWindowSizing(animated: false)
+    }
+
+    /// Every change, unbounded: what the CHANGES preference and budget are measured
+    /// against. Built from the section's own metrics so the two can't desync.
+    private var changesNaturalHeight: CGFloat {
+        CGFloat(max(app.selector.worktree.changeCount, 1)) * ChangesSection.rowHeight
+    }
+
+    /// What CHANGES carries besides its rows: the list's padding plus its divider.
+    private var changesChrome: CGFloat {
+        ChangesSection.listTopPadding + ChangesSection.listBottomPadding + SectionSizing.dividerExtra
+    }
+
+    /// Rendered height of the change list itself.
+    private var changesListHeight: CGFloat {
+        SectionSizing.changes.height(preferred: changesReveal, natural: changesNaturalHeight,
+                                     available: maximumChangesHeight)
+    }
+
+    /// The ceiling for the change list. Like the worktree list it is measured against
+    /// FILES' *minimum* reveal, never its current one, so an edge drag can't spring the
+    /// window back. It is measured against the worktree list's *resolved* height, which
+    /// fixes the order when both remembered heights plus FILES don't fit: WORKTREES
+    /// resolves first and CHANGES gives way. One direction only — the worktree budget
+    /// counts CHANGES at its floor, so the two dividers can never chase each other.
+    private var maximumChangesHeight: CGFloat {
+        max(SectionSizing.changes.minimumHeight,
+            roomBelowTop - collapsedHeight - worktreesContentHeight
+            - (openFiles ? minFilesReveal : 0) - changesChrome)
+    }
+
+    /// The least room CHANGES can be reduced to while it is open.
+    private var changesFloorHeight: CGFloat {
         guard openChanges else { return 0 }
-        let natural = CGFloat(max(app.selector.worktree.changeCount, 1)) * ChangesSection.rowHeight
-        return ChangesSection.listTopPadding + ChangesSection.listBottomPadding
-            + min(natural, ChangesSection.maxListHeight)
+        return min(SectionSizing.changes.minimumHeight, changesNaturalHeight) + changesChrome
+    }
+
+    /// Height of the open change list plus its padding and divider; 0 when closed.
+    private var changesContentHeight: CGFloat {
+        openChanges ? changesListHeight + changesChrome : 0
     }
 
     /// Size the window to the current state, anchored at the top so it grows and
@@ -416,18 +463,25 @@ struct RootView: View {
         // its content); record it so the reveal persists. With FILES closed the window
         // already wraps WORKTREES/CHANGES, so there's nothing to remember.
         guard openFiles else { persistLayout(); return }
-        // One pass, one direction: the worktree list gives up room first (only as far as
-        // the drag demands), then FILES takes whatever is left. Deriving one from the
-        // other and back is what made the window spring to its pre-drag height.
-        let fixed = collapsedHeight + changesContentHeight
+        // One pass, one direction: the two lists give up room first (only as far as the
+        // drag demands), then FILES takes whatever is left. Deriving one from the other
+        // and back is what made the window spring to its pre-drag height. CHANGES yields
+        // before WORKTREES, the same order the render clamps them in.
+        let lists = max(0, height - collapsedHeight - minFilesReveal)
+        var changes = changesContentHeight
         var worktrees = worktreesContentHeight
-        if openWorktrees, height - fixed - minFilesReveal < worktrees {
-            let list = max(WorktreeSectionSizing.minimumHeight,
-                           height - fixed - minFilesReveal - WorktreeSectionSizing.dividerExtra)
-            worktreesReveal = list
-            worktrees = list + WorktreeSectionSizing.dividerExtra
+        if openChanges, changes + worktrees > lists {
+            let list = max(min(SectionSizing.changes.minimumHeight, changesNaturalHeight),
+                           lists - worktrees - changesChrome)
+            changesReveal = list
+            changes = list + changesChrome
         }
-        let nonFiles = fixed + worktrees
+        if openWorktrees, changes + worktrees > lists {
+            let list = max(SectionSizing.worktrees.minimumHeight, lists - changes - SectionSizing.dividerExtra)
+            worktreesReveal = list
+            worktrees = list + SectionSizing.dividerExtra
+        }
+        let nonFiles = collapsedHeight + changes + worktrees
         filesReveal = min(max(height - nonFiles, minFilesReveal), screenHeight - nonFiles)
         persistLayout()
     }
@@ -441,6 +495,7 @@ struct RootView: View {
                 filesOpen: openFiles,
                 windowHeight: Double(filesReveal),
                 worktreesHeight: worktreesReveal.map(Double.init),
+                changesHeight: changesReveal.map(Double.init),
                 collapsedWorktreeGroups: collapsedWorktreeGroups.map(\.rawValue).sorted()
             ),
             forRepo: repo

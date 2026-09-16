@@ -7,6 +7,9 @@ struct ChangesSection: View {
     @Bindable var worktree: WorktreeModel
     @Bindable var preview: PreviewModel
     @Binding var isOpen: Bool
+    /// Height of the change list itself, computed by RootView (which sizes the
+    /// window from the same number) and handed down.
+    let revealHeight: CGFloat
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,15 +20,15 @@ struct ChangesSection: View {
             }
 
             if isOpen {
-                // Hug the rows (the window wraps content); cap at the content height
-                // and scroll inside only when the window is dragged too short.
+                // Hug the rows (the window wraps content) up to the height the divider
+                // was dragged to; scroll inside beyond it.
                 VStack(spacing: 0) {
                     ScrollViewReader { proxy in
                         ScrollView {
                             changeList
                         }
                         .scrollBounceBehavior(.basedOnSize)
-                        .frame(maxHeight: listContentHeight)
+                        .frame(maxHeight: revealHeight)
                         // Follow the selection when ↑/↓ moves it past the visible edge.
                         // Snap, not animate (see FilesSection): an animated scrollTo
                         // reads as a bounce against the row highlight + relayout.
@@ -43,24 +46,11 @@ struct ChangesSection: View {
         .clipped()
     }
 
-    /// Tallest the change list hugs before it scrolls internally. Bounds how much the
-    /// window grows for a worktree with many changes, so browsing between worktrees with
-    /// very different change counts doesn't lurch the window. RootView's
-    /// `changesContentHeight` mirrors this cap so the window math and the view agree.
-    static let maxListHeight: CGFloat = 144   // ~6 rows, then scroll
-
     /// Row/padding metrics. RootView's `changesContentHeight` derives the window's
     /// wrap height from these — keep every literal here so the two can't desync.
     static let rowHeight: CGFloat = 24
     static let listTopPadding: CGFloat = 8
     static let listBottomPadding: CGFloat = 6
-
-    /// Natural height of the change list, capped at `maxListHeight` so the section
-    /// hugs its rows up to the cap and scrolls beyond it.
-    private var listContentHeight: CGFloat {
-        let natural = CGFloat(max(worktree.changeCount, 1)) * Self.rowHeight
-        return min(natural, Self.maxListHeight)
-    }
 
     private var changeList: some View {
         VStack(spacing: 0) {

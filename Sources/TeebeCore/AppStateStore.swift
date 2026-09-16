@@ -17,6 +17,9 @@ public struct SectionLayout: Codable, Equatable, Sendable {
     public var filesOpen: Bool
     public var windowHeight: Double
     public var worktreesHeight: Double?
+    /// Height the CHANGES list was dragged to, unclamped. Optional so older state
+    /// files (written before the divider existed) still decode.
+    public var changesHeight: Double?
     public var collapsedWorktreeGroups: [String]?
 
     public init(
@@ -25,6 +28,7 @@ public struct SectionLayout: Codable, Equatable, Sendable {
         filesOpen: Bool = true,
         windowHeight: Double = 640,
         worktreesHeight: Double? = nil,
+        changesHeight: Double? = nil,
         collapsedWorktreeGroups: [String]? = nil
     ) {
         self.worktreesOpen = worktreesOpen
@@ -32,6 +36,7 @@ public struct SectionLayout: Codable, Equatable, Sendable {
         self.filesOpen = filesOpen
         self.windowHeight = windowHeight
         self.worktreesHeight = worktreesHeight
+        self.changesHeight = changesHeight
         self.collapsedWorktreeGroups = collapsedWorktreeGroups
     }
 }

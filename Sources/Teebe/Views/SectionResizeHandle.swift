@@ -1,7 +1,10 @@
 import AppKit
 import SwiftUI
 
-struct WorktreeResizeHandle: View {
+/// The drag divider under a resizable accordion section.
+struct SectionResizeHandle: View {
+    /// The section it resizes, as its header names it ("Worktrees", "Changes").
+    let section: String
     let height: CGFloat
     let onResize: (CGFloat) -> Void
     let onEnd: () -> Void
@@ -10,7 +13,7 @@ struct WorktreeResizeHandle: View {
 
     /// Drawn thin, grabbed thick: the capsule stays 3pt while the target is a
     /// comfortable 12pt, centred on it.
-    private static let hitPadding: CGFloat = (12 - (1 + WorktreeSectionSizing.dividerExtra)) / 2
+    private static let hitPadding: CGFloat = (12 - (1 + SectionSizing.dividerExtra)) / 2
 
     var body: some View {
         ZStack {
@@ -18,7 +21,7 @@ struct WorktreeResizeHandle: View {
             Capsule().fill(hovered || startHeight != nil ? Palette.accent : Color.secondary.opacity(0.35))
                 .frame(width: 28, height: 3)
         }
-        .frame(height: 1 + WorktreeSectionSizing.dividerExtra)
+        .frame(height: 1 + SectionSizing.dividerExtra)
         .frame(maxWidth: .infinity)
         // Grow, take the hit shape, then give the layout its height back: the divider
         // still occupies `dividerExtra` in the window maths, but is grabbable at 12pt.
@@ -34,11 +37,11 @@ struct WorktreeResizeHandle: View {
         .modifier(ResizeCursor(active: hovered || startHeight != nil))
         .onHover { hovered = $0 }
         .accessibilityElement()
-        .accessibilityLabel("Worktrees section height")
+        .accessibilityLabel("\(section) section height")
         .accessibilityAdjustableAction { direction in
             onResize(height + (direction == .increment ? 26 : -26)); onEnd()
         }
-        .help("Resize the worktree list")
+        .help("Resize the \(section) list")
     }
 }
 
