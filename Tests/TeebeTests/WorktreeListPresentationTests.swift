@@ -163,8 +163,8 @@ struct WorktreeListPresentationTests {
     @Test("resizing preserves the chosen reveal, clamps to available screen, and accepts old layouts")
     func resizeAndPersistence() throws {
         #expect(WorktreeSectionSizing.height(preferred: nil, natural: 400, available: 700) == 200)
-        #expect(WorktreeSectionSizing.height(preferred: 340, natural: 200, available: 700) == 340)
-        #expect(WorktreeSectionSizing.height(preferred: 900, natural: 200, available: 370) == 370)
+        #expect(WorktreeSectionSizing.height(preferred: 340, natural: 600, available: 700) == 340)
+        #expect(WorktreeSectionSizing.height(preferred: 900, natural: 600, available: 370) == 370)
         #expect(WorktreeSectionSizing.height(preferred: -50, natural: 200, available: 370) == 80)
         let old = Data(#"{"worktreesOpen":true,"changesOpen":true,"filesOpen":true,"windowHeight":300}"#.utf8)
         let decoded = try JSONDecoder().decode(SectionLayout.self, from: old)
@@ -176,6 +176,20 @@ struct WorktreeListPresentationTests {
         app.saveLayout(layout, forRepo: "/repo")
         #expect(AppModel(environment: env).layout(forRepo: "/repo") == layout)
         #expect(app.layout(forRepo: "/other") == nil)
+    }
+
+    @Test("the chosen height is a maximum: the pane hugs its rows and keeps the preference")
+    func heightHugsContent() {
+        // A group collapsed after a drag leaves fewer rows: the pane follows them down
+        // instead of holding the dragged height open with blank material…
+        #expect(WorktreeSectionSizing.height(preferred: 340, natural: 120, available: 700) == 120)
+        // …and the 80pt floor never pads out content that is genuinely shorter.
+        #expect(WorktreeSectionSizing.height(preferred: 340, natural: 55, available: 700) == 55)
+        #expect(WorktreeSectionSizing.height(preferred: nil, natural: 55, available: 700) == 55)
+        // The preference survives a small window: it is clamped for display only, so the
+        // same preference renders tall again once there is room.
+        #expect(WorktreeSectionSizing.height(preferred: 340, natural: 600, available: 150) == 150)
+        #expect(WorktreeSectionSizing.height(preferred: 340, natural: 600, available: 700) == 340)
     }
 
     private func status(_ entry: CleanupEntry) -> WorktreeMergeEntry { WorktreeMergeEntry(entry: entry) }
