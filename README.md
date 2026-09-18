@@ -7,9 +7,9 @@
 <p align="center"><strong>Git worktrees, without the IDE.</strong></p>
 
 <p align="center">
-  A native macOS git worktree GUI. Pick any worktree, including the ones Claude Code,<br>
-  Codex and Cursor create for each session, and watch the files inside it, live,<br>
-  as your agents edit them, with inline diffs right beside your terminal.
+  A native macOS git worktree manager and GUI. See every worktree in one window,<br>
+  including the ones Claude Code, Codex and Cursor create for each session, and watch<br>
+  the files inside them change live, with inline diffs right beside your terminal.
 </p>
 
 <p align="center">
@@ -59,6 +59,16 @@ one gets a full file tree in a small native window beside your terminal: browse
 what is inside every worktree, watch files light up as agents edit them, and
 peek any diff with one keystroke. It does not run your agents, does not touch
 your code, and does not replace your tools.
+
+## Why a worktree manager without the IDE
+
+Managing worktrees usually means memorising `git worktree` commands or booting a
+full IDE just to look at a branch. teebe keeps every worktree of every repo in one
+list, and you can add a new one or remove a finished one straight from it. Each
+worktree shows its ahead/behind counts and the files that changed, so you can tell
+which branches still have work in them before you clean them up. Changed files badge
+live as your agents edit them, and one keystroke peeks the diff without opening an
+editor; ⌘⇧C copies the selected files as `@`-refs to paste back into an agent prompt.
 
 ## What it does
 
