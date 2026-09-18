@@ -130,6 +130,11 @@ struct RootView: View {
             onZoom: { toggleVerticalZoom() },
             onGeometryChange: { roomBelowTop = measuredRoomBelowTop(window) }
         ))
+        // Switching away mid-drag cancels it: end the hold here too, so the window is
+        // never left at the height the drag started from.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            if draggingDivider { endDividerDrag() }
+        }
         // Moving the window (or sending it to another screen) changes how much room is
         // left below its top edge, which is what every clamp is measured against.
         .onChange(of: roomBelowTop) { _, _ in
@@ -249,6 +254,9 @@ struct RootView: View {
         case .changes: openChanges = open
         case .files: openFiles = open
         }
+        // A section can't be toggled while a divider is under the pointer, so a hold
+        // still set here is stale: let the window follow the layout again.
+        draggingDivider = false
         // Opening a section grows the window *downward* to make room for it; closing
         // shrinks it back up. Snap rather than animate: animating the NSWindow frame
         // while SwiftUI relays out the content instantly desyncs them and the content
@@ -261,6 +269,9 @@ struct RootView: View {
     /// window to match. Called when the window first resolves and whenever the
     /// selected repository changes.
     private func applyLayout(for repoPath: String?) {
+        // Launching, or switching repository, replaces the layout a divider drag was
+        // holding the window still for — the hold cannot outlive it.
+        draggingDivider = false
         guard let repoPath else {
             setHeightLocked(false, height: emptyStateHeight)
             setWindowHeight(emptyStateHeight, animated: false)   // no project → empty state

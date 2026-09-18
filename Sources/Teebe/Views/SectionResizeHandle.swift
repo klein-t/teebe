@@ -10,6 +10,9 @@ struct SectionResizeHandle: View {
     let onEnd: () -> Void
     @State private var startHeight: CGFloat?
     @State private var hovered = false
+    /// Reset by SwiftUI when the drag ends *or is cancelled*, which is what `onEnded`
+    /// alone cannot see — see `onChange(of: dragging)`.
+    @GestureState private var dragging = false
 
     /// Drawn thin, grabbed thick: the capsule stays 3pt while the target is a
     /// comfortable 12pt, centred on it.
@@ -18,7 +21,7 @@ struct SectionResizeHandle: View {
     var body: some View {
         ZStack {
             Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 1)
-            Capsule().fill(hovered || startHeight != nil ? Palette.accent : Color.secondary.opacity(0.35))
+            Capsule().fill(hovered || dragging ? Palette.accent : Color.secondary.opacity(0.35))
                 .frame(width: 28, height: 3)
         }
         .frame(height: 1 + SectionSizing.dividerExtra)
@@ -29,12 +32,21 @@ struct SectionResizeHandle: View {
         .contentShape(Rectangle())
         .padding(.vertical, -Self.hitPadding)
         .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+            .updating($dragging) { _, active, _ in active = true }
             .onChanged { value in
                 if startHeight == nil { startHeight = height }
                 onResize((startHeight ?? height) + value.translation.height)
-            }
-            .onEnded { _ in startHeight = nil; onEnd() })
-        .modifier(ResizeCursor(active: hovered || startHeight != nil))
+            })
+        // The window is held still for the whole drag and sized once at the end, so a
+        // drag that never reports an end leaves it stuck at the height it started from.
+        // `onEnded` misses a cancelled gesture (the app deactivating, the view being
+        // rebuilt under the pointer); `@GestureState` is reset on both.
+        .onChange(of: dragging) { _, active in
+            guard !active else { return }
+            startHeight = nil
+            onEnd()
+        }
+        .modifier(ResizeCursor(active: hovered || dragging))
         .onHover { hovered = $0 }
         .accessibilityElement()
         .accessibilityLabel("\(section) section height")
