@@ -121,13 +121,15 @@ struct LiveDot: View {
             .onAppear { syncPulse() }
             .onChange(of: pulsing) { _, _ in syncPulse() }
             .help(helpText)
+            .accessibilityElement()
+            .accessibilityLabel(helpText)
     }
 
     private var helpText: String {
         switch agent {
         case .working: return "A coding agent is working in this worktree"
-        case .needsAttention: return "The agent finished its turn or stalled — it needs you"
-        case .idle: return active ? "Files are changing in this worktree" : ""
+        case .needsAttention: return "The coding agent is waiting for you."
+        case .idle: return active ? "Files are changing in this worktree" : "No recent activity"
         }
     }
 

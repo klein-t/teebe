@@ -26,7 +26,9 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     /// refresh "in flight" to exercise coalescing of watcher events.
     var statusGate: (@Sendable () async -> Void)?
 
+    var beforeWorktrees: (@Sendable () async -> Void)?
     func worktrees(repoPath: String) async throws -> [Worktree] {
+        if let beforeWorktrees { await beforeWorktrees() }
         if let worktreesError { throw worktreesError }
         return worktreesResult
     }
@@ -48,6 +50,31 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     func commit(worktreePath: String, message: String) async throws { commitMessages.append(message) }
     func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool) async throws {}
     func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws {}
+
+    // Prune / fetch are recorded under the same lock: both are called from
+    // detached work while the test reads the record from the main actor.
+    private let remoteLock = NSLock()
+    private var prunes: [String] = []
+    private var fetches: [String] = []
+    var prunedRepos: [String] { remoteLock.lock(); defer { remoteLock.unlock() }; return prunes }
+    var fetchedRepos: [String] { remoteLock.lock(); defer { remoteLock.unlock() }; return fetches }
+    /// When set, `fetchOrigin` throws it — a remote that is unreachable.
+    var fetchError: GitError?
+    /// When set, each fetch awaits this before returning, so a test can hold one
+    /// in flight long enough to watch it time out.
+    var fetchGate: (@Sendable () async -> Void)?
+
+    /// Recorded synchronously: locking inside an async function is not allowed.
+    private func record(prune path: String) { remoteLock.lock(); prunes.append(path); remoteLock.unlock() }
+    private func record(fetch path: String) { remoteLock.lock(); fetches.append(path); remoteLock.unlock() }
+
+    func pruneWorktrees(repoPath: String) async throws { record(prune: repoPath) }
+
+    func fetchOrigin(repoPath: String) async throws {
+        record(fetch: repoPath)
+        if let fetchGate { await fetchGate() }
+        if let fetchError { throw fetchError }
+    }
     /// Scripted stdout for `git rev-parse --git-common-dir` (the repo's git common
     /// dir). When nil, `run` returns empty stdout and callers fall back to `.git`.
     var gitCommonDirOutput: String?

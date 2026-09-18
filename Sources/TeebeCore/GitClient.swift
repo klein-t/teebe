@@ -98,6 +98,13 @@ public protocol GitClient: Sendable {
     // Worktree management
     func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool) async throws
     func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws
+    /// Drops registrations whose folders are gone. It never touches a worktree
+    /// whose folder still exists, so it needs no confirmation.
+    func pruneWorktrees(repoPath: String) async throws
+
+    // Remotes
+    /// `git fetch --quiet origin`, with an environment that can never prompt.
+    func fetchOrigin(repoPath: String) async throws
 
     // Low-level escape hatch
     @discardableResult

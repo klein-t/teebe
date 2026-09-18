@@ -30,6 +30,9 @@ struct WindowController: NSViewRepresentable {
     /// override it to grow the window to full height at the same width instead of the
     /// default fill-the-screen zoom.
     var onZoom: () -> Void
+    /// The window moved or changed screen: how much room is left below its top edge
+    /// changed, and SwiftUI observes neither.
+    var onGeometryChange: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -57,12 +60,14 @@ struct WindowController: NSViewRepresentable {
         private var onLiveResizeStart: (() -> Void)?
         private var onLiveResizeEnd: ((CGFloat) -> Void)?
         private var onZoom: (() -> Void)?
+        private var onGeometryChange: (() -> Void)?
 
         /// Per-update, no allocation: refresh the callbacks and float level only.
         func refresh(parent: WindowController) {
             onLiveResizeStart = parent.onLiveResizeStart
             onLiveResizeEnd = parent.onLiveResizeEnd
             onZoom = parent.onZoom
+            onGeometryChange = parent.onGeometryChange
             if floatOnTop != parent.floatOnTop {
                 floatOnTop = parent.floatOnTop
                 applyLevel()
@@ -100,6 +105,13 @@ struct WindowController: NSViewRepresentable {
             observers.append(NotificationCenter.default.addObserver(
                 forName: NSWindow.willStartLiveResizeNotification, object: window, queue: .main
             ) { [weak self] _ in self?.onLiveResizeStart?() })
+            // A window dragged down the screen (or onto a shorter one) has less room
+            // below its top edge, which is what the section clamps are measured against.
+            for name in [NSWindow.didMoveNotification, NSWindow.didChangeScreenNotification] {
+                observers.append(NotificationCenter.default.addObserver(
+                    forName: name, object: window, queue: .main
+                ) { [weak self] _ in self?.onGeometryChange?() })
+            }
             // …and remember the new height once the user lets go.
             observers.append(NotificationCenter.default.addObserver(
                 forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main

@@ -41,6 +41,11 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
 
+            Section("Worktrees") {
+                Toggle("Show merge status for worktrees", isOn: $app.showMergeStatus)
+                Toggle("Fetch automatically", isOn: $app.fetchAutomatically)
+            }
+
             Section {
                 Toggle("Automatically check for updates", isOn: Binding(
                     get: { updater.automaticallyChecksForUpdates },
