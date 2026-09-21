@@ -128,7 +128,8 @@ struct RootView: View {
             onLiveResizeStart: { isLiveResizing = true; setHeightLocked(heightPinned, height: targetHeight()) },
             onLiveResizeEnd: { isLiveResizing = false; handleLiveResizeEnd($0) },
             onZoom: { toggleVerticalZoom() },
-            onGeometryChange: { roomBelowTop = measuredRoomBelowTop(window) }
+            onGeometryChange: { roomBelowTop = measuredRoomBelowTop(window) },
+            onWindowResized: { reconcileWindowHeight() }
         ))
         // Switching away mid-drag cancels it: end the hold here too, so the window is
         // never left at the height the drag started from.
@@ -146,22 +147,13 @@ struct RootView: View {
             // merge results are not answering yesterday's question.
             Task { await app.refreshRemotes(force: false) }
         }
-        // Keep WORKTREES/CHANGES wrapped to their rows as the lists change (preserving
-        // the FILES reveal below them). The file tree itself just scrolls, so its row
-        // count doesn't resize the window.
-        .onChange(of: app.selector.worktrees.count) { _, _ in
-            if !allClosed { applyWindowSizing(animated: false) }
-        }
-        .onChange(of: list.naturalHeight) { _, _ in
-            if !allClosed { applyWindowSizing(animated: false) }
-        }
-        .onChange(of: collapsedWorktreeGroups) { _, _ in
-            applyWindowSizing(animated: false)
-            persistLayout()
-        }
-        .onChange(of: worktree.changeCount) { _, _ in
-            if !allClosed { applyWindowSizing(animated: false) }
-        }
+        // One reconcile for every way the layout's height can change — a worktree
+        // added, the merge scan regrouping the rows, the file watcher moving the
+        // CHANGES count, a group collapsing. Watching the height itself rather than
+        // each cause is what keeps the window from being left taller than its content
+        // by a change nobody wired up a handler for.
+        .onChange(of: targetHeight()) { _, _ in reconcileWindowHeight() }
+        .onChange(of: collapsedWorktreeGroups) { _, _ in persistLayout() }
         .background(QuickLookBridge(controller: quickLook))
         .background { commandShortcuts }
         .focusable()
@@ -433,6 +425,18 @@ struct RootView: View {
     /// Height of the open change list plus its padding and divider; 0 when closed.
     private var changesContentHeight: CGFloat {
         openChanges ? changesListHeight + changesChrome : 0
+    }
+
+    /// Pull the window back to the height the layout asks for whenever the two have
+    /// drifted apart and no drag owns the height. Both directions matter: AppKit can
+    /// grow the window on its own, and `setHeightLocked`'s ceiling doesn't hold it
+    /// back because SwiftUI clears `maxSize` again after every layout pass.
+    private func reconcileWindowHeight() {
+        guard let window else { return }
+        guard SectionSizing.needsResize(frameHeight: window.frame.height, target: targetHeight(),
+                                        draggingDivider: draggingDivider, liveResizing: isLiveResizing)
+        else { return }
+        applyWindowSizing(animated: false)
     }
 
     /// Size the window to the current state, anchored at the top so it grows and

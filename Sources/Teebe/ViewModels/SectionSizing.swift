@@ -17,6 +17,19 @@ struct SectionSizing {
     /// change counts shouldn't lurch the window.
     static let changes = SectionSizing(defaultHeight: 144, minimumHeight: 48)
 
+    /// The window has drifted from the height the layout asks for and must be sized
+    /// again. AppKit can grow the window on its own (a constraint pass, a restored
+    /// frame, a screen change), and SwiftUI clears the maximum height we set on it
+    /// after every layout, so nothing else pulls it back. A drag is the one time the
+    /// mismatch is intended: the divider holds the window still until it is let go,
+    /// and dragging the edge *is* the user choosing a height.
+    /// The tolerance is a full point because AppKit rounds the frame it hands back.
+    static func needsResize(frameHeight: CGFloat, target: CGFloat,
+                            draggingDivider: Bool, liveResizing: Bool) -> Bool {
+        guard !draggingDivider, !liveResizing else { return false }
+        return abs(frameHeight - target) >= 1
+    }
+
     /// The chosen height is a *maximum*: the pane hugs its rows rather than padding
     /// them out with blank material, stays inside the room left on screen, and only
     /// dips below `minimumHeight` when the content itself is shorter than that.

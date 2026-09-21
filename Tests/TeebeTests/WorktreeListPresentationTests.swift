@@ -276,6 +276,26 @@ struct WorktreeListPresentationTests {
         #expect(changes.height(preferred: -50, natural: 600, available: 700) == 48)
     }
 
+    @Test("a window that drifts from the layout height is pulled back, except mid-drag")
+    func driftIsReconciled() {
+        // The regression: the window ends up taller than the layout asks for and sits
+        // there, leaving blank material above the title row.
+        #expect(SectionSizing.needsResize(frameHeight: 949, target: 378,
+                                          draggingDivider: false, liveResizing: false))
+        #expect(SectionSizing.needsResize(frameHeight: 325, target: 490,
+                                          draggingDivider: false, liveResizing: false))
+        // Already right (and AppKit's rounding) is not a drift.
+        #expect(!SectionSizing.needsResize(frameHeight: 490, target: 490,
+                                           draggingDivider: false, liveResizing: false))
+        #expect(!SectionSizing.needsResize(frameHeight: 490.4, target: 490,
+                                           draggingDivider: false, liveResizing: false))
+        // Both drags own the height for their duration.
+        #expect(!SectionSizing.needsResize(frameHeight: 949, target: 378,
+                                           draggingDivider: true, liveResizing: false))
+        #expect(!SectionSizing.needsResize(frameHeight: 949, target: 378,
+                                           draggingDivider: false, liveResizing: true))
+    }
+
     private func status(_ entry: CleanupEntry) -> WorktreeMergeEntry { WorktreeMergeEntry(entry: entry) }
 
     private func detail(_ entry: CleanupEntry) -> String {
