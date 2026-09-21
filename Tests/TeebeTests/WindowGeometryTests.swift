@@ -22,6 +22,32 @@ import TeebeCore
 @Suite("Window geometry", .serialized)
 struct WindowGeometryTests {
 
+    @Test("launch near the screen bottom settles without repeated corrections", arguments: [340.0, 420.0])
+    func lowLaunchSettlesWithoutChasingItsFrame(topRoom: Double) async throws {
+        guard let host = try await GeometryHost.make(topRoom: topRoom) else { return }
+        defer { host.tearDown() }
+        await host.settleGeometry()
+        host.expectSettled("launch near screen bottom")
+        if let screen = host.window.screen {
+            #expect(host.window.frame.minY >= screen.visibleFrame.minY)
+        }
+    }
+
+    @Test("restoring a low frame settles in one resize", arguments: [340.0, 420.0])
+    func lowWindowSettlesWithoutChasingItsFrame(height: Double) async throws {
+        guard let host = try await GeometryHost.make(), let screen = host.window.screen else { return }
+        defer { host.tearDown() }
+        host.hooks.reset()
+        var frame = host.window.frame
+        frame.size.height = height
+        frame.origin.y = screen.visibleFrame.minY
+        host.window.setFrame(frame, display: true)
+        await host.settleGeometry()
+        host.expectSettled("move near screen bottom")
+        #expect(host.window.frame.minY >= screen.visibleFrame.minY,
+                "restoring a low frame pushed the window below the screen: \(host.window.frame)")
+    }
+
     @Test("selecting, collapsing, dragging and an AppKit resize each settle in one resize")
     func geometryStaysInStepWithTheLayout() async throws {
         guard let host = try await GeometryHost.make() else { return }   // no display (headless CI)
@@ -120,7 +146,7 @@ private final class GeometryHost {
 
     /// Returns nil when there is no display to put a window on, which is the only
     /// state this test cannot run in.
-    static func make() async throws -> GeometryHost? {
+    static func make(topRoom: CGFloat? = nil) async throws -> GeometryHost? {
         guard let screen = NSScreen.main else { return nil }
         NSApplication.shared.setActivationPolicy(.accessory)
 
@@ -138,22 +164,35 @@ private final class GeometryHost {
         )
         let app = AppModel(environment: environment)
         app.mergeStatus.scanDebounce = .milliseconds(1)
+        if topRoom != nil {
+            await app.addRepository(path: fixture.repoPath)
+            app.saveLayout(SectionLayout(worktreesOpen: true, changesOpen: true, filesOpen: true,
+                                         windowHeight: 200, worktreesHeight: 400, changesHeight: 400),
+                           forRepo: fixture.repoPath)
+        }
         let hooks = GeometryTestHooks()
         let root = RootView(app: app, preview: PreviewModel(environment: environment), testHooks: hooks)
 
-        // Top edge near the top of the screen: the layout's ceiling is the room below
-        // it, and a window low on screen would be clamped while it grows — a resize
-        // AppKit makes, not one under test.
-        let frame = NSRect(x: screen.visibleFrame.minX + 40, y: screen.visibleFrame.maxY - 700,
+        // Most interactions start high on screen. Startup cases restore a lower
+        // top edge, including one with less room than the section minimums need.
+        let frame = NSRect(x: screen.visibleFrame.minX + 40,
+                           y: topRoom.map { screen.visibleFrame.minY + $0 - 640 } ?? (screen.visibleFrame.maxY - 700),
                            width: 440, height: 640)
         let window = NSWindow(contentRect: frame, styleMask: [.titled, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
-        window.contentView = NSHostingView(rootView: root)
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.sizingOptions = [.minSize]
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.contentView = hostingView
         window.orderFront(nil)
+        // NSWindow's initial placement clamps the origin; restoration happens after
+        // that and can change both the height and top edge without a didMove event.
+        if topRoom != nil { window.setFrame(frame, display: true) }
 
         let host = GeometryHost(app: app, hooks: hooks, window: window, fixture: fixture)
         await host.settle(timeout: 10, until: { hooks.targetHeight != nil })
-        await app.addRepository(path: fixture.repoPath)
+        if topRoom == nil { await app.addRepository(path: fixture.repoPath) }
         // Wait for the picture the user would see: every worktree discovered, the merge
         // scan grouped, the window done settling on the layout.
         await host.settle(timeout: 20, until: {
@@ -219,6 +258,21 @@ private final class GeometryHost {
     }
 
     func endDrag() { hooks.endDividerDrag?() }
+
+    /// Do not accept a transient match between frame and target: queued AppKit and
+    /// SwiftUI callbacks can still move both. Require a quiet interval as well.
+    func settleGeometry() async {
+        var lastFrame = window.frame
+        var lastResizes = hooks.resizes
+        var stableSince = Date()
+        await settle(sample: {
+            if self.window.frame != lastFrame || self.hooks.resizes != lastResizes {
+                lastFrame = self.window.frame
+                lastResizes = self.hooks.resizes
+                stableSince = Date()
+            }
+        }, until: { self.isSettled && Date().timeIntervalSince(stableSince) >= 0.2 })
+    }
 
     /// Run the main run loop — laying out, delivering AppKit notifications and letting
     /// the model's own tasks finish — until `condition` holds. Polls a predicate

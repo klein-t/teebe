@@ -159,7 +159,12 @@ struct RootView: View {
             onLiveResizeEnd: { isLiveResizing = false; handleLiveResizeEnd($0) },
             onZoom: { toggleVerticalZoom() },
             onGeometryChange: { roomBelowTop = measuredRoomBelowTop(window) },
-            onWindowResized: { reconcileWindowHeight() }
+            onWindowResized: {
+                // Restoring a frame can move its top edge without a didMove event.
+                // Reconcile against the new position, never the previous budget.
+                roomBelowTop = measuredRoomBelowTop(window)
+                reconcileWindowHeight()
+            }
         ))
         // Switching away mid-drag cancels it: end the hold here too, so the window is
         // never left at the height the drag started from.
@@ -608,6 +613,11 @@ struct RootView: View {
         var frame = window.frame
         frame.origin.y += frame.height - height
         frame.size.height = height
+        if let visible = window.screen?.visibleFrame {
+            // The section minimums can exceed the room below a low top edge. Move
+            // up once instead of letting AppKit repair an off-screen frame later.
+            frame.origin.y = max(frame.origin.y, visible.minY)
+        }
         window.setFrame(frame, display: true, animate: false)
         #if DEBUG
         testHooks?.noteResize()
