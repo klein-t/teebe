@@ -21,7 +21,13 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     private(set) var discardedWorking: [[String]] = []
     private(set) var discardedUntracked: [[String]] = []
     private(set) var commitMessages: [String] = []
-    private(set) var addedWorktrees: [(path: String, branch: String?, createBranch: Bool)] = []
+    struct AddedWorktree: Equatable {
+        let path: String
+        let branch: String?
+        let createBranch: Bool
+        let startPoint: String?
+    }
+    private(set) var addedWorktrees: [AddedWorktree] = []
     private(set) var removedWorktrees: [(path: String, force: Bool)] = []
     private(set) var prunedRepos: [String] = []
     private(set) var fetchedRepos: [String] = []
@@ -53,8 +59,8 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     func discardUntracked(worktreePath: String, paths: [String]) async throws { try throwLockIfNeeded(); try throwIfNeeded(); discardedUntracked.append(paths) }
     func commit(worktreePath: String, message: String) async throws { try throwLockIfNeeded(); try throwIfNeeded(); commitMessages.append(message) }
 
-    func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool) async throws {
-        try throwIfNeeded(); addedWorktrees.append((path, branch, createBranch))
+    func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool, startPoint: String?) async throws {
+        try throwIfNeeded(); addedWorktrees.append(AddedWorktree(path: path, branch: branch, createBranch: createBranch, startPoint: startPoint))
     }
     func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws {
         try throwIfNeeded(); removedWorktrees.append((worktreePath, force))

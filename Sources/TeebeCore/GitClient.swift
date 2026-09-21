@@ -96,7 +96,9 @@ public protocol GitClient: Sendable {
     func commit(worktreePath: String, message: String) async throws
 
     // Worktree management
-    func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool) async throws
+    /// `startPoint` is the ref a newly created branch starts from (git's
+    /// `worktree add -b <branch> <path> <start-point>`); nil means HEAD.
+    func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool, startPoint: String?) async throws
     func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws
     /// Drops registrations whose folders are gone. It never touches a worktree
     /// whose folder still exists, so it needs no confirmation.

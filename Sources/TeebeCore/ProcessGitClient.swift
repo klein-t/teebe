@@ -70,12 +70,23 @@ public struct ProcessGitClient: GitClient {
 
     // MARK: - Worktree management
 
-    public func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool) async throws {
+    public func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool, startPoint: String?) async throws {
+        let args = Self.worktreeAddArguments(path: path, branch: branch, createBranch: createBranch, startPoint: startPoint)
+        _ = try await runChecked(args, in: repoPath, interruptible: false)
+    }
+
+    /// The `git worktree add` argument list. Pure, so the ordering git cares about
+    /// (`-b <branch> <path> <start-point>`) is covered by a test.
+    static func worktreeAddArguments(path: String, branch: String?, createBranch: Bool, startPoint: String?) -> [String] {
         var args = ["worktree", "add"]
         if createBranch, let branch { args.append(contentsOf: ["-b", branch]) }
         args.append(path)
-        if let branch, !createBranch { args.append(branch) }
-        _ = try await runChecked(args, in: repoPath, interruptible: false)
+        if createBranch, branch != nil, let startPoint, !startPoint.isEmpty {
+            args.append(startPoint)
+        } else if let branch, !createBranch {
+            args.append(branch)
+        }
+        return args
     }
 
     public func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws {

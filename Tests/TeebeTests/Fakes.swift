@@ -48,7 +48,16 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     func discardWorking(worktreePath: String, paths: [String]) async throws { discardedWorking.append(paths) }
     func discardUntracked(worktreePath: String, paths: [String]) async throws { discardedUntracked.append(paths) }
     func commit(worktreePath: String, message: String) async throws { commitMessages.append(message) }
-    func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool) async throws {}
+    struct AddedWorktree: Equatable {
+        let path: String
+        let branch: String?
+        let createBranch: Bool
+        let startPoint: String?
+    }
+    private(set) var addedWorktrees: [AddedWorktree] = []
+    func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool, startPoint: String?) async throws {
+        addedWorktrees.append(AddedWorktree(path: path, branch: branch, createBranch: createBranch, startPoint: startPoint))
+    }
     func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws {}
 
     // Prune / fetch are recorded under the same lock: both are called from

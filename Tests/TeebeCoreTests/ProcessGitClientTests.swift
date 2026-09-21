@@ -23,6 +23,42 @@ struct ProcessGitClientTests {
         #expect(worktrees.contains { $0.branch == "feature" })
     }
 
+    @Test("worktree add arguments put the start point after the path")
+    func worktreeAddArguments() {
+        #expect(ProcessGitClient.worktreeAddArguments(
+            path: "/tmp/wt", branch: "feat", createBranch: true, startPoint: "origin/dev")
+            == ["worktree", "add", "-b", "feat", "/tmp/wt", "origin/dev"])
+        #expect(ProcessGitClient.worktreeAddArguments(
+            path: "/tmp/wt", branch: "feat", createBranch: true, startPoint: nil)
+            == ["worktree", "add", "-b", "feat", "/tmp/wt"])
+        // An empty start point means "from HEAD", same as nil.
+        #expect(ProcessGitClient.worktreeAddArguments(
+            path: "/tmp/wt", branch: "feat", createBranch: true, startPoint: "")
+            == ["worktree", "add", "-b", "feat", "/tmp/wt"])
+        // Checking out an existing branch: the branch is the trailing argument and
+        // a start point would be meaningless.
+        #expect(ProcessGitClient.worktreeAddArguments(
+            path: "/tmp/wt", branch: "feat", createBranch: false, startPoint: "origin/dev")
+            == ["worktree", "add", "/tmp/wt", "feat"])
+    }
+
+    @Test("worktree add branches from the given start point")
+    func worktreeAddFromStartPoint() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("seed.txt", "seed\n")
+        let base = fixture.currentHead()
+        fixture.createBranch("base")
+        fixture.commitFile("later.txt", "later\n")
+
+        let linked = fixture.root.appendingPathComponent("from-base").path
+        try await git.addWorktree(repoPath: fixture.repoPath, path: linked, branch: "feat",
+                                  createBranch: true, startPoint: "base")
+        let head = fixture.git(["rev-parse", "HEAD"], in: URL(fileURLWithPath: linked))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(head == base)
+    }
+
     // MARK: M2 — Status & change model
 
     @Test("status reports working changes across kinds")

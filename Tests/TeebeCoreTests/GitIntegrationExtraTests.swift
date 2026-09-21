@@ -44,7 +44,7 @@ struct GitIntegrationExtraTests {
         let fixture = try GitFixture(); defer { fixture.cleanup() }
         fixture.commitFile("seed.txt", "seed\n")
         let linked = fixture.root.appendingPathComponent("gone").path
-        try await git.addWorktree(repoPath: fixture.repoPath, path: linked, branch: "gone", createBranch: true)
+        try await git.addWorktree(repoPath: fixture.repoPath, path: linked, branch: "gone", createBranch: true, startPoint: nil)
         try FileManager.default.removeItem(atPath: linked)
 
         await #expect(throws: GitError.self) {
