@@ -182,3 +182,5 @@ teebe is **dual-licensed**:
 
 See [`LICENSING.md`](LICENSING.md) for details and contact. Contributions are
 accepted under the [Contributor License Agreement](CLA.md).
+
+Listed in [awesome-mac](https://github.com/jaywcjlove/awesome-mac#version-control).
