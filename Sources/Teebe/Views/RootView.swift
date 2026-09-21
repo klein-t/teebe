@@ -139,7 +139,7 @@ struct RootView: View {
         // Moving the window (or sending it to another screen) changes how much room is
         // left below its top edge, which is what every clamp is measured against.
         .onChange(of: roomBelowTop) { _, _ in
-            if !isLiveResizing { applyWindowSizing(animated: false) }
+            if !isLiveResizing { applyWindowSizing() }
         }
         .onChange(of: app.selector.selectedRepo?.path) { _, path in
             applyLayout(for: path)
@@ -250,10 +250,8 @@ struct RootView: View {
         // still set here is stale: let the window follow the layout again.
         draggingDivider = false
         // Opening a section grows the window *downward* to make room for it; closing
-        // shrinks it back up. Snap rather than animate: animating the NSWindow frame
-        // while SwiftUI relays out the content instantly desyncs them and the content
-        // visibly stretches/bounces.
-        applyWindowSizing(animated: false)
+        // shrinks it back up.
+        applyWindowSizing()
         persistLayout()
     }
 
@@ -266,7 +264,7 @@ struct RootView: View {
         draggingDivider = false
         guard let repoPath else {
             setHeightLocked(false, height: emptyStateHeight)
-            setWindowHeight(emptyStateHeight, animated: false)   // no project → empty state
+            setWindowHeight(emptyStateHeight)   // no project → empty state
             return
         }
         let layout = app.layout(forRepo: repoPath)
@@ -279,7 +277,7 @@ struct RootView: View {
         if let saved = layout.map({ CGFloat($0.windowHeight) }) {
             filesReveal = min(max(saved, minFilesReveal), screenHeight - collapsedHeight)
         }
-        applyWindowSizing(animated: false)
+        applyWindowSizing()
     }
 
     /// `true` whenever FILES is closed: the window then *wraps* its content exactly
@@ -365,9 +363,16 @@ struct RootView: View {
 
     /// FILES takes what is left below the worktree list — one direction only, so there is
     /// no loop. The remembered reveal is the maximum, not a demand.
+    ///
+    /// **While a section divider is dragged FILES is the filler instead**, taking all
+    /// the room the lists give up. The window is held still for the drag, so leaving
+    /// FILES at its remembered reveal opened a growing band of blank material below the
+    /// content and then snapped the window shorter the moment the drag ended — the
+    /// divider worked as a window resizer rather than as a splitter.
     private var filesRevealHeight: CGFloat {
         guard openFiles else { return 0 }
         let room = heightBudget - collapsedHeight - worktreesContentHeight - changesContentHeight
+        guard !draggingDivider else { return max(minFilesReveal, room) }
         return min(filesReveal, max(minFilesReveal, room))
     }
 
@@ -436,12 +441,12 @@ struct RootView: View {
         guard SectionSizing.needsResize(frameHeight: window.frame.height, target: targetHeight(),
                                         draggingDivider: draggingDivider, liveResizing: isLiveResizing)
         else { return }
-        applyWindowSizing(animated: false)
+        applyWindowSizing()
     }
 
     /// Size the window to the current state, anchored at the top so it grows and
     /// shrinks downward. Width stays freely resizable throughout.
-    private func applyWindowSizing(animated: Bool = true) {
+    private func applyWindowSizing() {
         guard let window else { return }
         let target = targetHeight()
         setHeightLocked(heightPinned, height: target)
@@ -449,8 +454,7 @@ struct RootView: View {
         // the same action (and would fight the user while the window is being moved).
         // The tolerance is a full point because AppKit rounds the frame it hands back.
         guard abs(target - window.frame.height) >= 1 else { return }
-        let shrinking = target < window.frame.height
-        setWindowHeight(target, animated: animated && !shrinking)
+        setWindowHeight(target)
     }
 
     /// Green zoom: toggle a *vertical* maximize. Grow to the full visible screen height
@@ -520,8 +524,12 @@ struct RootView: View {
     /// The divider was let go: the window can follow the sections again, so size it
     /// once to the layout the drag settled on, then remember it.
     private func endDividerDrag() {
+        // Keep the room the drag handed FILES (read while the hold is still on, so it
+        // is the filler height): the window then already has the height the layout
+        // asks for and stays exactly where the user left it.
+        if openFiles { filesReveal = filesRevealHeight }
         draggingDivider = false
-        applyWindowSizing(animated: false)
+        applyWindowSizing()
         persistLayout()
     }
 
@@ -542,13 +550,16 @@ struct RootView: View {
     }
 
     /// Resize the window to `height`, keeping the top edge pinned so it grows and
-    /// shrinks downward.
-    private func setWindowHeight(_ height: CGFloat, animated: Bool = true) {
+    /// shrinks downward. Always a snap, never an animated `setFrame`: AppKit animates
+    /// the frame over many steps while SwiftUI re-lays the content out at once, so the
+    /// content visibly stretches — and every step of the animation posts `didResize`,
+    /// which drives the reconcile straight back into the resize it is animating.
+    private func setWindowHeight(_ height: CGFloat) {
         guard let window else { return }
         var frame = window.frame
         frame.origin.y += frame.height - height
         frame.size.height = height
-        window.setFrame(frame, display: true, animate: animated)
+        window.setFrame(frame, display: true, animate: false)
     }
 
     /// Constrain the window's height for the current state. Collapsed → pinned to the
