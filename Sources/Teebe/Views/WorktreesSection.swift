@@ -34,37 +34,37 @@ struct WorktreesSection: View {
             SectionHeader(title: "WORKTREES", isOpen: isOpen, isActive: app.activeSection == .worktrees, onToggle: { isOpen.toggle() }) {
                 if isOpen {
                     HStack(spacing: 2) {
-                        Button { app.presentAddRepositoryPanel() } label: {
+                        Button { app.presentNewWorktreePanel() } label: {
                             Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
                         }
                         .buttonStyle(IconButtonStyle()).foregroundStyle(Palette.secondaryText)
-                        .help("Add Repository")
+                        .disabled(selector.selectedRepo == nil)
+                        .help("New worktree")
+                        Button { refresh() } label: {
+                            Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
+                        }
+                        .buttonStyle(IconButtonStyle()).foregroundStyle(Palette.secondaryText)
+                        .help("Fetch and refresh")
                         Menu {
+                            projectSwitcher
+                            Divider()
                             Button { app.presentAddRepositoryPanel() } label: {
                                 Label("Add Repository…", systemImage: "folder.badge.plus")
                             }
-                            if let selected = selector.selectedRepo {
-                                Button { app.presentNewWorktreePanel() } label: {
-                                    Label("New Worktree…", systemImage: "plus.square.on.square")
-                                }
-                                Divider()
-                                Button { refresh() } label: {
-                                    Label("Refresh", systemImage: "arrow.clockwise")
-                                }
-                                if app.showMergeStatus {
-                                    Menu {
-                                        comparisonMenu(selected)
-                                    } label: {
-                                        Label("Comparison Branch", systemImage: "arrow.triangle.branch")
-                                    }
-                                }
+                            Button(role: .destructive) {
+                                guard let selected = selector.selectedRepo else { return }
+                                app.removeRepository(selected)
+                            } label: {
+                                Label("Remove \"\(selector.selectedRepo.map(app.repositoryTitle) ?? "")\" from List",
+                                      systemImage: "folder.badge.minus")
                             }
-                            Divider()
-                            recentProjects
-                            if let selected = selector.selectedRepo {
+                            .disabled(selector.selectedRepo == nil)
+                            if let selected = selector.selectedRepo, app.showMergeStatus {
                                 Divider()
-                                Button(role: .destructive) { app.removeRepository(selected) } label: {
-                                    Label("Remove Project from List", systemImage: "folder.badge.minus")
+                                Menu {
+                                    comparisonMenu(selected)
+                                } label: {
+                                    Label("Comparison Branch", systemImage: "arrow.triangle.branch")
                                 }
                             }
                         } label: {
@@ -73,11 +73,6 @@ struct WorktreesSection: View {
                         }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                         .help("Repository actions")
-                        Button { Task { await selector.refreshWorktrees() } } label: {
-                            Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
-                        }
-                        .buttonStyle(IconButtonStyle()).foregroundStyle(Palette.secondaryText)
-                        .help("Refresh worktrees")
                     }
                 } else if let active = selector.selectedWorktree {
                     HStack(spacing: 5) {
@@ -268,27 +263,22 @@ struct WorktreesSection: View {
         }
     }
 
-    /// A real menu section with a real Picker, so macOS draws the checkmark on the open
-    /// project itself instead of us swapping a label's image for one.
-    private var recentProjects: some View {
-        // The Section supplies the native gray header; the Picker's own label is
-        // left empty so it doesn't render a second, detached-looking title row
-        // (`.labelsHidden()` isn't honoured for inline pickers inside a menu).
-        Section("Recent Projects") {
-            Picker(selection: Binding(
-                get: { selector.selectedRepo?.id },
-                set: { id in
-                    guard let repo = app.recentRepositories.first(where: { $0.id == id }) else { return }
-                    Task { await selector.selectRepo(repo) }
+    /// The open projects, checkmark on the current one. Toggles rather than a Picker:
+    /// a Picker inside a Menu draws its own divider right under the section header,
+    /// while toggles become plain checked menu items straight under it.
+    private var projectSwitcher: some View {
+        Section("Projects") {
+            ForEach(app.recentRepositories.prefix(8)) { repo in
+                Toggle(isOn: Binding(
+                    get: { selector.selectedRepo?.id == repo.id },
+                    set: { isOn in
+                        guard isOn, selector.selectedRepo?.id != repo.id else { return }
+                        Task { await selector.selectRepo(repo) }
+                    }
+                )) {
+                    Text(app.repositoryTitle(repo))
                 }
-            )) {
-                ForEach(app.recentRepositories.prefix(8)) { repo in
-                    Text(app.repositoryTitle(repo)).tag(Optional(repo.id))
-                }
-            } label: {
-                EmptyView()
             }
-            .pickerStyle(.inline)
         }
     }
 
