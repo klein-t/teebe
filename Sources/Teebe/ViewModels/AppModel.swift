@@ -17,6 +17,8 @@ final class AppModel {
     /// Light / dark override, or follow the system. Applied app-wide via `NSApp.appearance`.
     var appearance: AppearanceMode { didSet { appearance.apply(); persist() } }
     private(set) var errorMessage: String?
+    /// The New Worktree sheet's form while it is up; nil when it is closed.
+    var newWorktree: NewWorktreeModel?
 
     /// Which section the keyboard currently drives — arrows, Enter and Space act on
     /// it, and its header shows the active accent. Moved by ⌘1/⌘2/⌘3, Tab/⇧Tab, or by
@@ -332,22 +334,54 @@ final class AppModel {
         Task { await addRepository(path: url.path) }
     }
 
-    /// Choose a directory for a new linked worktree (branch = folder name).
-    func presentNewWorktreePanel() {
+    /// Open the New Worktree sheet for the selected repository. The sheet's form
+    /// state lives in `newWorktree` for as long as it is up.
+    func presentNewWorktree() {
         guard let repo = selector.selectedRepo else { return }
-        let panel = NSSavePanel()
-        panel.prompt = "Create Worktree"
-        panel.nameFieldStringValue = "worktree"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let branch = url.lastPathComponent
-        Task {
-            do {
-                try await environment.worktreeService.addWorktree(in: repo, at: url.path, branch: branch, createBranch: true)
-                await selector.selectRepo(repo)
-            } catch {
-                errorMessage = "Couldn't create worktree: \(WorktreeModel.describe(error))"
-            }
+        let comparison = mergeStatus.snapshot?.targets.resolve(cleanupTarget(for: repo.path))?.name
+        let primaryBranch = selector.worktrees.first(where: \.isPrimary)?.branch
+        newWorktree = NewWorktreeModel(repo: repo, branches: selector.branches,
+                                       comparisonBranch: comparison, primaryBranch: primaryBranch)
+    }
+
+    /// Pick the worktree folder by hand. Directories only, and new ones can be made
+    /// from inside the panel.
+    func chooseWorktreeLocation(for form: NewWorktreeModel) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        if !form.location.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: (form.location as NSString).deletingLastPathComponent)
+            panel.nameFieldStringValue = (form.location as NSString).lastPathComponent
         }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        form.setLocation(url.path)
+    }
+
+    /// Create the worktree the sheet describes. On success the repository is
+    /// re-read and the new worktree selected; on failure the message goes back to
+    /// the form so the sheet can stay open.
+    func createWorktree(_ form: NewWorktreeModel) async {
+        let repo = form.repo
+        let path = form.location
+        form.isCreating = true
+        form.errorMessage = nil
+        defer { form.isCreating = false }
+        do {
+            try await environment.worktreeService.addWorktree(
+                in: repo, at: path, branch: form.trimmedBranch,
+                createBranch: form.isCreatingBranch, startPoint: form.resolvedStartPoint)
+        } catch {
+            form.errorMessage = "Couldn't create worktree: \(WorktreeModel.describe(error))"
+            return
+        }
+        newWorktree = nil
+        // The folder exists now, so standardizing matches the form `git worktree
+        // list` reports (firmlinks resolved) and the new row gets selected.
+        await selector.selectRepo(repo, preferredWorktreePath: PathUtil.standardized(path))
     }
 
     /// Bring the selected repository's remote refs up to date. The setting gates it;

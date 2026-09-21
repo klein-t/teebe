@@ -34,7 +34,7 @@ struct WorktreesSection: View {
             SectionHeader(title: "WORKTREES", isOpen: isOpen, isActive: app.activeSection == .worktrees, onToggle: { isOpen.toggle() }) {
                 if isOpen {
                     HStack(spacing: 2) {
-                        Button { app.presentNewWorktreePanel() } label: {
+                        Button { app.presentNewWorktree() } label: {
                             Image(systemName: "plus").font(.system(size: 11, weight: .semibold))
                         }
                         .buttonStyle(IconButtonStyle()).foregroundStyle(Palette.secondaryText)
@@ -155,6 +155,12 @@ struct WorktreesSection: View {
             Button("Cancel", role: .cancel) { pendingRemoval = nil }
         } message: {
             Text("This removes the worktree folder from your Mac. The branch is kept.")
+        }
+        .sheet(isPresented: Binding(
+            get: { app.newWorktree != nil },
+            set: { if !$0 { app.newWorktree = nil } }
+        )) {
+            if let form = app.newWorktree { NewWorktreeSheet(app: app, form: form) }
         }
         .sheet(item: $branchPickerRepo) { repo in
             ComparisonBranchSheet(
