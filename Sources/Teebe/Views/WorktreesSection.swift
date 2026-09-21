@@ -223,6 +223,15 @@ struct WorktreesSection: View {
         }
         .padding(.horizontal, 12).frame(height: WorktreeListPresentation.groupHeight)
         .rowHighlight(isSelected: false)
+        // The row's own tooltip explains the group; the two buttons above keep
+        // their own `.help`, which wins wherever they are hovered.
+        .help(group.kind.explanation(comparedTo: comparisonBranchName))
+    }
+
+    /// The branch merge status was actually compared against. Group headers only
+    /// exist once one resolved, so the fallback is for safety, not for display.
+    private var comparisonBranchName: String {
+        app.mergeStatus.snapshot?.target?.name ?? "the comparison branch"
     }
 
     /// One action per group, where there is one: the rest of the header is just a
@@ -233,8 +242,8 @@ struct WorktreesSection: View {
         case .merged:
             let eligible = app.groupActions.eligibleEntries(for: group.worktrees)
             if !eligible.isEmpty {
-                Button("Clean up \(eligible.count)…") { pendingCleanup = eligible }
-                    .buttonStyle(.plain).font(.system(size: 11)).monospacedDigit()
+                Button("Clean up…") { pendingCleanup = eligible }
+                    .buttonStyle(.plain).font(.system(size: 11))
                     .foregroundStyle(Palette.accent)
                     .disabled(app.groupActions.isWorking)
                     .help("Remove the merged worktree folders. Branches are kept.")

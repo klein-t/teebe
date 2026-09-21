@@ -13,10 +13,21 @@ enum WorktreeGroup: String, CaseIterable, Identifiable {
         case .merged: "Merged"
         // The names say what is in the folder, not a verdict: "Uncommitted changes"
         // is files you have not committed, "Unmerged commits" is commits the
-        // comparison branch does not have. No tooltip needed to tell them apart.
+        // comparison branch does not have.
         case .localChanges: "Uncommitted changes"
         case .notMerged: "Unmerged commits"
         case .broken: "Broken"
+        }
+    }
+    /// The header tooltip: one sentence saying what put a checkout in this group,
+    /// naming the branch the comparison actually ran against rather than a generic
+    /// "the main branch".
+    func explanation(comparedTo branch: String) -> String {
+        switch self {
+        case .merged: "Every commit is already in \(branch) and the folder has no uncommitted changes."
+        case .localChanges: "Edited or new files in the folder that are not committed yet."
+        case .notMerged: "The folder is clean, but its commits are not in \(branch) yet."
+        case .broken: "Git still lists this worktree, but its folder or .git link is missing."
         }
     }
     /// A status Git could not confirm — a skipped file, a submodule, no result at

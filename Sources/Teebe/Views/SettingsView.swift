@@ -42,7 +42,7 @@ struct SettingsView: View {
             .pickerStyle(.segmented)
 
             Section("Worktrees") {
-                Toggle("Show merge status for worktrees", isOn: $app.showMergeStatus)
+                Toggle("Group worktrees by merge status", isOn: $app.showMergeStatus)
                 Toggle("Fetch automatically", isOn: $app.fetchAutomatically)
             }
 

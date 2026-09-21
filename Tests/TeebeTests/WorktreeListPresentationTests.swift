@@ -76,6 +76,20 @@ struct WorktreeListPresentationTests {
         #expect(flat.visibleWorktrees == trees)
     }
 
+    @Test("group tooltips name the branch merge status was compared against")
+    func groupExplanations() {
+        #expect(WorktreeGroup.merged.explanation(comparedTo: "origin/dev")
+            == "Every commit is already in origin/dev and the folder has no uncommitted changes.")
+        #expect(WorktreeGroup.localChanges.explanation(comparedTo: "origin/dev")
+            == "Edited or new files in the folder that are not committed yet.")
+        #expect(WorktreeGroup.notMerged.explanation(comparedTo: "origin/dev")
+            == "The folder is clean, but its commits are not in origin/dev yet.")
+        #expect(WorktreeGroup.broken.explanation(comparedTo: "origin/dev")
+            == "Git still lists this worktree, but its folder or .git link is missing.")
+        // The real comparison branch is substituted, not a hardcoded default.
+        #expect(WorktreeGroup.merged.explanation(comparedTo: "main").contains("already in main and"))
+    }
+
     @Test("groups read in a fixed order and their rows sort by branch name")
     func groupOrderAndRowSorting() {
         #expect(WorktreeGroup.allCases.map(\.title)
