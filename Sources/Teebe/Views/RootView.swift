@@ -2,11 +2,41 @@ import SwiftUI
 import AppKit
 import TeebeCore
 
+#if DEBUG
+/// Test-only handle on the window-geometry code the gestures drive, plus a count of
+/// the programmatic resizes it made. The geometry rules only come together in a real
+/// window — the section heights resolve in a layout pass and the reconcile answers
+/// AppKit's own notifications — so `WindowGeometryTests` hosts `RootView` in one and
+/// drives these closures instead of synthesizing clicks (the test process has no
+/// accessibility access).
+@MainActor
+final class GeometryTestHooks {
+    var setWorktreesOpen: ((Bool) -> Void)?
+    var setChangesOpen: ((Bool) -> Void)?
+    var setFilesOpen: ((Bool) -> Void)?
+    /// One step of a WORKTREES/CHANGES divider drag, as the handle's gesture reports it.
+    var dragWorktreesDivider: ((CGFloat) -> Void)?
+    var dragChangesDivider: ((CGFloat) -> Void)?
+    var endDividerDrag: (() -> Void)?
+    var targetHeight: (() -> CGFloat)?
+    var worktreeListHeight: (() -> CGFloat)?
+    var changesListHeight: (() -> CGFloat)?
+    /// Window resizes teebe itself performed since the last `reset()`.
+    private(set) var resizes = 0
+    func noteResize() { resizes += 1 }
+    func reset() { resizes = 0 }
+}
+#endif
+
 /// Compact, floating main window: a three-section accordion (WORKTREES / CHANGES /
 /// FILES).
 struct RootView: View {
     @Bindable var app: AppModel
     @Bindable var preview: PreviewModel
+    #if DEBUG
+    /// Set only by `WindowGeometryTests`; nil in the app.
+    var testHooks: GeometryTestHooks?
+    #endif
 
     @State private var openWorktrees = true
     @State private var openChanges = true
@@ -155,6 +185,9 @@ struct RootView: View {
         .onChange(of: targetHeight()) { _, _ in reconcileWindowHeight() }
         .onChange(of: collapsedWorktreeGroups) { _, _ in persistLayout() }
         .background(QuickLookBridge(controller: quickLook))
+        #if DEBUG
+        .onAppear { installTestHooks() }
+        #endif
         .background { commandShortcuts }
         .focusable()
         .focusEffectDisabled()
@@ -533,6 +566,22 @@ struct RootView: View {
         persistLayout()
     }
 
+    #if DEBUG
+    /// Hand the geometry test the same entry points the gestures use.
+    private func installTestHooks() {
+        guard let hooks = testHooks else { return }
+        hooks.setWorktreesOpen = { setOpen(.worktrees, $0) }
+        hooks.setChangesOpen = { setOpen(.changes, $0) }
+        hooks.setFilesOpen = { setOpen(.files, $0) }
+        hooks.dragWorktreesDivider = resizeWorktrees
+        hooks.dragChangesDivider = resizeChanges
+        hooks.endDividerDrag = endDividerDrag
+        hooks.targetHeight = { targetHeight() }
+        hooks.worktreeListHeight = { worktreeListHeight }
+        hooks.changesListHeight = { changesListHeight }
+    }
+    #endif
+
     private func persistLayout() {
         guard let repo = app.selector.selectedRepo?.path else { return }
         app.saveLayout(
@@ -560,6 +609,9 @@ struct RootView: View {
         frame.origin.y += frame.height - height
         frame.size.height = height
         window.setFrame(frame, display: true, animate: false)
+        #if DEBUG
+        testHooks?.noteResize()
+        #endif
     }
 
     /// Constrain the window's height for the current state. Collapsed → pinned to the
