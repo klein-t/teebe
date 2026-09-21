@@ -407,6 +407,7 @@ struct WorktreesSection: View {
         .overlay {
             if isHighlighted, !isActive {
                 RowHighlight.shape.strokeBorder(Palette.accent, lineWidth: 1.5)
+                    .padding(.horizontal, RowHighlight.horizontalInset)
             }
         }
         .animation(.easeInOut(duration: 0.18), value: isActive)

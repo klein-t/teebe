@@ -32,6 +32,7 @@ private struct RowHighlightModifier: ViewModifier {
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovered)
                     RowHighlight.shape.fill(Palette.accent.opacity(isSelected ? 1 : 0))
                 }
+                .padding(.horizontal, RowHighlight.horizontalInset)
             }
             .contentShape(Rectangle())
             .onHover { hovering in
@@ -46,6 +47,10 @@ private struct RowHighlightModifier: ViewModifier {
 /// The one row shape: hover fill, selection fill and the keyboard cursor's outline.
 enum RowHighlight {
     static let cornerRadius: CGFloat = 4
+    /// Margin between the highlight and the window's side edges, so a hovered or
+    /// selected row reads as a pill inside the list rather than a band running into
+    /// the window frame.
+    static let horizontalInset: CGFloat = 6
     static var shape: RoundedRectangle { RoundedRectangle(cornerRadius: cornerRadius) }
 }
 
