@@ -47,17 +47,26 @@ struct WorktreesSection: View {
                                 Button { app.presentNewWorktreePanel() } label: {
                                     Label("New Worktree…", systemImage: "plus.square.on.square")
                                 }
+                                Divider()
                                 Button { refresh() } label: {
                                     Label("Refresh", systemImage: "arrow.clockwise")
                                 }
                                 if app.showMergeStatus {
-                                    Menu("Comparison Branch") { comparisonMenu(selected) }
+                                    Menu {
+                                        comparisonMenu(selected)
+                                    } label: {
+                                        Label("Comparison Branch", systemImage: "arrow.triangle.branch")
+                                    }
                                 }
+                            }
+                            Divider()
+                            recentProjects
+                            if let selected = selector.selectedRepo {
+                                Divider()
                                 Button(role: .destructive) { app.removeRepository(selected) } label: {
                                     Label("Remove Project from List", systemImage: "folder.badge.minus")
                                 }
                             }
-                            recentProjects
                         } label: {
                             Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(Palette.secondaryText).hoverChip()
@@ -262,8 +271,11 @@ struct WorktreesSection: View {
     /// A real menu section with a real Picker, so macOS draws the checkmark on the open
     /// project itself instead of us swapping a label's image for one.
     private var recentProjects: some View {
+        // The Section supplies the native gray header; the Picker's own label is
+        // left empty so it doesn't render a second, detached-looking title row
+        // (`.labelsHidden()` isn't honoured for inline pickers inside a menu).
         Section("Recent Projects") {
-            Picker("Recent Projects", selection: Binding(
+            Picker(selection: Binding(
                 get: { selector.selectedRepo?.id },
                 set: { id in
                     guard let repo = app.recentRepositories.first(where: { $0.id == id }) else { return }
@@ -273,9 +285,10 @@ struct WorktreesSection: View {
                 ForEach(app.recentRepositories.prefix(8)) { repo in
                     Text(app.repositoryTitle(repo)).tag(Optional(repo.id))
                 }
+            } label: {
+                EmptyView()
             }
             .pickerStyle(.inline)
-            .labelsHidden()
         }
     }
 
