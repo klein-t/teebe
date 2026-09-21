@@ -86,7 +86,7 @@ struct WorktreeListPresentation {
 extension AppModel {
     func worktreeList(collapsed: Set<WorktreeGroup>) -> WorktreeListPresentation {
         let entries = selector.worktrees.compactMap { tree -> WorktreeMergeEntry? in
-            let local = selector.worktree.worktreePath == tree.path ? selector.worktree.status : nil
+            let local = selector.worktree.statusPath == tree.path ? selector.worktree.status : nil
             return mergeStatus.entry(for: tree.path, localStatus: local,
                                      localChangeCount: selector.info(for: tree).changeCount)
         }

@@ -120,7 +120,7 @@ struct WorktreesSection: View {
                                           enabled: app.showMergeStatus, revision: selector.mergeRevision)
         }
         .onChange(of: selector.worktree.status) { _, status in
-            guard let path = selector.worktree.worktreePath, let head = status?.oid,
+            guard let path = selector.worktree.statusPath, let head = status?.oid,
                   let current = app.mergeStatus.entry(for: path), head != current.entry.worktree.head else { return }
             // Only this checkout committed, so only this row needs rechecking —
             // invalidating the whole list would regroup and resize every row.
@@ -364,7 +364,7 @@ struct WorktreesSection: View {
     /// is off or nothing resolved to compare against.
     private func mergeEntry(_ worktree: Worktree) -> WorktreeMergeEntry? {
         guard app.showMergeStatus, !list.needsTarget else { return nil }
-        let local = selector.worktree.worktreePath == worktree.path ? selector.worktree.status : nil
+        let local = selector.worktree.statusPath == worktree.path ? selector.worktree.status : nil
         return app.mergeStatus.entry(for: worktree.path, localStatus: local,
                                      localChangeCount: selector.info(for: worktree).changeCount)
     }
