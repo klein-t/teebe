@@ -37,8 +37,7 @@ struct SectionResizeHandle: View {
                 if startHeight == nil { startHeight = height }
                 onResize((startHeight ?? height) + value.translation.height)
             })
-        // The window is held still for the whole drag and sized once at the end, so a
-        // drag that never reports an end leaves it stuck at the height it started from.
+        // Commit the layout and clear the drag hold even when the gesture is cancelled.
         // `onEnded` misses a cancelled gesture (the app deactivating, the view being
         // rebuilt under the pointer); `@GestureState` is reset on both.
         .onChange(of: dragging) { _, active in

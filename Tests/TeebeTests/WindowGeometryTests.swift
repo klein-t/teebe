@@ -22,6 +22,40 @@ import TeebeCore
 @Suite("Window geometry", .serialized)
 struct WindowGeometryTests {
 
+    @Test("divider drags with Files closed keep the window aligned throughout the gesture")
+    func dividersResizeTheWindowWhenFilesCannotAbsorbSpace() async throws {
+        guard let host = try await GeometryHost.make() else { return }
+        defer { host.tearDown() }
+        let dirty = try #require(host.app.selector.worktrees.first { $0.branch == "feat/dirty" })
+        await host.app.selector.selectWorktree(dirty)
+        host.hooks.setFilesOpen?(false)
+        await host.settleGeometry()
+        let top = host.window.frame.maxY
+
+        for divider in host.dividerDrags {
+            for delta in [-100.0, 100.0] as [CGFloat] {
+                let start = divider.currentHeight()
+                let initialHeight = host.window.frame.height
+                for step in 1...5 {
+                    divider.drag(start + delta * CGFloat(step) / 5)
+                    await host.settle(timeout: 0.05, until: { false })
+                    #expect(host.isSettled,
+                            "\(divider.name) during drag: frame \(host.window.frame.height), target \(host.hooks.targetHeight?() ?? 0)")
+                    #expect(abs(host.window.frame.maxY - top) <= 1,
+                            "\(divider.name) drag moved the window's top edge")
+                }
+                #expect(abs(host.window.frame.height - initialHeight) > 1,
+                        "\(divider.name) fixture did not exercise resizing")
+                let beforeRelease = host.window.frame
+                host.hooks.reset()
+                host.endDrag()
+                await host.settleGeometry()
+                #expect(host.window.frame == beforeRelease, "\(divider.name) jumped on release")
+                #expect(host.hooks.resizes == 0, "\(divider.name) deferred its resize until release")
+            }
+        }
+    }
+
     @Test("launch near the screen bottom settles without repeated corrections", arguments: [340.0, 420.0])
     func lowLaunchSettlesWithoutChasingItsFrame(topRoom: Double) async throws {
         guard let host = try await GeometryHost.make(topRoom: topRoom) else { return }

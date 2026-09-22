@@ -55,8 +55,8 @@ struct RootView: View {
     /// fixed-height pane the rest of the time (so a CHANGES reflow can't make it balloon
     /// for a frame); during a drag it becomes the flexible filler so the edge resizes it.
     @State private var isLiveResizing = false
-    /// True only while a section divider is being dragged: the window height is held
-    /// still for the duration and applied once at the end (see `heightBudget`).
+    /// True while a section divider is being dragged. FILES absorbs the space when
+    /// open; otherwise the window follows the divider throughout the gesture.
     @State private var draggingDivider = false
     /// Room between the window's top edge and the bottom of its screen — the ceiling for
     /// everything below the title row. Held in state because SwiftUI observes neither
@@ -383,15 +383,12 @@ struct RootView: View {
     }
 
     /// The height every section clamp is measured against. Normally the room below the
-    /// window's top edge, so the window can wrap whatever the sections need. **While a
-    /// section divider is being dragged it is the window's current height instead**, so
-    /// the window holds still and the sections trade room inside it. Resizing the window
-    /// on every drag event moves its origin (the top edge is pinned by growing downward),
-    /// and AppKit repositions the content before SwiftUI re-lays it out: the whole
-    /// accordion dropped by the drag delta and snapped back on *every* frame of the drag.
-    /// The window is sized once instead, when the drag ends.
+    /// window's top edge, so the window can wrap whatever the sections need. While a
+    /// divider is dragged with FILES open, the current window bounds the sections as
+    /// they trade room. With FILES closed there is no flexible pane to absorb that
+    /// space: retain the screen budget and resize the window along with its content.
     private var heightBudget: CGFloat {
-        guard draggingDivider, let window else { return roomBelowTop }
+        guard draggingDivider, openFiles, let window else { return roomBelowTop }
         return min(roomBelowTop, window.frame.height)
     }
 
@@ -420,6 +417,7 @@ struct RootView: View {
         zoomRestore = nil
         draggingDivider = true
         worktreesReveal = max(SectionSizing.worktrees.minimumHeight, requested)
+        if !openFiles { applyWindowSizing() }
     }
 
     /// Same deal for CHANGES: the preference is stored unclamped and only the render
@@ -428,6 +426,7 @@ struct RootView: View {
         zoomRestore = nil
         draggingDivider = true
         changesReveal = max(SectionSizing.changes.minimumHeight, requested)
+        if !openFiles { applyWindowSizing() }
     }
 
     /// Every change, unbounded: what the CHANGES preference and budget are measured
@@ -477,7 +476,7 @@ struct RootView: View {
     private func reconcileWindowHeight() {
         guard let window else { return }
         guard SectionSizing.needsResize(frameHeight: window.frame.height, target: targetHeight(),
-                                        draggingDivider: draggingDivider, liveResizing: isLiveResizing)
+                                        draggingDivider: draggingDivider && openFiles, liveResizing: isLiveResizing)
         else { return }
         applyWindowSizing()
     }
@@ -559,8 +558,8 @@ struct RootView: View {
         persistLayout()
     }
 
-    /// The divider was let go: the window can follow the sections again, so size it
-    /// once to the layout the drag settled on, then remember it.
+    /// Commit the divider's layout. With FILES closed the window already followed
+    /// each drag update, so releasing the handle must not introduce another resize.
     private func endDividerDrag() {
         // Keep the room the drag handed FILES (read while the hold is still on, so it
         // is the filler height): the window then already has the height the layout
