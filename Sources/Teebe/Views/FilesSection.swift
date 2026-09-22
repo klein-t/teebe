@@ -36,7 +36,7 @@ struct FilesSection: View {
                             .foregroundStyle(Palette.secondaryText).hoverChip()
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .help("Sort & filter")
+                    .hoverHelp("Sort & filter")
                 } else if let active = app.selector.selectedWorktree {
                     Text("\(active.branch ?? active.name)")
                         .font(.system(size: 11, design: .monospaced))

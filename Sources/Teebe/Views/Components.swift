@@ -83,7 +83,7 @@ struct StatusLetter: View {
             Text(letter)
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(Palette.statusColor(change.primaryStatus))
-                .help(change.primaryStatus.helpText)
+                .hoverHelp(change.primaryStatus.helpText)
                 .accessibilityLabel(change.primaryStatus.helpText)
         }
     }
@@ -178,17 +178,17 @@ private struct ChipBody<Label: View>: View {
     var pressed = false
     @ViewBuilder var label: () -> Label
     @State private var hovering = false
+    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         label()
             .frame(minWidth: size.width, minHeight: size.height)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(hovering ? 0.08 : 0))
+                    .fill(Color.primary.opacity(hovering && isEnabled ? 0.10 : 0))
             )
             .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .scaleEffect(pressed ? 0.96 : 1)
-            .animation(.easeOut(duration: 0.12), value: hovering)
             .animation(.easeOut(duration: 0.12), value: pressed)
             .onHover { hovering = $0 }
     }

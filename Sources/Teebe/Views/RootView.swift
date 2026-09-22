@@ -256,7 +256,7 @@ struct RootView: View {
                         .contentTransition(.symbolEffect(.replace))   // animated pin ↔ pin.fill swap
                 }
                 .buttonStyle(IconButtonStyle(size: CGSize(width: 26, height: 22)))
-                .help("Float on top")
+                .hoverHelp("Float on top")
                 .animation(.snappy(duration: 0.25), value: app.floatOnTop)
             }
             .padding(.horizontal, 11)

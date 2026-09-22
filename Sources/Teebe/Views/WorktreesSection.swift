@@ -39,12 +39,12 @@ struct WorktreesSection: View {
                         }
                         .buttonStyle(IconButtonStyle()).foregroundStyle(Palette.secondaryText)
                         .disabled(selector.selectedRepo == nil)
-                        .help("New worktree")
+                        .hoverHelp("New worktree")
                         Button { refresh() } label: {
                             Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
                         }
                         .buttonStyle(IconButtonStyle()).foregroundStyle(Palette.secondaryText)
-                        .help("Fetch and refresh")
+                        .hoverHelp("Fetch and refresh")
                         Menu {
                             projectSwitcher
                             Divider()
@@ -72,7 +72,7 @@ struct WorktreesSection: View {
                                 .foregroundStyle(Palette.secondaryText).hoverChip()
                         }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                        .help("Repository actions")
+                        .hoverHelp("Repository actions")
                     }
                 } else if let active = selector.selectedWorktree {
                     HStack(spacing: 5) {
@@ -228,14 +228,11 @@ struct WorktreesSection: View {
             .buttonStyle(.plain)
             .accessibilityLabel("\(group.kind.title), \(group.worktrees.count) worktrees")
             .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
-            .help("\(collapsed ? "Expand" : "Collapse") the \(group.kind.title) group")
+            .hoverHelp(group.kind.explanation(comparedTo: comparisonBranchName))
             groupAction(group)
         }
         .padding(.horizontal, 12).frame(height: WorktreeListPresentation.groupHeight)
         .rowHighlight(isSelected: false)
-        // The row's own tooltip explains the group; the two buttons above keep
-        // their own `.help`, which wins wherever they are hovered.
-        .help(group.kind.explanation(comparedTo: comparisonBranchName))
     }
 
     /// The branch merge status was actually compared against. Group headers only
@@ -253,17 +250,17 @@ struct WorktreesSection: View {
             let eligible = app.groupActions.eligibleEntries(for: group.worktrees)
             if !eligible.isEmpty {
                 Button("Clean up…") { pendingCleanup = eligible }
-                    .buttonStyle(.plain).font(.system(size: 11))
+                    .buttonStyle(IconButtonStyle(size: CGSize(width: 22, height: 18))).font(.system(size: 11))
                     .foregroundStyle(Palette.accent)
                     .disabled(app.groupActions.isWorking)
-                    .help("Remove the merged worktree folders. Branches are kept.")
+                    .hoverHelp("Remove the merged worktree folders. Branches are kept.")
             }
         case .broken:
             Button("Prune") { app.groupActions.prune() }
-                .buttonStyle(.plain).font(.system(size: 11))
+                .buttonStyle(IconButtonStyle(size: CGSize(width: 22, height: 18))).font(.system(size: 11))
                 .foregroundStyle(Palette.accent)
                 .disabled(app.groupActions.isWorking)
-                .help("Forget worktrees whose folders are gone.")
+                .hoverHelp("Forget worktrees whose folders are gone.")
         case .localChanges, .notMerged:
             EmptyView()
         }
