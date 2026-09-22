@@ -83,6 +83,8 @@ struct StatusLetter: View {
             Text(letter)
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(Palette.statusColor(change.primaryStatus))
+                .help(change.primaryStatus.helpText)
+                .accessibilityLabel(change.primaryStatus.helpText)
         }
     }
 }

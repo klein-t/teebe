@@ -1,6 +1,24 @@
 import SwiftUI
 import TeebeCore
 
+extension ChangeStatus {
+    /// Plain-language explanation shared by the Files and Changes badges.
+    var helpText: String {
+        switch self {
+        case .unmodified: return "Unmodified file · No changes"
+        case .modified: return "Modified file · Changed since the last commit"
+        case .added: return "Added file · Added to Git for the next commit"
+        case .deleted: return "Deleted file · Removed from this checkout"
+        case .renamed: return "Renamed file · Moved or renamed"
+        case .copied: return "Copied file · Copied from another tracked file"
+        case .conflicted: return "Conflicted file · Resolve the merge conflict"
+        case .untracked: return "Untracked file · Not yet added to Git"
+        case .ignored: return "Ignored file · Excluded by Git ignore rules"
+        case .typeChanged: return "File type changed · For example, a file became a symbolic link"
+        }
+    }
+}
+
 /// SF Symbol for a file, by extension — shared by the FILES tree and the CHANGES
 /// rows so the same file gets the same icon in both lists.
 enum FileIcon {
