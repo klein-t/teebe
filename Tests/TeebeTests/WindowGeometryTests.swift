@@ -22,6 +22,25 @@ import TeebeCore
 @Suite("Window geometry", .serialized)
 struct WindowGeometryTests {
 
+    @Test("a constrained splitter keeps its pane sizes when released")
+    func constrainedDividerDoesNotExpandOnRelease() async throws {
+        guard let host = try await GeometryHost.make(filesHeight: 140) else { return }
+        defer { host.tearDown() }
+        let dirty = try #require(host.app.selector.worktrees.first { $0.branch == "feat/dirty" })
+        await host.app.selector.selectWorktree(dirty)
+        await host.settleGeometry()
+        let before = host.window.frame
+        let start = host.hooks.worktreeListHeight?() ?? 0
+        host.hooks.dragWorktreesDivider?(start + 100)
+        await host.settleGeometry()
+        #expect(host.window.frame == before)
+        host.hooks.reset()
+        host.endDrag()
+        await host.settleGeometry()
+        #expect(host.window.frame == before, "releasing the splitter restored a compressed pane and grew the window")
+        #expect(host.hooks.resizes == 0)
+    }
+
     @Test("divider drags with Files closed keep the window aligned throughout the gesture")
     func dividersResizeTheWindowWhenFilesCannotAbsorbSpace() async throws {
         guard let host = try await GeometryHost.make() else { return }
@@ -31,6 +50,7 @@ struct WindowGeometryTests {
         host.hooks.setFilesOpen?(false)
         await host.settleGeometry()
         let top = host.window.frame.maxY
+        let contentTop = try #require(host.hooks.contentFrame).minY
 
         for divider in host.dividerDrags {
             for delta in [-100.0, 100.0] as [CGFloat] {
@@ -43,6 +63,8 @@ struct WindowGeometryTests {
                             "\(divider.name) during drag: frame \(host.window.frame.height), target \(host.hooks.targetHeight?() ?? 0)")
                     #expect(abs(host.window.frame.maxY - top) <= 1,
                             "\(divider.name) drag moved the window's top edge")
+                    #expect(abs((host.hooks.contentFrame?.minY ?? .infinity) - contentTop) <= 1,
+                            "\(divider.name) content is displaced inside the window")
                 }
                 #expect(abs(host.window.frame.height - initialHeight) > 1,
                         "\(divider.name) fixture did not exercise resizing")
@@ -53,6 +75,31 @@ struct WindowGeometryTests {
                 #expect(host.window.frame == beforeRelease, "\(divider.name) jumped on release")
                 #expect(host.hooks.resizes == 0, "\(divider.name) deferred its resize until release")
             }
+        }
+    }
+
+    @Test("divider updates in one layout pass produce a single window resize")
+    func dividerUpdatesCoalesceBeforeDrawing() async throws {
+        guard let host = try await GeometryHost.make() else { return }
+        defer { host.tearDown() }
+        let dirty = try #require(host.app.selector.worktrees.first { $0.branch == "feat/dirty" })
+        await host.app.selector.selectWorktree(dirty)
+        host.hooks.setFilesOpen?(false)
+        await host.settleGeometry()
+
+        for divider in host.dividerDrags {
+            let before = host.window.frame
+            let start = divider.currentHeight()
+            host.hooks.reset()
+            // Input can arrive faster than SwiftUI lays out a frame. Intermediate
+            // requests must not resize/redraw the old content under the pointer.
+            for step in 1...20 { divider.drag(start - CGFloat(step)) }
+            #expect(host.window.frame == before, "\(divider.name) resized before the content layout updated")
+            await host.settleGeometry()
+            host.expectSettled("coalesced \(divider.name) drag")
+            #expect(host.window.frame.height < before.height)
+            host.endDrag()
+            await host.settleGeometry()
         }
     }
 
@@ -180,7 +227,7 @@ private final class GeometryHost {
 
     /// Returns nil when there is no display to put a window on, which is the only
     /// state this test cannot run in.
-    static func make(topRoom: CGFloat? = nil) async throws -> GeometryHost? {
+    static func make(topRoom: CGFloat? = nil, filesHeight: Double? = nil) async throws -> GeometryHost? {
         guard let screen = NSScreen.main else { return nil }
         NSApplication.shared.setActivationPolicy(.accessory)
 
@@ -198,6 +245,10 @@ private final class GeometryHost {
         )
         let app = AppModel(environment: environment)
         app.mergeStatus.scanDebounce = .milliseconds(1)
+        if let filesHeight {
+            app.saveLayout(SectionLayout(worktreesOpen: true, changesOpen: true, filesOpen: true,
+                                         windowHeight: filesHeight), forRepo: PathUtil.standardized(fixture.repoPath))
+        }
         if topRoom != nil {
             await app.addRepository(path: fixture.repoPath)
             app.saveLayout(SectionLayout(worktreesOpen: true, changesOpen: true, filesOpen: true,
@@ -205,7 +256,10 @@ private final class GeometryHost {
                            forRepo: fixture.repoPath)
         }
         let hooks = GeometryTestHooks()
-        let root = RootView(app: app, preview: PreviewModel(environment: environment), testHooks: hooks)
+        let root = ZStack {
+            RootView(app: app, preview: PreviewModel(environment: environment), testHooks: hooks)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
 
         // Most interactions start high on screen. Startup cases restore a lower
         // top edge, including one with less room than the section minimums need.

@@ -21,6 +21,7 @@ final class GeometryTestHooks {
     var targetHeight: (() -> CGFloat)?
     var worktreeListHeight: (() -> CGFloat)?
     var changesListHeight: (() -> CGFloat)?
+    var contentFrame: CGRect?
     /// Window resizes teebe itself performed since the last `reset()`.
     private(set) var resizes = 0
     func noteResize() { resizes += 1 }
@@ -143,10 +144,20 @@ struct RootView: View {
         }
         .ignoresSafeArea(.container, edges: .top)   // title row sits level with the traffic lights
         .frame(minWidth: minWindowWidth, idealWidth: 440, maxWidth: .infinity,
-               minHeight: lockedFrameHeight ?? minWindowHeight,
-               idealHeight: lockedFrameHeight ?? 640,
-               maxHeight: lockedFrameHeight ?? .infinity, alignment: .top)
+               minHeight: minimumContentHeight, idealHeight: 640,
+               maxHeight: .infinity, alignment: .top)
         .background(.regularMaterial)
+        #if DEBUG
+        .background {
+            if let testHooks {
+                GeometryReader { geometry in
+                    Color.clear.onChange(of: geometry.frame(in: .global), initial: true) { _, frame in
+                        testHooks.contentFrame = frame
+                    }
+                }
+            }
+        }
+        #endif
         .background(WindowController(
             floatOnTop: app.floatOnTop,
             onResolve: { resolved in
@@ -325,19 +336,14 @@ struct RootView: View {
     /// Only FILES open (the unbounded scroller) makes the window freely resizable.
     private var heightPinned: Bool { !openFiles }
 
-    /// When the window is pinned (FILES closed) drive the SwiftUI frame to that exact
-    /// height so `windowResizability` reports the same min/ideal/max we set on the
-    /// `NSWindow`; otherwise SwiftUI's idealHeight re-clamps the window a frame later
-    /// and leaves an empty "chin" of material below the content. `nil` (free height)
-    /// only while FILES is open.
-    ///
-    /// `targetHeight()` is a *window* height; SwiftUI's `.frame` sizes the *content*
-    /// (`contentLayoutRect`) and the window is that plus a constant title-bar inset. We
-    /// draw the title row into that inset (`ignoresSafeArea`), so subtract it here.
-    private var lockedFrameHeight: CGFloat? {
-        guard heightPinned else { return nil }
+    /// Let the root fill the actual hosting area, even while AppKit and SwiftUI are
+    /// processing a resize. Pinning this frame to the desired height centered a new
+    /// content size inside the old window, briefly exposing blank bands during drag.
+    /// Only the headers set a minimum; AppKit owns the window's exact height. Subtract
+    /// the title-bar inset because the title row draws into it via `ignoresSafeArea`.
+    private var minimumContentHeight: CGFloat {
         let inset = window.map { max(0, $0.frame.height - $0.contentLayoutRect.height) } ?? 0
-        return max(targetHeight() - inset, 0)
+        return max(collapsedHeight - inset, 0)
     }
 
     /// The window height for the current state: headers-only when collapsed; otherwise
@@ -417,7 +423,6 @@ struct RootView: View {
         zoomRestore = nil
         draggingDivider = true
         worktreesReveal = max(SectionSizing.worktrees.minimumHeight, requested)
-        if !openFiles { applyWindowSizing() }
     }
 
     /// Same deal for CHANGES: the preference is stored unclamped and only the render
@@ -426,7 +431,6 @@ struct RootView: View {
         zoomRestore = nil
         draggingDivider = true
         changesReveal = max(SectionSizing.changes.minimumHeight, requested)
-        if !openFiles { applyWindowSizing() }
     }
 
     /// Every change, unbounded: what the CHANGES preference and budget are measured
@@ -564,7 +568,20 @@ struct RootView: View {
         // Keep the room the drag handed FILES (read while the hold is still on, so it
         // is the filler height): the window then already has the height the layout
         // asks for and stays exactly where the user left it.
-        if openFiles { filesReveal = filesRevealHeight }
+        if openFiles {
+            let worktreesHeight = worktreeListHeight
+            let changesHeight = changesListHeight
+            filesReveal = filesRevealHeight
+            // Keep panes compressed by the fixed window budget at their chosen size
+            // on release. Preserve preferences that were only hugging their content.
+            let naturalWorktrees = app.worktreeList(collapsed: collapsedWorktreeGroups).naturalHeight
+            if openWorktrees, worktreesHeight < SectionSizing.worktrees.height(
+                preferred: worktreesReveal, natural: naturalWorktrees, available: .greatestFiniteMagnitude
+            ) { worktreesReveal = worktreesHeight }
+            if openChanges, changesHeight < SectionSizing.changes.height(
+                preferred: changesReveal, natural: changesNaturalHeight, available: .greatestFiniteMagnitude
+            ) { changesReveal = changesHeight }
+        }
         draggingDivider = false
         applyWindowSizing()
         persistLayout()
@@ -617,7 +634,11 @@ struct RootView: View {
             // up once instead of letting AppKit repair an off-screen frame later.
             frame.origin.y = max(frame.origin.y, visible.minY)
         }
-        window.setFrame(frame, display: true, animate: false)
+        // Present the resized window and the updated SwiftUI content together.
+        // An immediate display exposed the old layout between mouse events.
+        window.disableScreenUpdatesUntilFlush()
+        window.setFrame(frame, display: false, animate: false)
+        window.contentView?.layoutSubtreeIfNeeded()
         #if DEBUG
         testHooks?.noteResize()
         #endif
