@@ -3,14 +3,15 @@ import SwiftUI
 
 extension View {
     /// A short, app-local delay without changing macOS tooltip preferences.
-    func hoverHelp(_ text: String) -> some View {
-        background(HoverHelpAnchor(text: text))
+    func hoverHelp(_ text: String, highlight: Bool = true) -> some View {
+        background(HoverHelpAnchor(text: text, highlight: highlight))
             .accessibilityHint(text)
     }
 }
 
 private struct HoverHelpAnchor: NSViewRepresentable {
     let text: String
+    let highlight: Bool
     @Environment(\.isEnabled) private var isEnabled
 
     func makeNSView(context: Context) -> HoverHelpView { HoverHelpView() }
@@ -21,6 +22,8 @@ private struct HoverHelpAnchor: NSViewRepresentable {
         }
         view.text = text
         view.enabled = isEnabled
+        view.showsHighlight = highlight
+        if !isEnabled { view.highlighted = false }
     }
 
     static func dismantleNSView(_ view: HoverHelpView, coordinator: ()) {
@@ -31,9 +34,19 @@ private struct HoverHelpAnchor: NSViewRepresentable {
 final class HoverHelpView: NSView {
     var text = ""
     var enabled = true
+    var showsHighlight = true
+    var highlighted = false {
+        didSet { needsDisplay = true }
+    }
     private var hoverArea: NSTrackingArea?
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard highlighted, enabled, showsHighlight else { return }
+        NSColor.labelColor.withAlphaComponent(0.12).setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5).fill()
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -47,14 +60,17 @@ final class HoverHelpView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         guard enabled, !text.isEmpty else { return }
+        highlighted = true
         HoverHelpPresenter.shared.schedule(owner: self)
     }
 
     override func mouseExited(with event: NSEvent) {
+        highlighted = false
         HoverHelpPresenter.shared.dismiss(owner: self)
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
+        highlighted = false
         HoverHelpPresenter.shared.dismiss(owner: self)
         super.viewWillMove(toWindow: newWindow)
     }
@@ -134,6 +150,11 @@ final class HoverHelpPresenter {
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
         )
         let size = content.fittingSize
+        // A tooltip has a measured, fixed size. NSHostingView's automatic window
+        // sizing can otherwise grow the panel after orderFront, moving its bottom
+        // hundreds of points away from the anchor.
+        content.sizingOptions = []
+        content.frame = NSRect(origin: .zero, size: size)
         let anchor = window.convertToScreen(owner.convert(owner.bounds, to: nil))
         let screen = window.screen?.visibleFrame ?? anchor
         let popup = NSPanel(contentRect: Self.frame(size: size, anchor: anchor, screen: screen),
@@ -146,6 +167,7 @@ final class HoverHelpPresenter {
         popup.level = .popUpMenu
         popup.hidesOnDeactivate = true
         popup.contentView = content
+        popup.setFrame(Self.frame(size: size, anchor: anchor, screen: screen), display: false)
         popup.orderFront(nil)
         panel = popup
     }

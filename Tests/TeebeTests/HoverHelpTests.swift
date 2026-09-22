@@ -1,10 +1,64 @@
 import AppKit
 import Testing
+import SwiftUI
 @testable import Teebe
 
 @Suite(.serialized)
 @MainActor
 struct HoverHelpTests {
+    @Test func hoverHighlightsSynchronouslyBeforeTheTooltip() throws {
+        let owner = HoverHelpView(frame: NSRect(x: 0, y: 0, width: 22, height: 28))
+        owner.text = "Fetch and refresh"
+        let event = try #require(NSEvent.enterExitEvent(
+            with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil
+        ))
+        owner.mouseEntered(with: event)
+        #expect(owner.highlighted)
+        #expect(HoverHelpPresenter.shared.panel == nil)
+        owner.mouseExited(with: event)
+        #expect(!owner.highlighted)
+        #expect(HoverHelpPresenter.shared.owner == nil)
+        owner.enabled = false
+        owner.mouseEntered(with: event)
+        #expect(!owner.highlighted)
+    }
+
+    @Test func swiftUIAnchorUsesWindowCoordinates() async throws {
+        guard NSScreen.main != nil else { return }
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 440, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let hosting = NSHostingView(rootView:
+            VStack {
+                HStack {
+                    Spacer()
+                    Text("?").hoverHelp("Untracked file · Not yet added to Git")
+                }.frame(height: 30)
+                Spacer()
+            }.frame(width: 440, height: 600)
+        )
+        window.contentView = hosting
+        window.orderFront(nil)
+        try await Task.sleep(for: .milliseconds(150))
+        func find(_ view: NSView) -> HoverHelpView? {
+            if let anchor = view as? HoverHelpView { return anchor }
+            return view.subviews.lazy.compactMap { find($0) }.first
+        }
+        let anchor = try #require(find(hosting))
+        let rect = window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
+        #expect(rect.minY > window.frame.minY + 500)
+        let presenter = HoverHelpPresenter()
+        defer { presenter.dismiss() }
+        presenter.show(owner: anchor, window: window)
+        try await Task.sleep(for: .milliseconds(150))
+        let panel = try #require(presenter.panel)
+        #expect(panel.frame.minY > window.frame.minY + 450)
+        #expect(panel.frame.height < 60)
+        #expect(abs(rect.minY - panel.frame.maxY - 6) < 1)
+    }
+
     @Test func delayIsShortButNotInstant() {
         #expect(HoverHelpPresenter.delay == .milliseconds(350))
     }
@@ -68,6 +122,11 @@ struct HoverHelpTests {
         #expect(panel.frame.width > 100 && panel.frame.width <= 300)
         #expect(panel.frame.height > 20 && panel.frame.height < 100)
         #expect(window.frame == originalFrame)
+        let anchor = window.convertToScreen(owner.convert(owner.bounds, to: nil))
+        let screen = try #require(window.screen)
+        let expected = HoverHelpPresenter.frame(size: panel.frame.size, anchor: anchor,
+                                               screen: screen.visibleFrame)
+        #expect(abs(panel.frame.minY - expected.minY) < 1)
         presenter.dismiss()
         #expect(!panel.isVisible)
         owner.text = "Float on top"
