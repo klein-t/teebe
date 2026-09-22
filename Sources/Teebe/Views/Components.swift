@@ -83,6 +83,9 @@ struct StatusLetter: View {
             Text(letter)
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(Palette.statusColor(change.primaryStatus))
+                .frame(width: 16, height: 20)
+                .hoverHelp(change.primaryStatus.helpText)
+                .accessibilityLabel(change.primaryStatus.helpText)
         }
     }
 }
@@ -121,13 +124,15 @@ struct LiveDot: View {
             .onAppear { syncPulse() }
             .onChange(of: pulsing) { _, _ in syncPulse() }
             .help(helpText)
+            .accessibilityElement()
+            .accessibilityLabel(helpText)
     }
 
     private var helpText: String {
         switch agent {
         case .working: return "A coding agent is working in this worktree"
-        case .needsAttention: return "The agent finished its turn or stalled — it needs you"
-        case .idle: return active ? "Files are changing in this worktree" : ""
+        case .needsAttention: return "The coding agent is waiting for you."
+        case .idle: return active ? "Files are changing in this worktree" : "No recent activity"
         }
     }
 
@@ -166,31 +171,25 @@ struct PressableButtonStyle: ButtonStyle {
     }
 }
 
-/// Shared hover-chip + press chrome for compact glyph controls. A bare 11–13pt
+/// Shared hit area + press chrome for compact glyph controls. A bare 11–13pt
 /// SF Symbol gives an ~11×11 hit target; this wraps it in a comfortable hit area
-/// with a subtle hover background and (for buttons) a `0.96` press scale.
+/// with a `0.96` press scale. The paired `hoverHelp` owns hover feedback and the
+/// tooltip together, so native tracking drives both through the same path.
 private struct ChipBody<Label: View>: View {
     let size: CGSize
     var pressed = false
     @ViewBuilder var label: () -> Label
-    @State private var hovering = false
 
     var body: some View {
         label()
             .frame(minWidth: size.width, minHeight: size.height)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(hovering ? 0.08 : 0))
-            )
             .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .scaleEffect(pressed ? 0.96 : 1)
-            .animation(.easeOut(duration: 0.12), value: hovering)
             .animation(.easeOut(duration: 0.12), value: pressed)
-            .onHover { hovering = $0 }
     }
 }
 
-/// Compact glyph **button** style: comfortable hit area, hover chip, press scale.
+/// Compact glyph **button** style: comfortable hit area and press scale.
 /// Replaces bare `.buttonStyle(.plain)` on toolbar-style icon buttons. Default
 /// size is sized to stay within a 32pt header without colliding with neighbours.
 struct IconButtonStyle: ButtonStyle {
@@ -200,7 +199,7 @@ struct IconButtonStyle: ButtonStyle {
     }
 }
 
-/// The same hit area + hover chip for controls that can't take a `ButtonStyle`
+/// The same hit area for controls that can't take a `ButtonStyle`
 /// (notably `Menu`). No press scale — menus open on press, so a scale would fight
 /// the popover.
 private struct HoverChipModifier: ViewModifier {

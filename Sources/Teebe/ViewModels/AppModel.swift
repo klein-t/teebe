@@ -8,10 +8,17 @@ import TeebeCore
 @Observable
 final class AppModel {
     private(set) var repositories: [Repository] = []
+    var showMergeStatus: Bool { didSet { persist() } }
+    /// Fetch remote refs in the background, so merge results reflect what was
+    /// pushed rather than what was last pulled by hand.
+    var fetchAutomatically: Bool { didSet { persist() } }
+    private(set) var cleanupTargetRevision = 0
     var floatOnTop: Bool { didSet { persist() } }
     /// Light / dark override, or follow the system. Applied app-wide via `NSApp.appearance`.
     var appearance: AppearanceMode { didSet { appearance.apply(); persist() } }
     private(set) var errorMessage: String?
+    /// The New Worktree sheet's form while it is up; nil when it is closed.
+    var newWorktree: NewWorktreeModel?
 
     /// Which section the keyboard currently drives — arrows, Enter and Space act on
     /// it, and its header shows the active accent. Moved by ⌘1/⌘2/⌘3, Tab/⇧Tab, or by
@@ -25,6 +32,18 @@ final class AppModel {
 
     let environment: AppEnvironment
     let selector: SelectorModel
+    let mergeStatus: WorktreeMergeModel
+    let remoteRefresher: RemoteRefresher
+
+    /// The group-header actions. Built on first use because they need the finished
+    /// model back; one instance, so a removal in flight is visible everywhere.
+    @ObservationIgnored private var groupActionsStorage: WorktreeGroupActions?
+    var groupActions: WorktreeGroupActions {
+        if let groupActionsStorage { return groupActionsStorage }
+        let actions = WorktreeGroupActions(app: self)
+        groupActionsStorage = actions
+        return actions
+    }
 
     /// In-memory copy of the persisted state, loaded once at init and written back
     /// on change. Avoids a disk read-modify-write on every persist/layout update,
@@ -35,15 +54,22 @@ final class AppModel {
     /// `persist()` that property assignments would otherwise trigger during load.
     @ObservationIgnored private var isHydrating = false
 
-    init(environment: AppEnvironment) {
+    /// `mergeService` is the scanner behind the worktree groups; tests hand in a
+    /// scripted one instead of a real repository.
+    init(environment: AppEnvironment, mergeService: WorktreeCleanupChecking? = nil) {
         self.environment = environment
         self.state = environment.store.load()
         self.selector = SelectorModel(environment: environment)
+        self.mergeStatus = WorktreeMergeModel(service: mergeService ?? WorktreeCleanupService(git: environment.git))
+        self.remoteRefresher = RemoteRefresher(git: environment.git)
+        self.showMergeStatus = self.state.showMergeStatus ?? true
+        self.fetchAutomatically = self.state.fetchAutomatically ?? true
         self.floatOnTop = false
         self.appearance = .system
         // Persist whenever the selection changes, and clear any stale global error —
         // navigating to a different repo/worktree should dismiss the banner.
         self.selector.onSelectionChange = { [weak self] in
+            self?.rememberSelectedRepository()
             self?.persist()
             self?.setError(nil)
         }
@@ -69,16 +95,16 @@ final class AppModel {
         isHydrating = true
         floatOnTop = state.floatOnTop
         appearance = AppearanceMode(rawValue: state.appearance ?? "") ?? .system
-        repositories = state.repositories.map { Repository(path: $0.path) }
+        repositories = RepositoryHistory.unique(state.repositories.map(\.path))
         selector.setRepositories(repositories)
         // Snapshot the restore targets before selecting anything: selection triggers
         // persist(), which overwrites these fields of the shared `state`.
-        let lastRepoPath = state.lastSelectedRepoPath
+        let lastRepoPath = state.lastSelectedRepoPath.map { PathUtil.standardized(($0 as NSString).standardizingPath) }
         let lastWorktreePath = state.lastSelectedWorktreePath
         let target = lastRepoPath.flatMap { last in repositories.first { $0.path == last } }
             ?? repositories.first
         isHydrating = false
-        guard let target else { return }
+        guard let target else { persist(); return }
         // One shot: the saved worktree (when it still exists) is selected directly,
         // never primary-then-saved — the double load crashed the first layout pass.
         await selector.selectRepo(target, preferredWorktreePath: lastWorktreePath)
@@ -158,6 +184,11 @@ final class AppModel {
             setError("Not a git repository: \(standardized)")
             return false
         }
+        // Validation suspends; another add may have completed while it ran.
+        if let existing = repositories.first(where: { $0.path == standardized }) {
+            await selector.selectRepo(existing)
+            return false
+        }
         let repo = Repository(path: standardized)
         repositories.append(repo)
         selector.setRepositories(repositories)
@@ -166,12 +197,30 @@ final class AppModel {
         return true
     }
 
+    private func rememberSelectedRepository() {
+        guard let selected = selector.selectedRepo,
+              let index = repositories.firstIndex(where: { $0.path == selected.path }),
+              index != repositories.count - 1 else { return }
+        repositories.append(repositories.remove(at: index))
+        selector.setRepositories(repositories)
+    }
+
+    var recentRepositories: [Repository] { Array(repositories.reversed()) }
+
+    func repositoryTitle(_ repo: Repository) -> String {
+        RepositoryHistory.title(for: repo, among: repositories)
+    }
+
     func removeRepository(_ repo: Repository) {
         repositories.removeAll { $0.path == repo.path }
         selector.setRepositories(repositories)
         if selector.selectedRepo?.path == repo.path {
             selector.clearSelection()
         }
+        // Drop everything else keyed by this repository, or the saved state grows a
+        // tail of entries for projects the user removed long ago.
+        state.cleanupTargetByRepo?[repo.path] = nil
+        state.layoutByRepo?[repo.path] = nil
         persist()
     }
 
@@ -285,22 +334,76 @@ final class AppModel {
         Task { await addRepository(path: url.path) }
     }
 
-    /// Choose a directory for a new linked worktree (branch = folder name).
-    func presentNewWorktreePanel() {
+    /// Open the New Worktree sheet for the selected repository. The sheet's form
+    /// state lives in `newWorktree` for as long as it is up.
+    func presentNewWorktree() {
         guard let repo = selector.selectedRepo else { return }
-        let panel = NSSavePanel()
-        panel.prompt = "Create Worktree"
-        panel.nameFieldStringValue = "worktree"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let branch = url.lastPathComponent
-        Task {
-            do {
-                try await environment.worktreeService.addWorktree(in: repo, at: url.path, branch: branch, createBranch: true)
-                await selector.selectRepo(repo)
-            } catch {
-                errorMessage = "Couldn't create worktree: \(WorktreeModel.describe(error))"
-            }
+        let comparison = mergeStatus.snapshot?.targets.resolve(cleanupTarget(for: repo.path))?.name
+        let primaryBranch = selector.worktrees.first(where: \.isPrimary)?.branch
+        newWorktree = NewWorktreeModel(repo: repo, branches: selector.branches,
+                                       comparisonBranch: comparison, primaryBranch: primaryBranch)
+    }
+
+    /// Pick the worktree folder by hand. Directories only, and new ones can be made
+    /// from inside the panel.
+    func chooseWorktreeLocation(for form: NewWorktreeModel) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        if !form.location.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: (form.location as NSString).deletingLastPathComponent)
+            panel.nameFieldStringValue = (form.location as NSString).lastPathComponent
         }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        form.setLocation(url.path)
+    }
+
+    /// Create the worktree the sheet describes. On success the repository is
+    /// re-read and the new worktree selected; on failure the message goes back to
+    /// the form so the sheet can stay open.
+    func createWorktree(_ form: NewWorktreeModel) async {
+        let repo = form.repo
+        let path = form.location
+        form.isCreating = true
+        form.errorMessage = nil
+        defer { form.isCreating = false }
+        do {
+            try await environment.worktreeService.addWorktree(
+                in: repo, at: path, branch: form.trimmedBranch,
+                createBranch: form.isCreatingBranch, startPoint: form.resolvedStartPoint)
+        } catch {
+            form.errorMessage = "Couldn't create worktree: \(WorktreeModel.describe(error))"
+            return
+        }
+        newWorktree = nil
+        // The folder exists now, so standardizing matches the form `git worktree
+        // list` reports (firmlinks resolved) and the new row gets selected.
+        await selector.selectRepo(repo, preferredWorktreePath: PathUtil.standardized(path))
+    }
+
+    /// Bring the selected repository's remote refs up to date. The setting gates it;
+    /// `force` (the Refresh command) only ignores how recently it last ran. Writing
+    /// refs is what makes the merge check re-run, through the repository watcher.
+    func refreshRemotes(force: Bool, now: Date = Date()) async {
+        guard fetchAutomatically, let repo = selector.selectedRepo else { return }
+        await remoteRefresher.fetch(repoPath: repo.path, force: force, now: now)
+    }
+
+    func cleanupTarget(for repoPath: String) -> String? {
+        state.cleanupTargetByRepo?[repoPath]
+    }
+
+    func setCleanupTarget(_ ref: String?, for repoPath: String) {
+        var targets = state.cleanupTargetByRepo ?? [:]
+        targets[repoPath] = ref
+        state.cleanupTargetByRepo = targets
+        cleanupTargetRevision += 1
+        // Through persist(), so the write picks up the rest of the current state and
+        // honours the hydration guard instead of racing bootstrap.
+        persist()
     }
 
     func removeWorktree(_ worktree: Worktree) {
@@ -331,6 +434,8 @@ final class AppModel {
         guard !isHydrating else { return }
         state.repositories = repositories.map { PersistedRepository(path: $0.path) }
         state.floatOnTop = floatOnTop
+        state.showMergeStatus = showMergeStatus
+        state.fetchAutomatically = fetchAutomatically
         state.appearance = appearance == .system ? nil : appearance.rawValue
         state.lastSelectedRepoPath = selector.selectedRepo?.path
         state.lastSelectedWorktreePath = selector.selectedWorktree?.path

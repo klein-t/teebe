@@ -2,11 +2,42 @@ import SwiftUI
 import AppKit
 import TeebeCore
 
+#if DEBUG
+/// Test-only handle on the window-geometry code the gestures drive, plus a count of
+/// the programmatic resizes it made. The geometry rules only come together in a real
+/// window — the section heights resolve in a layout pass and the reconcile answers
+/// AppKit's own notifications — so `WindowGeometryTests` hosts `RootView` in one and
+/// drives these closures instead of synthesizing clicks (the test process has no
+/// accessibility access).
+@MainActor
+final class GeometryTestHooks {
+    var setWorktreesOpen: ((Bool) -> Void)?
+    var setChangesOpen: ((Bool) -> Void)?
+    var setFilesOpen: ((Bool) -> Void)?
+    /// One step of a WORKTREES/CHANGES divider drag, as the handle's gesture reports it.
+    var dragWorktreesDivider: ((CGFloat) -> Void)?
+    var dragChangesDivider: ((CGFloat) -> Void)?
+    var endDividerDrag: (() -> Void)?
+    var targetHeight: (() -> CGFloat)?
+    var worktreeListHeight: (() -> CGFloat)?
+    var changesListHeight: (() -> CGFloat)?
+    var contentFrame: CGRect?
+    /// Window resizes teebe itself performed since the last `reset()`.
+    private(set) var resizes = 0
+    func noteResize() { resizes += 1 }
+    func reset() { resizes = 0 }
+}
+#endif
+
 /// Compact, floating main window: a three-section accordion (WORKTREES / CHANGES /
 /// FILES).
 struct RootView: View {
     @Bindable var app: AppModel
     @Bindable var preview: PreviewModel
+    #if DEBUG
+    /// Set only by `WindowGeometryTests`; nil in the app.
+    var testHooks: GeometryTestHooks?
+    #endif
 
     @State private var openWorktrees = true
     @State private var openChanges = true
@@ -18,10 +49,21 @@ struct RootView: View {
     /// scrolls; dragging the window's bottom edge while FILES is open updates it, and
     /// it's remembered per repo.
     @State private var filesReveal: CGFloat = 300
+    @State private var worktreesReveal: CGFloat?
+    @State private var changesReveal: CGFloat?
+    @State private var collapsedWorktreeGroups: Set<WorktreeGroup> = []
     /// True only while the user is actively dragging the window's edge. FILES is a
     /// fixed-height pane the rest of the time (so a CHANGES reflow can't make it balloon
     /// for a frame); during a drag it becomes the flexible filler so the edge resizes it.
     @State private var isLiveResizing = false
+    /// True while a section divider is being dragged. FILES absorbs the space when
+    /// open; otherwise the window follows the divider throughout the gesture.
+    @State private var draggingDivider = false
+    /// Room between the window's top edge and the bottom of its screen — the ceiling for
+    /// everything below the title row. Held in state because SwiftUI observes neither
+    /// `NSWindow.frame` nor `window.screen`: without this the clamp stayed stale until
+    /// some unrelated change re-ran the body, and the window snapped short much later.
+    @State private var roomBelowTop: CGFloat = 900
     /// Layout to restore when the green zoom is toggled off — set while the window is
     /// "vertically maximized" (full height), nil otherwise.
     @State private var zoomRestore: ZoomRestore?
@@ -56,7 +98,11 @@ struct RootView: View {
     private var allClosed: Bool { !openWorktrees && !openChanges && !openFiles }
 
     var body: some View {
-        VStack(spacing: 0) {
+        // Built once per pass and handed down: the presentation groups and measures every
+        // worktree, and the body used to rebuild it for each place that reads it.
+        let list = app.worktreeList(collapsed: collapsedWorktreeGroups)
+        let listHeight = worktreeHeight(for: list)
+        return VStack(spacing: 0) {
             titleBar
             Divider()
             if app.repositories.isEmpty {
@@ -70,13 +116,21 @@ struct RootView: View {
                     // Higher priority so WORKTREES/CHANGES keep their hugged height and
                     // FILES yields: while dragging, FILES is the flexible filler and would
                     // otherwise make the VStack split space evenly and squeeze CHANGES.
-                    WorktreesSection(app: app, isOpen: sectionBinding(.worktrees, openWorktrees))
+                    WorktreesSection(app: app, isOpen: sectionBinding(.worktrees, openWorktrees),
+                                     collapsedGroups: $collapsedWorktreeGroups, list: list, revealHeight: listHeight)
                         .layoutPriority(1)
-                    Divider()
-                    ChangesSection(app: app, worktree: worktree, preview: preview, isOpen: sectionBinding(.changes, openChanges))
+                    if openWorktrees {
+                        SectionResizeHandle(section: "Worktrees", height: listHeight,
+                                            onResize: resizeWorktrees, onEnd: endDividerDrag)
+                    } else { Divider() }
+                    ChangesSection(app: app, worktree: worktree, preview: preview,
+                                   isOpen: sectionBinding(.changes, openChanges), revealHeight: changesListHeight)
                         .layoutPriority(1)
-                    Divider()
-                    FilesSection(app: app, worktree: worktree, preview: preview, isOpen: sectionBinding(.files, openFiles), searchFocused: $searchFocused, revealHeight: filesReveal, liveResizing: isLiveResizing)
+                    if openChanges {
+                        SectionResizeHandle(section: "Changes", height: changesListHeight,
+                                            onResize: resizeChanges, onEnd: endDividerDrag)
+                    } else { Divider() }
+                    FilesSection(app: app, worktree: worktree, preview: preview, isOpen: sectionBinding(.files, openFiles), searchFocused: $searchFocused, revealHeight: filesRevealHeight, liveResizing: isLiveResizing)
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
             }
@@ -90,32 +144,66 @@ struct RootView: View {
         }
         .ignoresSafeArea(.container, edges: .top)   // title row sits level with the traffic lights
         .frame(minWidth: minWindowWidth, idealWidth: 440, maxWidth: .infinity,
-               minHeight: lockedFrameHeight ?? minWindowHeight,
-               idealHeight: lockedFrameHeight ?? 640,
-               maxHeight: lockedFrameHeight ?? .infinity, alignment: .top)
+               minHeight: minimumContentHeight, idealHeight: 640,
+               maxHeight: .infinity, alignment: .top)
         .background(.regularMaterial)
+        #if DEBUG
+        .background {
+            if let testHooks {
+                GeometryReader { geometry in
+                    Color.clear.onChange(of: geometry.frame(in: .global), initial: true) { _, frame in
+                        testHooks.contentFrame = frame
+                    }
+                }
+            }
+        }
+        #endif
         .background(WindowController(
             floatOnTop: app.floatOnTop,
             onResolve: { resolved in
                 window = resolved
                 setTrafficLights(visible: false, animated: false, window: resolved)
+                roomBelowTop = measuredRoomBelowTop(resolved)
                 applyLayout(for: app.selector.selectedRepo?.path)
             },
             onLiveResizeStart: { isLiveResizing = true; setHeightLocked(heightPinned, height: targetHeight()) },
             onLiveResizeEnd: { isLiveResizing = false; handleLiveResizeEnd($0) },
-            onZoom: { toggleVerticalZoom() }
+            onZoom: { toggleVerticalZoom() },
+            onGeometryChange: { roomBelowTop = measuredRoomBelowTop(window) },
+            onWindowResized: {
+                // Restoring a frame can move its top edge without a didMove event.
+                // Reconcile against the new position, never the previous budget.
+                roomBelowTop = measuredRoomBelowTop(window)
+                reconcileWindowHeight()
+            }
         ))
-        .onChange(of: app.selector.selectedRepo?.path) { _, path in applyLayout(for: path) }
-        // Keep WORKTREES/CHANGES wrapped to their rows as the lists change (preserving
-        // the FILES reveal below them). The file tree itself just scrolls, so its row
-        // count doesn't resize the window.
-        .onChange(of: app.selector.worktrees.count) { _, _ in
-            if !allClosed { applyWindowSizing(animated: false) }
+        // Switching away mid-drag cancels it: end the hold here too, so the window is
+        // never left at the height the drag started from.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            if draggingDivider { endDividerDrag() }
         }
-        .onChange(of: worktree.changeCount) { _, _ in
-            if !allClosed { applyWindowSizing(animated: false) }
+        // Moving the window (or sending it to another screen) changes how much room is
+        // left below its top edge, which is what every clamp is measured against.
+        .onChange(of: roomBelowTop) { _, _ in
+            if !isLiveResizing { applyWindowSizing() }
         }
+        .onChange(of: app.selector.selectedRepo?.path) { _, path in
+            applyLayout(for: path)
+            // A repository the user just opened is worth one quiet fetch, so its
+            // merge results are not answering yesterday's question.
+            Task { await app.refreshRemotes(force: false) }
+        }
+        // One reconcile for every way the layout's height can change — a worktree
+        // added, the merge scan regrouping the rows, the file watcher moving the
+        // CHANGES count, a group collapsing. Watching the height itself rather than
+        // each cause is what keeps the window from being left taller than its content
+        // by a change nobody wired up a handler for.
+        .onChange(of: targetHeight()) { _, _ in reconcileWindowHeight() }
+        .onChange(of: collapsedWorktreeGroups) { _, _ in persistLayout() }
         .background(QuickLookBridge(controller: quickLook))
+        #if DEBUG
+        .onAppear { installTestHooks() }
+        #endif
         .background { commandShortcuts }
         .focusable()
         .focusEffectDisabled()
@@ -168,7 +256,7 @@ struct RootView: View {
                         .contentTransition(.symbolEffect(.replace))   // animated pin ↔ pin.fill swap
                 }
                 .buttonStyle(IconButtonStyle(size: CGSize(width: 26, height: 22)))
-                .help("Float on top")
+                .hoverHelp("Float on top")
                 .animation(.snappy(duration: 0.25), value: app.floatOnTop)
             }
             .padding(.horizontal, 11)
@@ -207,11 +295,12 @@ struct RootView: View {
         case .changes: openChanges = open
         case .files: openFiles = open
         }
+        // A section can't be toggled while a divider is under the pointer, so a hold
+        // still set here is stale: let the window follow the layout again.
+        draggingDivider = false
         // Opening a section grows the window *downward* to make room for it; closing
-        // shrinks it back up. Snap rather than animate: animating the NSWindow frame
-        // while SwiftUI relays out the content instantly desyncs them and the content
-        // visibly stretches/bounces.
-        applyWindowSizing(animated: false)
+        // shrinks it back up.
+        applyWindowSizing()
         persistLayout()
     }
 
@@ -219,19 +308,25 @@ struct RootView: View {
     /// window to match. Called when the window first resolves and whenever the
     /// selected repository changes.
     private func applyLayout(for repoPath: String?) {
+        // Launching, or switching repository, replaces the layout a divider drag was
+        // holding the window still for — the hold cannot outlive it.
+        draggingDivider = false
         guard let repoPath else {
             setHeightLocked(false, height: emptyStateHeight)
-            setWindowHeight(emptyStateHeight, animated: false)   // no project → empty state
+            setWindowHeight(emptyStateHeight)   // no project → empty state
             return
         }
         let layout = app.layout(forRepo: repoPath)
         openWorktrees = layout?.worktreesOpen ?? true
         openChanges = layout?.changesOpen ?? true
         openFiles = layout?.filesOpen ?? true
+        worktreesReveal = layout?.worktreesHeight.map { CGFloat($0) }
+        changesReveal = layout?.changesHeight.map { CGFloat($0) }
+        collapsedWorktreeGroups = Set((layout?.collapsedWorktreeGroups ?? []).compactMap(WorktreeGroup.init(rawValue:)))
         if let saved = layout.map({ CGFloat($0.windowHeight) }) {
             filesReveal = min(max(saved, minFilesReveal), screenHeight - collapsedHeight)
         }
-        applyWindowSizing(animated: false)
+        applyWindowSizing()
     }
 
     /// `true` whenever FILES is closed: the window then *wraps* its content exactly
@@ -241,19 +336,14 @@ struct RootView: View {
     /// Only FILES open (the unbounded scroller) makes the window freely resizable.
     private var heightPinned: Bool { !openFiles }
 
-    /// When the window is pinned (FILES closed) drive the SwiftUI frame to that exact
-    /// height so `windowResizability` reports the same min/ideal/max we set on the
-    /// `NSWindow`; otherwise SwiftUI's idealHeight re-clamps the window a frame later
-    /// and leaves an empty "chin" of material below the content. `nil` (free height)
-    /// only while FILES is open.
-    ///
-    /// `targetHeight()` is a *window* height; SwiftUI's `.frame` sizes the *content*
-    /// (`contentLayoutRect`) and the window is that plus a constant title-bar inset. We
-    /// draw the title row into that inset (`ignoresSafeArea`), so subtract it here.
-    private var lockedFrameHeight: CGFloat? {
-        guard heightPinned else { return nil }
+    /// Let the root fill the actual hosting area, even while AppKit and SwiftUI are
+    /// processing a resize. Pinning this frame to the desired height centered a new
+    /// content size inside the old window, briefly exposing blank bands during drag.
+    /// Only the headers set a minimum; AppKit owns the window's exact height. Subtract
+    /// the title-bar inset because the title row draws into it via `ignoresSafeArea`.
+    private var minimumContentHeight: CGFloat {
         let inset = window.map { max(0, $0.frame.height - $0.contentLayoutRect.height) } ?? 0
-        return max(targetHeight() - inset, 0)
+        return max(collapsedHeight - inset, 0)
     }
 
     /// The window height for the current state: headers-only when collapsed; otherwise
@@ -261,8 +351,7 @@ struct RootView: View {
     /// open) its reveal area. Capped at the visible screen.
     private func targetHeight() -> CGFloat {
         guard !allClosed else { return collapsedHeight }
-        var height = collapsedHeight + worktreesContentHeight + changesContentHeight
-        if openFiles { height += filesReveal }
+        let height = collapsedHeight + worktreesContentHeight + changesContentHeight + filesRevealHeight
         return min(height, screenHeight)
     }
 
@@ -271,34 +360,142 @@ struct RootView: View {
         (window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
     }
 
-    /// Height of the open worktree list (mirrors WorktreesSection, including its cap);
-    /// 0 when closed. Built from the section's own metrics so the two can't desync.
-    private var worktreesContentHeight: CGFloat {
-        guard openWorktrees else { return 0 }
-        let s = app.selector
-        let repoRow: CGFloat = s.selectedRepo != nil ? WorktreesSection.repoRowHeight : 0
-        let rows = CGFloat(max(s.worktrees.count, 1)) * WorktreesSection.rowHeight
-        return min(WorktreesSection.listVerticalPadding * 2 + repoRow + rows,
-                   WorktreesSection.maxListHeight)
+    /// Room between the window's top edge and the bottom of its screen, measured now.
+    /// Cached into `roomBelowTop` by the handlers that can change it.
+    private func measuredRoomBelowTop(_ window: NSWindow?) -> CGFloat {
+        guard let visible = (window?.screen ?? NSScreen.main)?.visibleFrame else { return 900 }
+        guard let window else { return visible.height }
+        return min(visible.height, max(minWindowHeight, window.frame.maxY - visible.minY))
     }
 
-    /// Height of the open change list (mirrors ChangesSection, including its cap); 0
-    /// when closed. Built from the section's own metrics so the two can't desync.
-    private var changesContentHeight: CGFloat {
+    private var worktreeListHeight: CGFloat {
+        worktreeHeight(for: app.worktreeList(collapsed: collapsedWorktreeGroups))
+    }
+
+    private func worktreeHeight(for list: WorktreeListPresentation) -> CGFloat {
+        SectionSizing.worktrees.height(preferred: worktreesReveal, natural: list.naturalHeight,
+                                       available: maximumWorktreeHeight)
+    }
+
+    /// The ceiling for the worktree list. Measured against FILES' *minimum* reveal, never
+    /// its current one: deriving the budget from `filesReveal` while `filesReveal` is
+    /// derived back from the worktree height made the two chase each other, and an
+    /// edge-drag sprang the window straight back to its pre-drag height. CHANGES is
+    /// counted at its floor for the same reason — see `changesFloorHeight`.
+    private var maximumWorktreeHeight: CGFloat {
+        max(SectionSizing.worktrees.minimumHeight,
+            heightBudget - collapsedHeight - changesFloorHeight
+            - (openFiles ? minFilesReveal : 0) - SectionSizing.dividerExtra)
+    }
+
+    /// The height every section clamp is measured against. Normally the room below the
+    /// window's top edge, so the window can wrap whatever the sections need. While a
+    /// divider is dragged with FILES open, the current window bounds the sections as
+    /// they trade room. With FILES closed there is no flexible pane to absorb that
+    /// space: retain the screen budget and resize the window along with its content.
+    private var heightBudget: CGFloat {
+        guard draggingDivider, openFiles, let window else { return roomBelowTop }
+        return min(roomBelowTop, window.frame.height)
+    }
+
+    private var worktreesContentHeight: CGFloat {
+        openWorktrees ? worktreeListHeight + SectionSizing.dividerExtra : 0
+    }
+
+    /// FILES takes what is left below the worktree list — one direction only, so there is
+    /// no loop. The remembered reveal is the maximum, not a demand.
+    ///
+    /// **While a section divider is dragged FILES is the filler instead**, taking all
+    /// the room the lists give up. The window is held still for the drag, so leaving
+    /// FILES at its remembered reveal opened a growing band of blank material below the
+    /// content and then snapped the window shorter the moment the drag ended — the
+    /// divider worked as a window resizer rather than as a splitter.
+    private var filesRevealHeight: CGFloat {
+        guard openFiles else { return 0 }
+        let room = heightBudget - collapsedHeight - worktreesContentHeight - changesContentHeight
+        guard !draggingDivider else { return max(minFilesReveal, room) }
+        return min(filesReveal, max(minFilesReveal, room))
+    }
+
+    /// Remember what the drag asked for, not what fits: clamping into the stored value
+    /// let one drag with the window low on screen collapse the preference for good.
+    private func resizeWorktrees(_ requested: CGFloat) {
+        zoomRestore = nil
+        draggingDivider = true
+        worktreesReveal = max(SectionSizing.worktrees.minimumHeight, requested)
+    }
+
+    /// Same deal for CHANGES: the preference is stored unclamped and only the render
+    /// is bounded, so a drag made while the window sits low on screen is not lost.
+    private func resizeChanges(_ requested: CGFloat) {
+        zoomRestore = nil
+        draggingDivider = true
+        changesReveal = max(SectionSizing.changes.minimumHeight, requested)
+    }
+
+    /// Every change, unbounded: what the CHANGES preference and budget are measured
+    /// against. Built from the section's own metrics so the two can't desync.
+    private var changesNaturalHeight: CGFloat {
+        CGFloat(max(app.selector.worktree.changeCount, 1)) * ChangesSection.rowHeight
+    }
+
+    /// What CHANGES carries besides its rows: the list's padding plus its divider.
+    private var changesChrome: CGFloat {
+        ChangesSection.listTopPadding + ChangesSection.listBottomPadding + SectionSizing.dividerExtra
+    }
+
+    /// Rendered height of the change list itself.
+    private var changesListHeight: CGFloat {
+        SectionSizing.changes.height(preferred: changesReveal, natural: changesNaturalHeight,
+                                     available: maximumChangesHeight)
+    }
+
+    /// The ceiling for the change list. Like the worktree list it is measured against
+    /// FILES' *minimum* reveal, never its current one, so an edge drag can't spring the
+    /// window back. It is measured against the worktree list's *resolved* height, which
+    /// fixes the order when both remembered heights plus FILES don't fit: WORKTREES
+    /// resolves first and CHANGES gives way. One direction only — the worktree budget
+    /// counts CHANGES at its floor, so the two dividers can never chase each other.
+    private var maximumChangesHeight: CGFloat {
+        max(SectionSizing.changes.minimumHeight,
+            heightBudget - collapsedHeight - worktreesContentHeight
+            - (openFiles ? minFilesReveal : 0) - changesChrome)
+    }
+
+    /// The least room CHANGES can be reduced to while it is open.
+    private var changesFloorHeight: CGFloat {
         guard openChanges else { return 0 }
-        let natural = CGFloat(max(app.selector.worktree.changeCount, 1)) * ChangesSection.rowHeight
-        return ChangesSection.listTopPadding + ChangesSection.listBottomPadding
-            + min(natural, ChangesSection.maxListHeight)
+        return min(SectionSizing.changes.minimumHeight, changesNaturalHeight) + changesChrome
+    }
+
+    /// Height of the open change list plus its padding and divider; 0 when closed.
+    private var changesContentHeight: CGFloat {
+        openChanges ? changesListHeight + changesChrome : 0
+    }
+
+    /// Pull the window back to the height the layout asks for whenever the two have
+    /// drifted apart and no drag owns the height. Both directions matter: AppKit can
+    /// grow the window on its own, and `setHeightLocked`'s ceiling doesn't hold it
+    /// back because SwiftUI clears `maxSize` again after every layout pass.
+    private func reconcileWindowHeight() {
+        guard let window else { return }
+        guard SectionSizing.needsResize(frameHeight: window.frame.height, target: targetHeight(),
+                                        draggingDivider: draggingDivider && openFiles, liveResizing: isLiveResizing)
+        else { return }
+        applyWindowSizing()
     }
 
     /// Size the window to the current state, anchored at the top so it grows and
     /// shrinks downward. Width stays freely resizable throughout.
-    private func applyWindowSizing(animated: Bool = true) {
+    private func applyWindowSizing() {
         guard let window else { return }
         let target = targetHeight()
         setHeightLocked(heightPinned, height: target)
-        let shrinking = target < window.frame.height
-        setWindowHeight(target, animated: animated && !shrinking)
+        // Already the right height: resizing again would be a second, visible hop for
+        // the same action (and would fight the user while the window is being moved).
+        // The tolerance is a full point because AppKit rounds the frame it hands back.
+        guard abs(target - window.frame.height) >= 1 else { return }
+        setWindowHeight(target)
     }
 
     /// Green zoom: toggle a *vertical* maximize. Grow to the full visible screen height
@@ -314,6 +511,7 @@ struct RootView: View {
             filesReveal = restore.reveal
             setHeightLocked(heightPinned, height: targetHeight())
             window.setFrame(restore.frame, display: true, animate: false)
+            roomBelowTop = measuredRoomBelowTop(window)
             persistLayout()
             return
         }
@@ -326,6 +524,7 @@ struct RootView: View {
         frame.size.height = visible.height               // width and x untouched → no widening
         frame.origin.y = visible.minY
         window.setFrame(frame, display: true, animate: false)
+        roomBelowTop = measuredRoomBelowTop(window)
         persistLayout()
     }
 
@@ -334,15 +533,75 @@ struct RootView: View {
     private func handleLiveResizeEnd(_ height: CGFloat) {
         // A manual resize means we're no longer in the zoomed state.
         zoomRestore = nil
+        // The top edge may have moved, which changes the room below it.
+        roomBelowTop = measuredRoomBelowTop(window)
         // Dragging the edge resizes the FILES area (the only thing that can grow past
         // its content); record it so the reveal persists. With FILES closed the window
         // already wraps WORKTREES/CHANGES, so there's nothing to remember.
-        if openFiles {
-            let nonFiles = collapsedHeight + worktreesContentHeight + changesContentHeight
-            filesReveal = min(max(height - nonFiles, minFilesReveal), screenHeight - nonFiles)
+        guard openFiles else { persistLayout(); return }
+        // One pass, one direction: the two lists give up room first (only as far as the
+        // drag demands), then FILES takes whatever is left. Deriving one from the other
+        // and back is what made the window spring to its pre-drag height. CHANGES yields
+        // before WORKTREES, the same order the render clamps them in.
+        let lists = max(0, height - collapsedHeight - minFilesReveal)
+        var changes = changesContentHeight
+        var worktrees = worktreesContentHeight
+        if openChanges, changes + worktrees > lists {
+            let list = max(min(SectionSizing.changes.minimumHeight, changesNaturalHeight),
+                           lists - worktrees - changesChrome)
+            changesReveal = list
+            changes = list + changesChrome
         }
+        if openWorktrees, changes + worktrees > lists {
+            let list = max(SectionSizing.worktrees.minimumHeight, lists - changes - SectionSizing.dividerExtra)
+            worktreesReveal = list
+            worktrees = list + SectionSizing.dividerExtra
+        }
+        let nonFiles = collapsedHeight + changes + worktrees
+        filesReveal = min(max(height - nonFiles, minFilesReveal), screenHeight - nonFiles)
         persistLayout()
     }
+
+    /// Commit the divider's layout. With FILES closed the window already followed
+    /// each drag update, so releasing the handle must not introduce another resize.
+    private func endDividerDrag() {
+        // Keep the room the drag handed FILES (read while the hold is still on, so it
+        // is the filler height): the window then already has the height the layout
+        // asks for and stays exactly where the user left it.
+        if openFiles {
+            let worktreesHeight = worktreeListHeight
+            let changesHeight = changesListHeight
+            filesReveal = filesRevealHeight
+            // Keep panes compressed by the fixed window budget at their chosen size
+            // on release. Preserve preferences that were only hugging their content.
+            let naturalWorktrees = app.worktreeList(collapsed: collapsedWorktreeGroups).naturalHeight
+            if openWorktrees, worktreesHeight < SectionSizing.worktrees.height(
+                preferred: worktreesReveal, natural: naturalWorktrees, available: .greatestFiniteMagnitude
+            ) { worktreesReveal = worktreesHeight }
+            if openChanges, changesHeight < SectionSizing.changes.height(
+                preferred: changesReveal, natural: changesNaturalHeight, available: .greatestFiniteMagnitude
+            ) { changesReveal = changesHeight }
+        }
+        draggingDivider = false
+        applyWindowSizing()
+        persistLayout()
+    }
+
+    #if DEBUG
+    /// Hand the geometry test the same entry points the gestures use.
+    private func installTestHooks() {
+        guard let hooks = testHooks else { return }
+        hooks.setWorktreesOpen = { setOpen(.worktrees, $0) }
+        hooks.setChangesOpen = { setOpen(.changes, $0) }
+        hooks.setFilesOpen = { setOpen(.files, $0) }
+        hooks.dragWorktreesDivider = resizeWorktrees
+        hooks.dragChangesDivider = resizeChanges
+        hooks.endDividerDrag = endDividerDrag
+        hooks.targetHeight = { targetHeight() }
+        hooks.worktreeListHeight = { worktreeListHeight }
+        hooks.changesListHeight = { changesListHeight }
+    }
+    #endif
 
     private func persistLayout() {
         guard let repo = app.selector.selectedRepo?.path else { return }
@@ -351,20 +610,38 @@ struct RootView: View {
                 worktreesOpen: openWorktrees,
                 changesOpen: openChanges,
                 filesOpen: openFiles,
-                windowHeight: Double(filesReveal)
+                windowHeight: Double(filesReveal),
+                worktreesHeight: worktreesReveal.map(Double.init),
+                changesHeight: changesReveal.map(Double.init),
+                collapsedWorktreeGroups: collapsedWorktreeGroups.map(\.rawValue).sorted()
             ),
             forRepo: repo
         )
     }
 
     /// Resize the window to `height`, keeping the top edge pinned so it grows and
-    /// shrinks downward.
-    private func setWindowHeight(_ height: CGFloat, animated: Bool = true) {
+    /// shrinks downward. Always a snap, never an animated `setFrame`: AppKit animates
+    /// the frame over many steps while SwiftUI re-lays the content out at once, so the
+    /// content visibly stretches — and every step of the animation posts `didResize`,
+    /// which drives the reconcile straight back into the resize it is animating.
+    private func setWindowHeight(_ height: CGFloat) {
         guard let window else { return }
         var frame = window.frame
         frame.origin.y += frame.height - height
         frame.size.height = height
-        window.setFrame(frame, display: true, animate: animated)
+        if let visible = window.screen?.visibleFrame {
+            // The section minimums can exceed the room below a low top edge. Move
+            // up once instead of letting AppKit repair an off-screen frame later.
+            frame.origin.y = max(frame.origin.y, visible.minY)
+        }
+        // Present the resized window and the updated SwiftUI content together.
+        // An immediate display exposed the old layout between mouse events.
+        window.disableScreenUpdatesUntilFlush()
+        window.setFrame(frame, display: false, animate: false)
+        window.contentView?.layoutSubtreeIfNeeded()
+        #if DEBUG
+        testHooks?.noteResize()
+        #endif
     }
 
     /// Constrain the window's height for the current state. Collapsed → pinned to the
@@ -401,8 +678,8 @@ struct RootView: View {
     /// WORKTREES: ↑/↓ move the keyboard cursor (no switch — Enter commits).
     private func handleWorktreeArrow(_ press: KeyPress) -> KeyPress.Result {
         switch press.key {
-        case .upArrow:   selector.moveWorktreeHighlight(by: -1)
-        case .downArrow: selector.moveWorktreeHighlight(by: 1)
+        case .upArrow:   selector.moveWorktreeHighlight(by: -1, in: app.worktreeList(collapsed: collapsedWorktreeGroups).visibleWorktrees)
+        case .downArrow: selector.moveWorktreeHighlight(by: 1, in: app.worktreeList(collapsed: collapsedWorktreeGroups).visibleWorktrees)
         default:         return .ignored
         }
         return .handled

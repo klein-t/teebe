@@ -28,6 +28,16 @@ struct ServicesTests {
         #expect(fake.addedWorktrees[0].path == "/repo/new")
         #expect(fake.addedWorktrees[0].branch == "feat")
         #expect(fake.addedWorktrees[0].createBranch == true)
+        #expect(fake.addedWorktrees[0].startPoint == nil)
+    }
+
+    @Test("WorktreeService.addWorktree forwards the start point")
+    func addWorktreeStartPoint() async throws {
+        let fake = FakeGitClient()
+        let service = WorktreeService(git: fake)
+        try await service.addWorktree(in: repo, at: "/repo/new", branch: "feat",
+                                      createBranch: true, startPoint: "origin/dev")
+        #expect(fake.addedWorktrees[0].startPoint == "origin/dev")
     }
 
     @Test("DiffService picks staged diff for a purely-staged change")

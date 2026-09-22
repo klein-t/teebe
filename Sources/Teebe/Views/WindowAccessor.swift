@@ -30,6 +30,13 @@ struct WindowController: NSViewRepresentable {
     /// override it to grow the window to full height at the same width instead of the
     /// default fill-the-screen zoom.
     var onZoom: () -> Void
+    /// The window moved or changed screen: how much room is left below its top edge
+    /// changed, and SwiftUI observes neither.
+    var onGeometryChange: () -> Void
+    /// The window's height changed — ours or AppKit's. AppKit grows a window on its
+    /// own (a constraint pass, a restored frame), and SwiftUI clears the maximum
+    /// height we set after every layout, so this is the only place that notices.
+    var onWindowResized: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -57,12 +64,16 @@ struct WindowController: NSViewRepresentable {
         private var onLiveResizeStart: (() -> Void)?
         private var onLiveResizeEnd: ((CGFloat) -> Void)?
         private var onZoom: (() -> Void)?
+        private var onGeometryChange: (() -> Void)?
+        private var onWindowResized: (() -> Void)?
 
         /// Per-update, no allocation: refresh the callbacks and float level only.
         func refresh(parent: WindowController) {
             onLiveResizeStart = parent.onLiveResizeStart
             onLiveResizeEnd = parent.onLiveResizeEnd
             onZoom = parent.onZoom
+            onGeometryChange = parent.onGeometryChange
+            onWindowResized = parent.onWindowResized
             if floatOnTop != parent.floatOnTop {
                 floatOnTop = parent.floatOnTop
                 applyLevel()
@@ -100,6 +111,18 @@ struct WindowController: NSViewRepresentable {
             observers.append(NotificationCenter.default.addObserver(
                 forName: NSWindow.willStartLiveResizeNotification, object: window, queue: .main
             ) { [weak self] _ in self?.onLiveResizeStart?() })
+            // A window dragged down the screen (or onto a shorter one) has less room
+            // below its top edge, which is what the section clamps are measured against.
+            for name in [NSWindow.didMoveNotification, NSWindow.didChangeScreenNotification] {
+                observers.append(NotificationCenter.default.addObserver(
+                    forName: name, object: window, queue: .main
+                ) { [weak self] _ in self?.onGeometryChange?() })
+            }
+            // Every height change, whoever made it: the window is only ever as tall as
+            // the layout asks for, so a size we didn't ask for has to be noticed.
+            observers.append(NotificationCenter.default.addObserver(
+                forName: NSWindow.didResizeNotification, object: window, queue: .main
+            ) { [weak self] _ in self?.onWindowResized?() })
             // …and remember the new height once the user lets go.
             observers.append(NotificationCenter.default.addObserver(
                 forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main

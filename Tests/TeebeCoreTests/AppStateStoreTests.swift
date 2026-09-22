@@ -20,7 +20,9 @@ struct AppStateStoreTests {
             showChangedOnly: true,
             floatOnTop: true,
             lastSelectedRepoPath: "/a",
-            appearance: "dark"
+            appearance: "dark",
+            cleanupTargetByRepo: ["/a": "refs/remotes/origin/dev"],
+            showMergeStatus: false
         )
         try store.save(state)
         #expect(store.load() == state)
@@ -39,18 +41,38 @@ struct AppStateStoreTests {
         #expect(loaded.floatOnTop == true)
     }
 
+    @Test("older state defaults cleanup to automatic without losing repositories")
+    func cleanupDefault() throws {
+        let data = Data(#"{"repositories":[{"path":"/repo"}],"showChangedOnly":false,"showIgnored":false,"floatOnTop":true}"#.utf8)
+        let decoded = try JSONDecoder().decode(AppState.self, from: data)
+        #expect(decoded.cleanupTargetByRepo == nil)
+        #expect(decoded.showMergeStatus == nil)
+        #expect(decoded.repositories.first?.path == "/repo")
+        #expect(decoded.floatOnTop)
+    }
+
     @Test("missing file loads default state")
     func missingDefaults() {
         let (url, cleanup) = tempURL(); defer { cleanup() }
         #expect(AppStateStore(url: url).load() == AppState())
     }
 
-    @Test("corrupt file loads default state")
+    @Test("corrupt file loads default state and is kept aside instead of overwritten")
     func corruptDefaults() throws {
         let (url, cleanup) = tempURL(); defer { cleanup() }
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try "{ not json".data(using: .utf8)!.write(to: url)
-        #expect(AppStateStore(url: url).load() == AppState())
+        let folder = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(to: url)
+        let store = AppStateStore(url: url)
+        #expect(store.load() == AppState())
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        let kept = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+            .filter { $0.hasPrefix("state.json.corrupt-") }
+        #expect(kept.count == 1)
+        let saved = try #require(kept.first)
+        #expect(try String(contentsOf: folder.appendingPathComponent(saved), encoding: .utf8) == "{ not json")
+        try store.save(AppState(floatOnTop: true))
+        #expect(store.load().floatOnTop)
     }
 }
 
