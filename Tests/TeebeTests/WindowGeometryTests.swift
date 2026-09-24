@@ -21,6 +21,62 @@ import TeebeCore
 @MainActor
 @Suite("Window geometry", .serialized)
 struct WindowGeometryTests {
+    @Test("grouping is layout-only: flat rows retain merge results and selection")
+    func flatListKeepsMergeResults() async throws {
+        guard let host = try await GeometryHost.make() else { return }
+        defer { host.tearDown() }
+        let selected = host.app.selector.selectedWorktree
+        let snapshot = try #require(host.app.mergeStatus.snapshot)
+        let merged = try #require(snapshot.entries.first {
+            $0.mergeStatus == .merged && !$0.hasLocalChanges && !$0.isTarget && !$0.worktree.isPrimary
+        })
+        for grouped in [false, true, false] {
+            host.hooks.reset()
+            host.app.groupWorktreesByMergeStatus = grouped
+            await host.settleGeometry()
+            let list = host.app.worktreeList(collapsed: [])
+            #expect(list.groups.isEmpty == !grouped)
+            if !grouped { #expect(list.visibleWorktrees == host.app.selector.worktrees) }
+            #expect(host.app.selector.selectedWorktree == selected)
+            #expect(host.app.mergeStatus.snapshot?.checkedAt == snapshot.checkedAt)
+            let label = WorktreeRowStatus(status: host.app.mergeStatus.entry(for: merged.id), changeCount: 0,
+                                          targetName: snapshot.target?.name, isChecking: host.app.mergeStatus.isChecking)
+            #expect(label.mergedHelp != nil)
+            host.expectSettled("grouping \(grouped)")
+        }
+    }
+
+    @Test("bottom-edge resizing consumes Files before Changes throughout the drag", arguments: [140.0, 300.0])
+    func bottomEdgeKeepsChangesStable(filesHeight: Double) async throws {
+        guard let host = try await GeometryHost.make(filesHeight: filesHeight) else { return }
+        defer { host.tearDown() }
+        let dirty = try #require(host.app.selector.worktrees.first { $0.branch == "feat/dirty" })
+        await host.app.selector.selectWorktree(dirty)
+        await host.settleGeometry()
+        let original = host.window.frame
+        let changes = try #require(host.hooks.changesFrame)
+        let files = try #require(host.hooks.filesFrame)
+        host.hooks.beginWindowResize?()
+        await host.settle(timeout: 0.1, until: { false })
+        let minimum = original.height - files.height + 32 + 60
+        #expect(abs(host.window.minSize.height - minimum) <= 1)
+        for step in 1...5 {
+            let delta = CGFloat(step) * 16
+            var frame = original
+            frame.size.height -= delta
+            frame.origin.y += delta
+            host.window.setFrame(frame, display: true)
+            await host.settle(timeout: 0.1, until: { false })
+            let renderedChanges = try #require(host.hooks.changesFrame)
+            let renderedFiles = try #require(host.hooks.filesFrame)
+            #expect(abs(renderedChanges.height - changes.height) <= 1)
+            #expect(abs(renderedFiles.height - (files.height - delta)) <= 1)
+        }
+        host.hooks.endWindowResize?()
+        await host.settleGeometry()
+        #expect(abs((host.hooks.changesFrame?.height ?? 0) - changes.height) <= 1)
+        #expect(abs(host.window.frame.height - (original.height - 80)) <= 1)
+    }
 
     @Test("a constrained splitter keeps its pane sizes when released")
     func constrainedDividerDoesNotExpandOnRelease() async throws {
@@ -244,6 +300,7 @@ private final class GeometryHost {
             makeWatcher: { FakeWatcher() }   // no FSEvents: nothing refreshes behind the test
         )
         let app = AppModel(environment: environment)
+        app.groupWorktreesByMergeStatus = true
         app.mergeStatus.scanDebounce = .milliseconds(1)
         if let filesHeight {
             app.saveLayout(SectionLayout(worktreesOpen: true, changesOpen: true, filesOpen: true,

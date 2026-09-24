@@ -24,11 +24,12 @@ struct ChangesSection: View {
                 // was dragged to; scroll inside beyond it.
                 VStack(spacing: 0) {
                     ScrollViewReader { proxy in
-                        ScrollView {
+                        BottomFadingScrollView {
                             changeList
+                                .padding(.bottom, Self.listBottomPadding)
                         }
                         .scrollBounceBehavior(.basedOnSize)
-                        .frame(maxHeight: revealHeight)
+                        .frame(maxHeight: revealHeight + Self.listBottomPadding)
                         // Follow the selection when ↑/↓ moves it past the visible edge.
                         // Snap, not animate (see FilesSection): an animated scrollTo
                         // reads as a bounce against the row highlight + relayout.
@@ -39,7 +40,6 @@ struct ChangesSection: View {
                     }
                 }
                 .padding(.top, Self.listTopPadding)
-                .padding(.bottom, Self.listBottomPadding)
                 .transition(.opacity)
             }
         }

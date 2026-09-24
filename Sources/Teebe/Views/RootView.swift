@@ -22,6 +22,10 @@ final class GeometryTestHooks {
     var worktreeListHeight: (() -> CGFloat)?
     var changesListHeight: (() -> CGFloat)?
     var contentFrame: CGRect?
+    var changesFrame: CGRect?
+    var filesFrame: CGRect?
+    var beginWindowResize: (() -> Void)?
+    var endWindowResize: (() -> Void)?
     /// Window resizes teebe itself performed since the last `reset()`.
     private(set) var resizes = 0
     func noteResize() { resizes += 1 }
@@ -86,8 +90,9 @@ struct RootView: View {
     /// Shortest the window may be dragged while a section is open — always tall
     /// enough to keep all three headers visible.
     private let minWindowHeight: CGFloat = 150
-    /// Smallest the FILES reveal may shrink to (search field + a few rows).
-    private let minFilesReveal: CGFloat = 140
+    /// Search field plus one file row; compact without stealing space from the
+    /// upper panes when the user drags the bottom window edge.
+    private let minFilesReveal: CGFloat = 60
 
     private enum Section { case worktrees, changes, files }
 
@@ -126,11 +131,33 @@ struct RootView: View {
                     ChangesSection(app: app, worktree: worktree, preview: preview,
                                    isOpen: sectionBinding(.changes, openChanges), revealHeight: changesListHeight)
                         .layoutPriority(1)
+                        #if DEBUG
+                        .background {
+                            if let testHooks {
+                                GeometryReader { geometry in
+                                    Color.clear.onChange(of: geometry.frame(in: .global), initial: true) { _, frame in
+                                        testHooks.changesFrame = frame
+                                    }
+                                }
+                            }
+                        }
+                        #endif
                     if openChanges {
                         SectionResizeHandle(section: "Changes", height: changesListHeight,
                                             onResize: resizeChanges, onEnd: endDividerDrag)
                     } else { Divider() }
                     FilesSection(app: app, worktree: worktree, preview: preview, isOpen: sectionBinding(.files, openFiles), searchFocused: $searchFocused, revealHeight: filesRevealHeight, liveResizing: isLiveResizing)
+                        #if DEBUG
+                        .background {
+                            if let testHooks {
+                                GeometryReader { geometry in
+                                    Color.clear.onChange(of: geometry.frame(in: .global), initial: true) { _, frame in
+                                        testHooks.filesFrame = frame
+                                    }
+                                }
+                            }
+                        }
+                        #endif
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
             }
@@ -166,7 +193,7 @@ struct RootView: View {
                 roomBelowTop = measuredRoomBelowTop(resolved)
                 applyLayout(for: app.selector.selectedRepo?.path)
             },
-            onLiveResizeStart: { isLiveResizing = true; setHeightLocked(heightPinned, height: targetHeight()) },
+            onLiveResizeStart: beginLiveResize,
             onLiveResizeEnd: { isLiveResizing = false; handleLiveResizeEnd($0) },
             onZoom: { toggleVerticalZoom() },
             onGeometryChange: { roomBelowTop = measuredRoomBelowTop(window) },
@@ -343,6 +370,11 @@ struct RootView: View {
     /// the title-bar inset because the title row draws into it via `ignoresSafeArea`.
     private var minimumContentHeight: CGFloat {
         let inset = window.map { max(0, $0.frame.height - $0.contentLayoutRect.height) } ?? 0
+        if isLiveResizing, openFiles {
+            // SwiftUI also writes the window's minimum during layout. Keep its
+            // constraint aligned with AppKit throughout the native resize.
+            return max(collapsedHeight + worktreesContentHeight + changesContentHeight + minFilesReveal - inset, 0)
+        }
         return max(collapsedHeight - inset, 0)
     }
 
@@ -562,6 +594,11 @@ struct RootView: View {
         persistLayout()
     }
 
+    private func beginLiveResize() {
+        isLiveResizing = true
+        setHeightLocked(heightPinned, height: targetHeight())
+    }
+
     /// Commit the divider's layout. With FILES closed the window already followed
     /// each drag update, so releasing the handle must not introduce another resize.
     private func endDividerDrag() {
@@ -591,6 +628,11 @@ struct RootView: View {
     /// Hand the geometry test the same entry points the gestures use.
     private func installTestHooks() {
         guard let hooks = testHooks else { return }
+        hooks.beginWindowResize = beginLiveResize
+        hooks.endWindowResize = {
+            isLiveResizing = false
+            if let window { handleLiveResizeEnd(window.frame.height) }
+        }
         hooks.setWorktreesOpen = { setOpen(.worktrees, $0) }
         hooks.setChangesOpen = { setOpen(.changes, $0) }
         hooks.setFilesOpen = { setOpen(.files, $0) }
@@ -645,8 +687,8 @@ struct RootView: View {
     }
 
     /// Constrain the window's height for the current state. Collapsed → pinned to the
-    /// headers bar. FILES open → resizable from `minWindowHeight` up to the screen
-    /// (dragging adjusts the FILES reveal). FILES closed → wraps WORKTREES/CHANGES:
+    /// headers bar. FILES open → shrink only its remaining space, preserving the
+    /// upper panes, or grow up to the screen. FILES closed → wraps WORKTREES/CHANGES:
     /// can't grow past their rows (no gap), but can shrink to scroll. Width stays free.
     /// Re-asserted on every resize-drag start (SwiftUI keeps re-enabling free resize).
     private func setHeightLocked(_ locked: Bool, height: CGFloat) {
@@ -655,7 +697,10 @@ struct RootView: View {
             window.minSize = NSSize(width: minWindowWidth, height: height)
             window.maxSize = NSSize(width: 100_000, height: height)
         } else {
-            window.minSize = NSSize(width: minWindowWidth, height: minWindowHeight)
+            let minimum = openFiles
+                ? collapsedHeight + worktreesContentHeight + changesContentHeight + minFilesReveal
+                : minWindowHeight
+            window.minSize = NSSize(width: minWindowWidth, height: min(screenHeight, minimum))
             window.maxSize = NSSize(width: 100_000, height: openFiles ? screenHeight : height)
         }
     }

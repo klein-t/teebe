@@ -26,8 +26,8 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// The Settings window (⌘,). Small on purpose: only preferences that aren't
-/// already a one-click toggle in the main window live here.
+/// The Settings window (⌘,). Worktree preferences share their wording and state
+/// with the shortcuts in the worktrees menu.
 struct SettingsView: View {
     @Bindable var app: AppModel
     @ObservedObject var updater: UpdaterController
@@ -42,8 +42,10 @@ struct SettingsView: View {
             .pickerStyle(.segmented)
 
             Section("Worktrees") {
-                Toggle("Group worktrees by merge status", isOn: $app.showMergeStatus)
-                Toggle("Fetch automatically", isOn: $app.fetchAutomatically)
+                explainedToggle(WorktreePreferences.groupingTitle, isOn: $app.groupWorktreesByMergeStatus,
+                                explanation: WorktreePreferences.groupingHelp)
+                explainedToggle(WorktreePreferences.fetchTitle, isOn: $app.fetchAutomatically,
+                                explanation: WorktreePreferences.fetchHelp)
             }
 
             Section {
@@ -62,5 +64,14 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 360)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func explainedToggle(_ title: String, isOn: Binding<Bool>, explanation: String) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+            HelpInfo(title: title, explanation: explanation)
+            Spacer(minLength: 4)
+            Toggle(title, isOn: isOn).labelsHidden()
+        }
     }
 }

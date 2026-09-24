@@ -3,12 +3,20 @@ import Observation
 import AppKit
 import TeebeCore
 
+/// Shared wording for the checked menu items and Settings.
+enum WorktreePreferences {
+    static let groupingTitle = "Group by merge status"
+    static let groupingHelp = "Group worktrees by status. When off, keep a flat list with merge labels."
+    static let fetchTitle = "Fetch automatically"
+    static let fetchHelp = "Check remotes in the background. Your files stay unchanged; Refresh still works when off."
+}
+
 /// Root view model: owns the added repositories, persistence, and the selector.
 @MainActor
 @Observable
 final class AppModel {
     private(set) var repositories: [Repository] = []
-    var showMergeStatus: Bool { didSet { persist() } }
+    var groupWorktreesByMergeStatus: Bool { didSet { persist() } }
     /// Fetch remote refs in the background, so merge results reflect what was
     /// pushed rather than what was last pulled by hand.
     var fetchAutomatically: Bool { didSet { persist() } }
@@ -62,7 +70,8 @@ final class AppModel {
         self.selector = SelectorModel(environment: environment)
         self.mergeStatus = WorktreeMergeModel(service: mergeService ?? WorktreeCleanupService(git: environment.git))
         self.remoteRefresher = RemoteRefresher(git: environment.git)
-        self.showMergeStatus = self.state.showMergeStatus ?? true
+        // Keep the legacy key so existing grouping choices survive the new default.
+        self.groupWorktreesByMergeStatus = self.state.showMergeStatus ?? false
         self.fetchAutomatically = self.state.fetchAutomatically ?? true
         self.floatOnTop = false
         self.appearance = .system
@@ -384,11 +393,11 @@ final class AppModel {
         await selector.selectRepo(repo, preferredWorktreePath: PathUtil.standardized(path))
     }
 
-    /// Bring the selected repository's remote refs up to date. The setting gates it;
-    /// `force` (the Refresh command) only ignores how recently it last ran. Writing
+    /// Bring the selected repository's remote refs up to date. The setting gates
+    /// background fetches only; explicit Refresh also bypasses the rate limit. Writing
     /// refs is what makes the merge check re-run, through the repository watcher.
     func refreshRemotes(force: Bool, now: Date = Date()) async {
-        guard fetchAutomatically, let repo = selector.selectedRepo else { return }
+        guard force || fetchAutomatically, let repo = selector.selectedRepo else { return }
         await remoteRefresher.fetch(repoPath: repo.path, force: force, now: now)
     }
 
@@ -434,7 +443,7 @@ final class AppModel {
         guard !isHydrating else { return }
         state.repositories = repositories.map { PersistedRepository(path: $0.path) }
         state.floatOnTop = floatOnTop
-        state.showMergeStatus = showMergeStatus
+        state.showMergeStatus = groupWorktreesByMergeStatus
         state.fetchAutomatically = fetchAutomatically
         state.appearance = appearance == .system ? nil : appearance.rawValue
         state.lastSelectedRepoPath = selector.selectedRepo?.path

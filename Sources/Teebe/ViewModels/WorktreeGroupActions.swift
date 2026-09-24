@@ -92,7 +92,7 @@ final class WorktreeGroupActions {
         guard app.selector.selectedRepo?.path == repo.path else { return }
         await app.selector.refreshWorktrees()
         await app.mergeStatus.refresh(repo: repo, targetOverride: app.cleanupTarget(for: repo.path),
-                                      enabled: app.showMergeStatus, revision: app.selector.mergeRevision)
+                                      enabled: true, revision: app.selector.mergeRevision)
     }
 
     private func isEligible(_ entry: CleanupEntry) -> Bool {

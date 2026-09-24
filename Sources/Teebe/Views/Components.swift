@@ -123,7 +123,7 @@ struct LiveDot: View {
             .animation(.easeInOut(duration: 0.25), value: fill)   // fade the fill on state change
             .onAppear { syncPulse() }
             .onChange(of: pulsing) { _, _ in syncPulse() }
-            .help(helpText)
+            .hoverHelp(helpText, highlight: false)
             .accessibilityElement()
             .accessibilityLabel(helpText)
     }

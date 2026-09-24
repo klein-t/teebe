@@ -1,6 +1,34 @@
 import AppKit
 import SwiftUI
 
+/// Explanatory help uses one hover-only surface: a short sentence, no repeated
+/// heading, immediate highlight, delayed appearance, and no click action.
+/// Controls with their own hover chrome pass `highlight: false`.
+enum HelpStyle {
+    static let delay: Duration = .milliseconds(350)
+    static let fontSize: CGFloat = 12
+    static let horizontalPadding: CGFloat = 10
+    static let verticalPadding: CGFloat = 7
+    static let maximumWidth: CGFloat = 300
+    static let cornerRadius: CGFloat = 7
+}
+
+/// Informational glyph, deliberately not a button: clicking never opens a
+/// second surface or changes the adjacent setting. The text remains accessible.
+struct HelpInfo: View {
+    let title: String
+    let explanation: String
+
+    var body: some View {
+        Image(systemName: "info.circle")
+            .font(.system(size: HelpStyle.fontSize))
+            .foregroundStyle(.secondary)
+            .frame(width: 22, height: 22)
+            .hoverHelp(explanation)
+            .accessibilityLabel("About \(title.lowercased())")
+    }
+}
+
 extension View {
     /// A short, app-local delay without changing macOS tooltip preferences.
     func hoverHelp(_ text: String, highlight: Bool = true) -> some View {
@@ -81,7 +109,7 @@ final class HoverHelpView: NSView {
 @MainActor
 final class HoverHelpPresenter {
     static let shared = HoverHelpPresenter()
-    static let delay: Duration = .milliseconds(350)
+    static let delay = HelpStyle.delay
     private(set) weak var owner: HoverHelpView?
     private var pending: Task<Void, Never>?
     private(set) var panel: NSPanel?
@@ -142,12 +170,12 @@ final class HoverHelpPresenter {
     func show(owner: HoverHelpView, window: NSWindow) {
         let content = NSHostingView(rootView:
             Text(owner.text)
-                .font(.system(size: 12))
+                .font(.system(size: HelpStyle.fontSize))
                 .foregroundStyle(.primary)
-                .padding(.horizontal, 10).padding(.vertical, 7)
-                .frame(maxWidth: 300)
+                .padding(.horizontal, HelpStyle.horizontalPadding).padding(.vertical, HelpStyle.verticalPadding)
+                .frame(maxWidth: HelpStyle.maximumWidth)
                 .fixedSize(horizontal: false, vertical: true)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: HelpStyle.cornerRadius))
         )
         let size = content.fittingSize
         // A tooltip has a measured, fixed size. NSHostingView's automatic window

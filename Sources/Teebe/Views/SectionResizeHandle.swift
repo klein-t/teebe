@@ -16,7 +16,7 @@ struct SectionResizeHandle: View {
 
     /// Drawn thin, grabbed thick: the capsule stays 3pt while the target is a
     /// comfortable 12pt, centred on it.
-    private static let hitPadding: CGFloat = (12 - (1 + SectionSizing.dividerExtra)) / 2
+    private static let hitPadding: CGFloat = (12 - 1) / 2
 
     var body: some View {
         ZStack {
@@ -24,13 +24,16 @@ struct SectionResizeHandle: View {
             Capsule().fill(hovered || dragging ? Palette.accent : Color.secondary.opacity(0.35))
                 .frame(width: 28, height: 3)
         }
-        .frame(height: 1 + SectionSizing.dividerExtra)
+        // The line touches the preceding scroll viewport; reserve the extra
+        // layout space below it, never between the fading content and the line.
+        .frame(height: 1)
         .frame(maxWidth: .infinity)
         // Grow, take the hit shape, then give the layout its height back: the divider
         // still occupies `dividerExtra` in the window maths, but is grabbable at 12pt.
         .padding(.vertical, Self.hitPadding)
         .contentShape(Rectangle())
-        .padding(.vertical, -Self.hitPadding)
+        .padding(.top, -Self.hitPadding)
+        .padding(.bottom, SectionSizing.dividerExtra - Self.hitPadding)
         .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
             .updating($dragging) { _, active, _ in active = true }
             .onChanged { value in
@@ -52,7 +55,7 @@ struct SectionResizeHandle: View {
         .accessibilityAdjustableAction { direction in
             onResize(height + (direction == .increment ? 26 : -26)); onEnd()
         }
-        .help("Resize the \(section) list")
+        .hoverHelp("Resize the \(section) list", highlight: false)
     }
 }
 

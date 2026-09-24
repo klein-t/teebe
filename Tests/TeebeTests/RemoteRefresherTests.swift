@@ -30,7 +30,7 @@ struct RemoteRefresherTests {
         #expect(git.fetchedRepos == ["/repo", "/repo"])
     }
 
-    @Test("Refresh fetches now, and the setting turns fetching off entirely")
+    @Test("manual Refresh fetches even when automatic fetching is disabled")
     func forcedAndDisabled() async {
         let git = FakeGitClient()
         let app = await app(git)
@@ -43,8 +43,8 @@ struct RemoteRefresherTests {
         app.fetchAutomatically = false
         await app.refreshRemotes(force: true, now: start)
         await app.refreshRemotes(force: false, now: start.addingTimeInterval(600))
-        #expect(git.fetchedRepos.count == 2)
-        // And the choice is remembered.
+        #expect(git.fetchedRepos.count == 3)
+        // Manual refresh does not turn background fetching back on.
         #expect(AppModel(environment: makeTestEnvironment(git: git, store: app.environment.store))
             .fetchAutomatically == false)
     }

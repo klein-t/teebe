@@ -37,12 +37,6 @@ struct FilesSection: View {
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .hoverHelp("Sort & filter")
-                } else if let active = app.selector.selectedWorktree {
-                    Text("\(active.branch ?? active.name)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Palette.secondaryText)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
                 }
             }
 

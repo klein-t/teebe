@@ -79,7 +79,7 @@ struct WorktreeListPresentation {
             + CGFloat(groups.count) * Self.groupHeight
     }
 
-    /// Rows read as a list of branches, so that is what they sort by.
+    /// Sort worktrees by their displayed label: branch, or folder for detached HEAD.
     private static func sortKey(_ worktree: Worktree) -> String { worktree.branch ?? worktree.name }
 }
 
@@ -92,7 +92,7 @@ extension AppModel {
         }
         return WorktreeListPresentation(worktrees: selector.worktrees,
                                        entries: Dictionary(uniqueKeysWithValues: entries.map { ($0.entry.id, $0) }),
-                                       grouped: showMergeStatus, collapsed: collapsed,
+                                       grouped: groupWorktreesByMergeStatus, collapsed: collapsed,
                                        hasRepository: selector.selectedRepo != nil,
                                        needsTarget: mergeStatus.snapshot.map { $0.target == nil } ?? false)
     }

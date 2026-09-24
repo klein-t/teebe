@@ -6,7 +6,20 @@ import TeebeCore
 @MainActor
 @Suite("AppModel")
 struct AppModelTests {
-    @Test("startup deduplicates saved history, restores selection, and persists icon visibility")
+    @Test("saved grouping preferences survive independently of automatic fetching", arguments: [true, false])
+    func savedGrouping(grouped: Bool) throws {
+        let env = makeTestEnvironment()
+        try env.store.save(AppState(showMergeStatus: grouped, fetchAutomatically: false))
+        let app = AppModel(environment: env)
+        #expect(app.groupWorktreesByMergeStatus == grouped)
+        #expect(!app.fetchAutomatically)
+        app.groupWorktreesByMergeStatus.toggle()
+        let restored = AppModel(environment: env)
+        #expect(restored.groupWorktreesByMergeStatus == !grouped)
+        #expect(!restored.fetchAutomatically)
+    }
+
+    @Test("startup deduplicates history, restores selection, and defaults to a flat worktree list")
     func historyMigration() async throws {
         let git = FakeGitClient()
         git.worktreesResult = [Worktree(path: "/a", branch: "main", isPrimary: true)]
@@ -19,10 +32,10 @@ struct AppModelTests {
         #expect(app.selector.selectedRepo?.path == "/a")
         #expect(app.recentRepositories.first?.path == "/a")
         #expect(env.store.load().repositories.count == 2)
-        #expect(app.showMergeStatus)
-        app.showMergeStatus = false
+        #expect(!app.groupWorktreesByMergeStatus)
+        app.groupWorktreesByMergeStatus = true
         app.floatOnTop = true
-        #expect(AppModel(environment: env).showMergeStatus == false)
+        #expect(AppModel(environment: env).groupWorktreesByMergeStatus)
         await app.selector.selectRepo(Repository(path: "/b"))
         #expect(app.recentRepositories.first?.path == "/b")
         #expect(app.repositories.count == 2)
