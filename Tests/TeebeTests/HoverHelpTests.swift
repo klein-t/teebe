@@ -74,6 +74,42 @@ struct HoverHelpTests {
         }
     }
 
+    @Test func cardsStartNearTheAnchorsLeadingEdge() {
+        let screen = NSRect(x: 0, y: 0, width: 1000, height: 800)
+        let size = NSSize(width: 248, height: 90)
+        let row = NSRect(x: 100, y: 400, width: 440, height: 26)
+        let frame = HoverHelpPresenter.frame(size: size, anchor: row, screen: screen, leadingInset: 24)
+        #expect(frame.minX == 124)
+        #expect(abs(row.minY - frame.maxY - 6) < 1)
+        // Still clamped to the screen near its right edge.
+        let edge = NSRect(x: 900, y: 400, width: 100, height: 26)
+        #expect(HoverHelpPresenter.frame(size: size, anchor: edge, screen: screen, leadingInset: 24).maxX <= 994)
+    }
+
+    @Test func richCardShowsAtItsOwnWidthBelowTheRow() throws {
+        guard CGMainDisplayID() != 0 else { return }
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 300, width: 440, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let owner = HoverHelpView(frame: NSRect(x: 0, y: 200, width: 440, height: 26))
+        owner.text = "Safe to delete. Merged into dev."
+        owner.card = AnyView(WorktreeHoverCard(
+            card: WorktreeCard(title: "Safe to delete", subtitle: "Merged into dev. Nothing uncommitted.",
+                               facts: [WorktreeCardFact(icon: .cloud, text: "Up to date with origin", tone: .muted)]),
+            mark: .merged))
+        window.contentView?.addSubview(owner)
+        let presenter = HoverHelpPresenter()
+        defer { presenter.dismiss() }
+        presenter.show(owner: owner, window: window)
+        let panel = try #require(presenter.panel)
+        let anchor = window.convertToScreen(owner.convert(owner.bounds, to: nil))
+        #expect(panel.frame.width == WorktreeHoverCard.width)
+        #expect(panel.frame.height > 50 && panel.frame.height < 160)
+        #expect(abs(panel.frame.minX - (anchor.minX + 24)) < 1)
+        #expect(abs(anchor.minY - panel.frame.maxY - 6) < 1)
+    }
+
     @Test func leavingAnOldControlDoesNotCancelTheNewOne() {
         let presenter = HoverHelpPresenter()
         let first = HoverHelpView()
