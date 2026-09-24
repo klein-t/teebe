@@ -187,7 +187,8 @@ struct WorktreeStatusTests {
     @Test("detail facts surface what else matters, without repeating the headline")
     func details() {
         let ignored = status(entry(merged: [dev]) { $0.hasIgnoredFiles = true; $0.ignoredPaths = [".build/", "node_modules/", "x"] })
-        #expect(facts(ignored) == ["Not on remote", "Ignored files remain (.build/, node_modules/, …)"])
+        // Ignored files are ordinary clutter on hover; they only matter at removal.
+        #expect(facts(ignored) == ["Not on remote"])
         let skipped = status(entry(merged: [dev]) { $0.hasUncheckedFiles = true })
         #expect(skipped.card.title == "Couldn’t confirm it’s safe")
         #expect(skipped.card.subtitle == "Merged into dev, but some files are marked unchanged in Git.")
@@ -205,6 +206,12 @@ struct WorktreeStatusTests {
         #expect(safe.facts.map { $0.text } == ["Merged into dev", "Nothing uncommitted"])
         #expect(safe.explanation == "The worktree folder is deleted. Its commits are already merged.")
         #expect(safe.offersBranchDeletion)
+
+        let cluttered = entry(merged: [dev]) { $0.hasIgnoredFiles = true; $0.ignoredPaths = [".DS_Store", ".cache/"] }
+        let withIgnored = WorktreeRemovalPrompt(worktree: feature, status: status(cluttered),
+                                                merge: WorktreeMergeEntry(entry: cluttered), isAgentActive: false)
+        #expect(withIgnored.facts.last == WorktreeCardFact(icon: .ignoredFiles,
+                                                           text: "Ignored files will be deleted too (.DS_Store)", tone: .muted))
 
         let unmerged = entry()
         let risky = WorktreeRemovalPrompt(worktree: feature, status: status(unmerged, count: 2),
@@ -253,6 +260,16 @@ struct WorktreeStatusTests {
         #expect(one.canRemove)
         #expect(!one.offersBranchDeletion)
         #expect(WorktreeRemovalPrompt.prune(missingCount: 3).facts.map { $0.text } == ["3 missing worktrees"])
+    }
+
+    @Test("the ignored-files fact names at most one short example")
+    func ignoredFact() {
+        func entryWith(_ paths: [String]) -> CleanupEntry { entry { $0.hasIgnoredFiles = !paths.isEmpty; $0.ignoredPaths = paths } }
+        #expect(WorktreeWording.ignoredFact([entryWith([])]) == nil)
+        #expect(WorktreeWording.ignoredFact([entryWith([]), entryWith([".build/"])])?.text
+                == "Ignored files will be deleted too (.build/)")
+        #expect(WorktreeWording.ignoredFact([entryWith(["a/very/long/path/to/some/cache/file.bin"])])?.text
+                == "Ignored files will be deleted too (a/very/l…file.bin)")
     }
 
     @Test("lists read naturally")

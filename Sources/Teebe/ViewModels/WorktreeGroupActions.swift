@@ -35,14 +35,14 @@ final class WorktreeGroupActions {
     }
 
     func confirmationMessage(_ entries: [CleanupEntry], deleteBranch: Bool) -> String {
-        var text = "The folders will be deleted from your Mac. "
+        "The folders will be deleted from your Mac. "
             + (deleteBranch ? "Their local branches will be deleted too; remote branches are kept."
                 : "Branches will be kept.")
-        // Only worth saying when it is true: ignored files go with the folder.
-        if entries.contains(where: \.hasIgnoredFiles) {
-            text += " Ignored files such as build output will be deleted too."
-        }
-        return text
+    }
+
+    /// Only worth saying when it is true: ignored files go with the folders.
+    func confirmationFacts(_ entries: [CleanupEntry]) -> [WorktreeCardFact] {
+        [WorktreeWording.ignoredFact(entries)].compactMap { $0 }
     }
 
     /// Remove the confirmed folders one at a time. A failure is reported and the

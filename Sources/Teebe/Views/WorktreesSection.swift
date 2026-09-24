@@ -159,7 +159,8 @@ struct WorktreesSection: View {
                 app.groupActions.prune()
             }
         case .cleanup(let entries):
-            WorktreeRemovalSheet(title: app.groupActions.confirmationTitle(entries), facts: [],
+            WorktreeRemovalSheet(title: app.groupActions.confirmationTitle(entries),
+                                 facts: app.groupActions.confirmationFacts(entries),
                                  explanation: app.groupActions.confirmationMessage(entries, deleteBranch: app.deleteBranchOnRemove),
                                  deleteBranch: $app.deleteBranchOnRemove,
                                  deleteBranchTitle: entries.count == 1 ? "Also delete the branch" : "Also delete the branches",

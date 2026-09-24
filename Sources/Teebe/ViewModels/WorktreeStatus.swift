@@ -256,9 +256,6 @@ private struct Facts {
             if entry.hasSubmodules {
                 facts.append(WorktreeCardFact(icon: .warning, text: "Contains a submodule", tone: .muted))
             }
-            if entry.hasIgnoredFiles {
-                facts.append(WorktreeCardFact(icon: .ignoredFiles, text: WorktreeWording.ignoredText(entry), tone: .muted))
-            }
         }
         if worktree.isLocked { facts.append(WorktreeCardFact(icon: .lock, text: "Locked", tone: .muted)) }
         if worktree.isDetached { facts.append(WorktreeCardFact(icon: .branch, text: "Detached HEAD", tone: .muted)) }
@@ -301,12 +298,16 @@ enum WorktreeWording {
             : "The folder was moved or deleted outside git."
     }
 
-    static func ignoredText(_ entry: CleanupEntry) -> String {
-        let examples = entry.ignoredPaths.prefix(2).map { path in
-            path.count > 36 ? String(path.prefix(16)) + "…" + String(path.suffix(16)) : path
-        }.joined(separator: ", ")
-        guard !examples.isEmpty else { return "Ignored files remain" }
-        return "Ignored files remain (" + examples + (entry.ignoredPaths.count > 2 ? ", …" : "") + ")"
+    /// Removal deletes ignored files with the folder. Said only where it matters,
+    /// with at most one short example; nil when none of the entries has any.
+    static func ignoredFact(_ entries: [CleanupEntry]) -> WorktreeCardFact? {
+        guard let entry = entries.first(where: \.hasIgnoredFiles) else { return nil }
+        var text = "Ignored files will be deleted too"
+        if let path = entry.ignoredPaths.first {
+            let short: String = path.count > 24 ? String(path.prefix(8)) + "…" + String(path.suffix(8)) : path
+            text += " (\(short))"
+        }
+        return WorktreeCardFact(icon: .ignoredFiles, text: text, tone: .muted)
     }
 }
 
@@ -373,6 +374,10 @@ struct WorktreeRemovalPrompt: Equatable {
         }
         if isAgentActive {
             facts.append(WorktreeCardFact(icon: .warning, text: "An agent is active in this worktree", tone: .warn))
+        }
+        // A clean removal takes ignored files with the folder.
+        if !hasUncommitted, !hasSubmodules, let entry, let ignored = WorktreeWording.ignoredFact([entry]) {
+            facts.append(ignored)
         }
         self.facts = facts
         let safe = entry?.mergeStatus == .merged && !hasUncommitted

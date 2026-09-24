@@ -92,7 +92,7 @@ struct WorktreeGroupActionsTests {
         #expect(actions.eligibleEntries(for: git.worktreesResult).map(\.id) == ["/free"])
     }
 
-    @Test("the confirmation counts what it will remove and mentions ignored files only when there are some")
+    @Test("the confirmation counts what it will remove and mentions ignored files, as a fact, only when there are some")
     func confirmationCopy() async {
         var ignored = merged("/ignored", branch: "ignored")
         ignored.hasIgnoredFiles = true
@@ -107,8 +107,9 @@ struct WorktreeGroupActionsTests {
         #expect(actions.confirmationMessage([plain], deleteBranch: false)
                 == "The folders will be deleted from your Mac. Branches will be kept.")
         #expect(actions.confirmationMessage([plain, ignored], deleteBranch: false)
-                == "The folders will be deleted from your Mac. Branches will be kept. "
-                + "Ignored files such as build output will be deleted too.")
+                == "The folders will be deleted from your Mac. Branches will be kept.")
+        #expect(actions.confirmationFacts([plain]).isEmpty)
+        #expect(actions.confirmationFacts([plain, ignored]).map { $0.text } == ["Ignored files will be deleted too (.build/)"])
         #expect(actions.confirmationMessage([plain], deleteBranch: true)
                 == "The folders will be deleted from your Mac. "
                 + "Their local branches will be deleted too; remote branches are kept.")
