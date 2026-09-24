@@ -179,15 +179,37 @@ struct WorktreeStatusTests {
         let unmerged = entry()
         let risky = WorktreeRemovalPrompt(worktree: feature, status: status(unmerged, count: 2),
                                           merge: WorktreeMergeEntry(entry: unmerged, localChangeCount: 2), isAgentActive: true)
-        #expect(risky.facts.map { $0.text } == ["Not merged yet", "2 uncommitted changes will be lost",
+        // Removal is never forced: Git refuses a folder with uncommitted work, so
+        // nothing is "lost" and Remove is not offered until it is committed or discarded.
+        #expect(risky.facts.map { $0.text } == ["Not merged yet", "2 uncommitted changes: commit or discard them first",
                                             "An agent is active in this worktree"])
-        #expect(risky.explanation == "The worktree folder is deleted. The branch is kept.")
+        #expect(risky.facts[1].tone == .warn)
+        #expect(risky.explanation == "Git only removes a worktree with nothing uncommitted. The branch is kept.")
+        #expect(!risky.canRemove)
         #expect(!risky.offersBranchDeletion)
+        #expect(safe.canRemove)
+
+        let unmergedClean = WorktreeRemovalPrompt(worktree: feature, status: status(unmerged),
+                                                  merge: WorktreeMergeEntry(entry: unmerged), isAgentActive: false)
+        #expect(unmergedClean.facts.map { $0.text } == ["Not merged yet", "Nothing uncommitted"])
+        #expect(unmergedClean.explanation == "The worktree folder is deleted. The branch is kept.")
+        #expect(unmergedClean.canRemove)
+
+        let submodule = entry(merged: [dev]) { $0.hasSubmodules = true }
+        let nested = WorktreeRemovalPrompt(worktree: feature, status: status(submodule),
+                                           merge: WorktreeMergeEntry(entry: submodule), isAgentActive: false)
+        #expect(nested.facts.map { $0.text } == ["Merged into dev", "Nothing uncommitted",
+                                             "Contains a submodule: Git won’t remove it"])
+        #expect(nested.explanation
+                == "Git won’t remove a worktree that contains a submodule without forcing it, and Teebe never forces.")
+        #expect(!nested.canRemove)
+        #expect(!nested.offersBranchDeletion)
 
         let gone = entry { $0.isBroken = true; $0.problem = "Broken worktree: its folder is missing." }
         let forget = WorktreeRemovalPrompt(worktree: feature, status: status(gone),
                                            merge: WorktreeMergeEntry(entry: gone), isAgentActive: false)
         #expect(forget.title == "Forget “feature”?")
+        #expect(forget.canRemove)
         #expect(!forget.offersBranchDeletion)
     }
 

@@ -304,6 +304,9 @@ struct WorktreeRemovalPrompt: Equatable {
     /// Show the "Also delete the branch" checkbox: only for a merged row that is
     /// safe to remove, where the branch's work is already in a target.
     let offersBranchDeletion: Bool
+    /// Removal is never forced, so Git refuses a folder with uncommitted work or a
+    /// submodule. The prompt says why and does not offer Remove.
+    let canRemove: Bool
 
     init(worktree: Worktree, status: WorktreeStatus, merge: WorktreeMergeEntry?, isAgentActive: Bool) {
         let name = worktree.branch ?? worktree.name
@@ -313,6 +316,7 @@ struct WorktreeRemovalPrompt: Equatable {
             explanation = "Git still has a record of this worktree. Removing it only clears that record; "
                 + "nothing on disk changes and the branch is kept."
             offersBranchDeletion = false
+            canRemove = true
             return
         }
         title = "Remove “\(name)”?"
@@ -327,17 +331,28 @@ struct WorktreeRemovalPrompt: Equatable {
         if hasUncommitted {
             let changes = status.changeCount > 0 ? WorktreeWording.plural(status.changeCount, "uncommitted change")
                 : "Uncommitted changes"
-            facts.append(WorktreeCardFact(icon: .pencil, text: changes + " will be lost", tone: .warn))
+            facts.append(WorktreeCardFact(icon: .pencil, text: changes + ": commit or discard them first", tone: .warn))
         } else {
             facts.append(WorktreeCardFact(icon: .pencil, text: "Nothing uncommitted", tone: .muted))
+        }
+        let hasSubmodules = entry?.hasSubmodules == true
+        if hasSubmodules {
+            facts.append(WorktreeCardFact(icon: .warning, text: "Contains a submodule: Git won’t remove it", tone: .warn))
         }
         if isAgentActive {
             facts.append(WorktreeCardFact(icon: .warning, text: "An agent is active in this worktree", tone: .warn))
         }
         self.facts = facts
         let safe = entry?.mergeStatus == .merged && !hasUncommitted
-        explanation = safe ? "The worktree folder is deleted. Its commits are already merged."
-            : "The worktree folder is deleted. The branch is kept."
-        offersBranchDeletion = safe && status.showsTrash
+        canRemove = !hasUncommitted && !hasSubmodules
+        if hasUncommitted {
+            explanation = "Git only removes a worktree with nothing uncommitted. The branch is kept."
+        } else if hasSubmodules {
+            explanation = "Git won’t remove a worktree that contains a submodule without forcing it, and Teebe never forces."
+        } else {
+            explanation = safe ? "The worktree folder is deleted. Its commits are already merged."
+                : "The worktree folder is deleted. The branch is kept."
+        }
+        offersBranchDeletion = safe && canRemove && status.showsTrash
     }
 }
