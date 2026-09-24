@@ -1,16 +1,11 @@
 import Foundation
 import TeebeCore
 
-/// Which refs the Comparison Branch submenu offers. A real repository has dozens of
-/// branches and work is only ever compared against a handful of them, so the menu
-/// lists those and sends everything else through "Other…".
+/// How the extra-merge-target picker orders a repository's branches. Merges are
+/// already checked against the default branch and the usual integration branches;
+/// the picker adds one more, so it suggests the handful anyone actually means and
+/// lists every other ref below.
 enum ComparisonBranchMenu {
-    /// The names that mean "the line work merges into".
-    private static let integrationNames: Set<String> = [
-        "main", "master", "dev", "develop", "development", "trunk", "staging", "production", "prod"
-    ]
-    /// Release lines are integration branches too, and there is no fixed set of them.
-    private static let integrationPrefixes = ["release/", "releases/"]
     /// Read first, alphabetical after: the branches a repository actually merges into
     /// should not sit below a year of `release/…` tags.
     private static let leadingNames = ["main", "master", "dev", "develop"]
@@ -26,47 +21,16 @@ enum ComparisonBranchMenu {
         guard branch.ref.hasPrefix("refs/remotes/") else { return nil }
         return branch.name.split(separator: "/", maxSplits: 1).first.map(String.init)
     }
-
-    static func isIntegrationName(_ short: String) -> Bool {
-        integrationNames.contains(short) || integrationPrefixes.contains { short.hasPrefix($0) }
-    }
-
-    /// The branches the submenu shows, in display order. Only local refs and `origin/`
-    /// ones: origin is the remote the background fetch keeps current, so where both
-    /// `x` and `origin/x` exist only `origin/x` is offered. A repository with no
-    /// remote keeps its local branches. The saved choice is always in the list,
-    /// filter or no filter, so it stays visible and can be changed.
-    static func entries(_ branches: [CleanupBranch], saved: String? = nil) -> [CleanupBranch] {
-        let freshRemoteNames = Set(branches.filter { remote($0) == "origin" }.map(shortName))
-        let kept = branches.filter { branch in
-            if branch.ref == saved { return true }
-            let remote = remote(branch)
-            guard remote == nil || remote == "origin" else { return false }
-            guard isIntegrationName(shortName(branch)) else { return false }
-            return remote != nil || !freshRemoteNames.contains(shortName(branch))
-        }
-        return kept.sorted { first, second in
-            let (a, b) = (rank(first), rank(second))
-            guard a == b else { return a < b }
-            return first.name.localizedStandardCompare(second.name) == .orderedAscending
-        }
-    }
-
-    private static func rank(_ branch: CleanupBranch) -> Int {
-        leadingNames.firstIndex(of: shortName(branch)) ?? leadingNames.count
-    }
 }
 
-/// One line of the Comparison Branch picker: a branch, or the Automatic choice.
+/// One line of the extra-branch picker: a branch, or None.
 struct ComparisonBranchRow: Identifiable, Equatable {
-    /// The ref this row saves. Empty means Automatic, which saves no override.
+    /// The ref this row saves. Empty means None: no extra branch.
     let id: String
-    /// Left-hand text: the branch name without its remote, or "Automatic".
+    /// Left-hand text: the branch name without its remote, or "None".
     let name: String
-    /// Right-hand text: where the branch lives, or what Automatic resolved to.
+    /// Right-hand text: where the branch lives, or "No extra branch".
     let detail: String
-    /// False for an Automatic row that resolved to nothing: there is nothing to pick.
-    let isEnabled: Bool
 }
 
 /// The picker's two lists. Suggested is the handful anyone actually means; the
@@ -81,19 +45,15 @@ extension ComparisonBranchMenu {
     /// Everything the picker shows, already ordered and filtered. Search is a
     /// case-insensitive substring of the full ref name, so both `dev` and
     /// `origin/dev` find `origin/dev`.
-    static func sections(_ branches: [CleanupBranch], automatic: CleanupBranch?,
-                         search: String = "") -> ComparisonBranchSections {
+    static func sections(_ branches: [CleanupBranch], search: String = "") -> ComparisonBranchSections {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         func matches(_ text: String) -> Bool {
             query.isEmpty || text.lowercased().contains(query)
         }
 
         var sections = ComparisonBranchSections()
-        let automaticName = automatic?.name
-        if matches("automatic " + (automaticName ?? "unavailable")) {
-            sections.suggested.append(ComparisonBranchRow(
-                id: "", name: "Automatic", detail: automaticName ?? "unavailable",
-                isEnabled: automatic != nil))
+        if matches("none no extra branch") {
+            sections.suggested.append(ComparisonBranchRow(id: "", name: "None", detail: "No extra branch"))
         }
 
         // origin's copy first, then the local branches origin has no copy of.
@@ -125,6 +85,6 @@ extension ComparisonBranchMenu {
 
     private static func row(_ branch: CleanupBranch) -> ComparisonBranchRow {
         ComparisonBranchRow(id: branch.ref, name: shortName(branch),
-                            detail: remote(branch) ?? "local", isEnabled: true)
+                            detail: remote(branch) ?? "local")
     }
 }

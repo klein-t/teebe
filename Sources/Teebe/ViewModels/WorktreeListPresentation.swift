@@ -71,13 +71,23 @@ extension AppModel {
     /// both the list grouping and the row read, so they never disagree.
     func worktreeStatus(for worktree: Worktree) -> WorktreeStatus {
         let info = selector.info(for: worktree)
-        let local = selector.worktree.statusPath == worktree.path ? selector.worktree.status : nil
         let snapshot = mergeStatus.snapshot
         return WorktreeStatus(
-            worktree: worktree,
-            merge: mergeStatus.entry(for: worktree.path, localStatus: local, localChangeCount: info.changeCount),
+            worktree: worktree, merge: mergeEntry(for: worktree, info: info),
             info: info, targetNames: snapshot?.targetNames ?? [],
             defaultBranch: snapshot?.targets.automatic?.shortName, isChecking: mergeStatus.isChecking)
+    }
+
+    /// What the removal sheet says for this row, from the same inputs as its mark.
+    func removalPrompt(for worktree: Worktree) -> WorktreeRemovalPrompt {
+        let info = selector.info(for: worktree)
+        return WorktreeRemovalPrompt(worktree: worktree, status: worktreeStatus(for: worktree),
+                                     merge: mergeEntry(for: worktree, info: info), isAgentActive: info.agentState != .idle)
+    }
+
+    private func mergeEntry(for worktree: Worktree, info: SelectorModel.WorktreeInfo) -> WorktreeMergeEntry? {
+        let local = selector.worktree.statusPath == worktree.path ? selector.worktree.status : nil
+        return mergeStatus.entry(for: worktree.path, localStatus: local, localChangeCount: info.changeCount)
     }
 
     func worktreeList(collapsed: Set<WorktreeGroup>) -> WorktreeListPresentation {

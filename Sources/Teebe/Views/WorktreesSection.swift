@@ -1,8 +1,8 @@
 import SwiftUI
 import TeebeCore
 
-/// WORKTREES accordion section: the list of a repo's worktrees with live pulse
-/// and ahead/behind sync arrows.
+/// WORKTREES accordion section: the list of a repo's worktrees, each with its one
+/// status mark, a hover card, a hover trash where removal is safe, and sync arrows.
 struct WorktreesSection: View {
     @Bindable var app: AppModel
     @Binding var isOpen: Bool
@@ -12,12 +12,23 @@ struct WorktreesSection: View {
     let revealHeight: CGFloat
     // Not `private`: that would make the memberwise initializer private too, and this
     // view has no other reason to hand-roll one.
-    @State var pendingRemoval: Worktree?
-    /// The merged folders the user is being asked to confirm, captured when the
-    /// header action is clicked so the list can keep changing underneath.
-    @State var pendingCleanup: [CleanupEntry] = []
-    /// The repository whose comparison branch is being picked in the sheet.
-    @State var branchPickerRepo: Repository?
+    @State var confirmation: RemovalConfirmation?
+
+    /// The removal being confirmed. The clean-up's folders are captured when the
+    /// header action is clicked, so the list can keep changing underneath.
+    enum RemovalConfirmation: Identifiable {
+        case worktree(Worktree)
+        case prune
+        case cleanup([CleanupEntry])
+
+        var id: String {
+            switch self {
+            case .worktree(let worktree): "worktree:" + worktree.path
+            case .prune: "prune"
+            case .cleanup(let entries): "cleanup:" + entries.map(\.id).joined(separator: "\n")
+            }
+        }
+    }
 
     private var selector: SelectorModel { app.selector }
 
@@ -62,14 +73,6 @@ struct WorktreesSection: View {
                             Divider()
                             Toggle(WorktreePreferences.groupingTitle, isOn: $app.groupWorktreesByMergeStatus)
                             Toggle(WorktreePreferences.fetchTitle, isOn: $app.fetchAutomatically)
-                            if let selected = selector.selectedRepo {
-                                Divider()
-                                Menu {
-                                    comparisonMenu(selected)
-                                } label: {
-                                    Label("Comparison Branch", systemImage: "arrow.triangle.branch")
-                                }
-                            }
                         } label: {
                             Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(Palette.secondaryText).hoverChip()
@@ -78,11 +81,11 @@ struct WorktreesSection: View {
                         .hoverHelp("Repository actions")
                     }
                 } else if let active = selector.selectedWorktree {
-                    HStack(spacing: 5) {
-                        // The dot carries the agent state too (amber = needs you),
-                        // so "needs you" stays visible even with the section folded.
-                        LiveDot(active: selector.info(for: active).isLive,
-                                agent: selector.info(for: active).agentState)
+                    HStack(spacing: 3) {
+                        // The row's mark, so "working" and "needs you" stay visible
+                        // even with the section folded.
+                        WorktreeMarkView(mark: app.worktreeStatus(for: active).mark, paused: selector.isLowPower)
+                            .frame(width: 18, height: 20)
                         // Same treatment as the collapsed FILES header's branch label;
                         // the accent colour (+ dot) marks this one as the active worktree.
                         Text(active.branch ?? active.name)
@@ -129,50 +132,51 @@ struct WorktreesSection: View {
             // invalidating the whole list would regroup and resize every row.
             Task { await app.mergeStatus.recheck(path: path) }
         }
-        .confirmationDialog(
-            app.groupActions.confirmationTitle(pendingCleanup),
-            isPresented: Binding(get: { !pendingCleanup.isEmpty }, set: { if !$0 { pendingCleanup = [] } }),
-            titleVisibility: .visible
-        ) {
-            Button("Remove", role: .destructive) {
-                app.groupActions.remove(pendingCleanup, deleteBranch: app.deleteBranchOnRemove)
-                pendingCleanup = []
-            }
-            Button("Cancel", role: .cancel) { pendingCleanup = [] }
-        } message: {
-            Text(app.groupActions.confirmationMessage(pendingCleanup, deleteBranch: app.deleteBranchOnRemove))
-        }
-        .confirmationDialog(
-            "Remove worktree \"\(pendingRemoval?.branch ?? pendingRemoval?.name ?? "")\"?",
-            isPresented: Binding(
-                get: { pendingRemoval != nil },
-                set: { if !$0 { pendingRemoval = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Remove Worktree", role: .destructive) {
-                guard let worktree = pendingRemoval else { return }
-                pendingRemoval = nil
-                app.removeWorktree(worktree)
-            }
-            Button("Cancel", role: .cancel) { pendingRemoval = nil }
-        } message: {
-            Text("This removes the worktree folder from your Mac. The branch is kept.")
-        }
+        .sheet(item: $confirmation) { confirmationSheet($0) }
         .sheet(isPresented: Binding(
             get: { app.newWorktree != nil },
             set: { if !$0 { app.newWorktree = nil } }
         )) {
             if let form = app.newWorktree { NewWorktreeSheet(app: app, form: form) }
         }
-        .sheet(item: $branchPickerRepo) { repo in
-            ComparisonBranchSheet(
-                branches: app.mergeStatus.snapshot?.targets.branches ?? [],
-                automatic: app.mergeStatus.snapshot?.targets.automatic,
-                saved: app.extraMergeTarget(for: repo.path) ?? ""
-            ) { ref in
-                app.setExtraMergeTarget(ref.isEmpty ? nil : ref, for: repo.path)
+    }
+
+    @ViewBuilder
+    private func confirmationSheet(_ confirmation: RemovalConfirmation) -> some View {
+        switch confirmation {
+        case .worktree(let worktree):
+            let prompt = app.removalPrompt(for: worktree)
+            WorktreeRemovalSheet(title: prompt.title, facts: prompt.facts, explanation: prompt.explanation,
+                                 deleteBranch: prompt.offersBranchDeletion ? $app.deleteBranchOnRemove : nil,
+                                 canConfirm: prompt.canRemove && !app.groupActions.isWorking) {
+                remove(worktree, deleteBranch: prompt.offersBranchDeletion && app.deleteBranchOnRemove)
             }
+        case .prune:
+            let missing = selector.worktrees.filter { app.worktreeStatus(for: $0).mark == .missing }.count
+            let prompt = WorktreeRemovalPrompt.prune(missingCount: missing)
+            WorktreeRemovalSheet(title: prompt.title, facts: prompt.facts, explanation: prompt.explanation,
+                                 actionTitle: "Forget", canConfirm: !app.groupActions.isWorking) {
+                app.groupActions.prune()
+            }
+        case .cleanup(let entries):
+            WorktreeRemovalSheet(title: app.groupActions.confirmationTitle(entries), facts: [],
+                                 explanation: app.groupActions.confirmationMessage(entries, deleteBranch: app.deleteBranchOnRemove),
+                                 deleteBranch: $app.deleteBranchOnRemove,
+                                 deleteBranchTitle: entries.count == 1 ? "Also delete the branch" : "Also delete the branches",
+                                 canConfirm: !app.groupActions.isWorking) {
+                app.groupActions.remove(entries, deleteBranch: app.deleteBranchOnRemove)
+            }
+        }
+    }
+
+    /// A merged row that is safe to remove goes through the checked clean-up path
+    /// (which can also delete its branch); anything else is a plain, non-forced
+    /// `git worktree remove`, which also forgets a single missing worktree.
+    private func remove(_ worktree: Worktree, deleteBranch: Bool) {
+        if case .remove(let entry)? = app.worktreeStatus(for: worktree).trashAction {
+            app.groupActions.perform(.remove(entry), deleteBranch: deleteBranch)
+        } else {
+            app.removeWorktree(worktree)
         }
     }
 
@@ -218,8 +222,7 @@ struct WorktreesSection: View {
                         .foregroundStyle(Palette.secondaryText)
                     // System colors throughout: they are the only ones that follow light,
                     // dark and Increase Contrast, so the row of headings stays consistent.
-                    GitStatusGlyph(group: group.kind).frame(width: 14, height: 15)
-                        .foregroundStyle(headerTint(group.kind))
+                    WorktreeMarkView(mark: headerMark(group.kind)).frame(width: 14, height: 15)
                     Text(group.kind.title).font(.system(size: 11, weight: .semibold))
                     Text("\(group.worktrees.count)").font(.system(size: 10)).monospacedDigit()
                         .foregroundStyle(Palette.secondaryText)
@@ -245,7 +248,7 @@ struct WorktreesSection: View {
         case .merged:
             let eligible = app.groupActions.eligibleEntries(for: group.worktrees)
             if !eligible.isEmpty {
-                Button("Clean up…") { pendingCleanup = eligible }
+                Button("Clean up…") { confirmation = .cleanup(eligible) }
                     .buttonStyle(IconButtonStyle(size: CGSize(width: 22, height: 18))).font(.system(size: 11))
                     .foregroundStyle(Palette.accent)
                     .disabled(app.groupActions.isWorking)
@@ -281,12 +284,13 @@ struct WorktreesSection: View {
         }
     }
 
-    private func headerTint(_ kind: WorktreeGroup) -> Color {
+    /// Each group heading wears the mark its rows share.
+    private func headerMark(_ kind: WorktreeGroup) -> WorktreeMark {
         switch kind {
-        case .merged: .green
-        case .localChanges: .orange
-        case .broken: .red
-        case .notMerged: .secondary
+        case .merged: .merged
+        case .localChanges: .uncommitted
+        case .broken: .missing
+        case .notMerged: .notMerged
         }
     }
 
@@ -302,64 +306,41 @@ struct WorktreesSection: View {
         .padding(.horizontal, 11).frame(height: WorktreeListPresentation.repoHeight)
     }
 
-    /// The comparison-branch choices. A Picker, so macOS draws the checkmark on the
-    /// chosen branch itself. Lives in the ⋯ menu, and inline when nothing resolved.
-    private func comparisonPicker(_ repo: Repository) -> some View {
-        let saved = app.extraMergeTarget(for: repo.path) ?? ""
-        let targets = app.mergeStatus.snapshot?.targets
-        return Picker("Comparison Branch", selection: Binding(
-            get: { saved },
-            set: { app.setExtraMergeTarget($0.isEmpty ? nil : $0, for: repo.path) }
-        )) {
-            Text(automaticLabel(targets?.automatic?.name)).tag("")
-            ForEach(ComparisonBranchMenu.entries(targets?.branches ?? [], saved: saved)) { branch in
-                Text(branch.name).tag(branch.ref)
-            }
-            if !saved.isEmpty, targets?.branches.contains(where: { $0.ref == saved }) != true {
-                Text("Saved branch not found. Choose another.").tag(saved)
-            }
-        }
-        .pickerStyle(.inline)
-        .labelsHidden()
-    }
-
-    /// The quick picks plus the way past them: every branch the repository has is
-    /// in the sheet.
-    @ViewBuilder
-    private func comparisonMenu(_ repo: Repository) -> some View {
-        comparisonPicker(repo)
-        Divider()
-        Button("Choose Comparison Branch…") { branchPickerRepo = repo }
-    }
-
-    /// One name for the automatic choice, with the branch it actually resolved to.
-    private func automaticLabel(_ name: String?) -> String {
-        name.map { "Automatic (\($0))" } ?? "Automatic"
-    }
-
     /// Grouping changes layout only: the same row labels work in both modes.
     private func worktreeRow(_ worktree: Worktree) -> some View {
-        let info = selector.info(for: worktree)
         let isActive = selector.selectedWorktree?.path == worktree.path
-        // Seam for the row redesign: the mark, hover card and trash all come from here.
+        // The mark, hover card and trash all come from here.
         let status = app.worktreeStatus(for: worktree)
         // The keyboard cursor (only while WORKTREES is the active section): an outline,
         // distinct from the filled accent of the committed worktree. Enter commits it.
         let isHighlighted = app.activeSection == .worktrees && selector.highlightedWorktree?.path == worktree.path
-        return HStack(spacing: 7) {
-            LiveDot(active: info.isLive, agent: info.agentState)
-                .frame(width: 11) // Align the label with the Changes list's icon column.
+        return HStack(spacing: 0) {
+            WorktreeMarkView(mark: status.mark, isSelected: isActive, paused: selector.isLowPower)
+                .frame(width: 22, height: 20)
             Text(worktree.branch ?? worktree.name)
                 .font(.system(size: 13, weight: .medium))
                 .lineLimit(1).truncationMode(.middle)
-                .frame(minWidth: 72, alignment: .leading)
-                .hoverHelp(([status.card.title + ".", status.card.subtitle] + status.card.facts.map { $0.text + "." })
-                    .joined(separator: " "), highlight: false)
-            Spacer(minLength: 4)
-            WorktreeRowBadges(status: status, info: info, isSelected: isActive)
+                .padding(.leading, 2)
+            if let action = status.trashAction {
+                WorktreeTrashButton(isSelected: isActive,
+                                    label: action == .prune ? "Forget missing worktrees" : "Remove worktree") {
+                    switch action {
+                    case .remove: confirmation = .worktree(worktree)
+                    case .prune: confirmation = .prune
+                    }
+                }
+                .padding(.leading, 4)
+            }
+            Spacer(minLength: 6)
+            WorktreeSyncArrows(remote: status.remote, isSelected: isActive)
         }
-        .padding(.leading, 30).padding(.trailing, 11).frame(height: WorktreeListPresentation.rowHeight)
+        // The name starts where the Changes list's labels do.
+        .padding(.leading, 24).padding(.trailing, 11).frame(height: WorktreeListPresentation.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .hoverCard(([status.card.title + ".", status.card.subtitle] + status.card.facts.map { $0.text + "." })
+            .joined(separator: " ")) {
+            WorktreeHoverCard(card: status.card, mark: status.mark, paused: selector.isLowPower)
+        }
         .rowHighlight(isSelected: isActive)
         .foregroundStyle(isActive ? .white : .primary)
         .overlay {
@@ -379,7 +360,7 @@ struct WorktreesSection: View {
             Button("Open in Finder") { app.revealPath(worktree.path) }
             Button("Open in Terminal") { app.openTerminal(at: worktree.path) }
             if !worktree.isPrimary {
-                Button("Remove Worktree…", role: .destructive) { pendingRemoval = worktree }
+                Button("Remove Worktree…", role: .destructive) { confirmation = .worktree(worktree) }
                     .disabled(worktree.isLocked)
             }
         }
@@ -387,164 +368,52 @@ struct WorktreesSection: View {
     }
 }
 
-/// Picking the branch worktrees are compared against. Every ref the repository has
-/// is reachable here: the handful anyone actually means first, the rest behind a
-/// search field.
-private struct ComparisonBranchSheet: View {
-    let branches: [CleanupBranch]
-    let automatic: CleanupBranch?
-    let saved: String
-    let onChoose: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var search = ""
-    @State private var selection: String?
-    @FocusState private var focus: Field?
-
-    private enum Field { case search, list }
-
-    private var sections: ComparisonBranchSections {
-        ComparisonBranchMenu.sections(branches, automatic: automatic, search: search)
-    }
+/// The row's hover-only trash, right after the name. Muted, red under the pointer
+/// (white on the selected row).
+private struct WorktreeTrashButton: View {
+    let isSelected: Bool
+    let label: String
+    let action: () -> Void
+    @Environment(\.rowHovered) private var rowHovered
+    @State private var hovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Comparison Branch").font(.system(size: 15, weight: .semibold))
-                Text("Worktrees are checked against this branch to decide whether they are merged.")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            searchField
-            branchList
-            HStack(spacing: 10) {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Choose") { choose(selection) }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(selection == nil)
-            }
+        Button(action: action) {
+            Image(systemName: "trash").font(.system(size: 11))
+                .foregroundStyle(color)
+                .frame(width: 20, height: 20)
+                .background(RoundedRectangle(cornerRadius: 5)
+                    .fill((isSelected ? Color.white : Color.primary).opacity(hovered ? (isSelected ? 0.18 : 0.06) : 0)))
+                .contentShape(Rectangle())
         }
-        .padding(16)
-        .frame(minWidth: 440, idealWidth: 440, maxWidth: 640, minHeight: 520, idealHeight: 520, maxHeight: 760)
-        .onAppear {
-            if !saved.isEmpty || automatic != nil { selection = saved }
-            focus = .search
-        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .opacity(rowHovered ? 1 : 0)
+        .allowsHitTesting(rowHovered)
+        .accessibilityLabel(label)
     }
 
-    private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(.secondary)
-            TextField("Search branches", text: $search)
-                .textFieldStyle(.plain).font(.system(size: 12))
-                .focused($focus, equals: .search)
-                .onSubmit(chooseOnlyMatch)
-                .onKeyPress(.downArrow) {
-                    moveIntoList()
-                    return .handled
-                }
-        }
-        .padding(.horizontal, 8).padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondary.opacity(0.25)))
-    }
-
-    private var branchList: some View {
-        let listed = sections
-        return ScrollViewReader { proxy in
-            List(selection: $selection) {
-                if !listed.suggested.isEmpty {
-                    Section("Suggested") { ForEach(listed.suggested) { branchRow($0) } }
-                }
-                if !listed.all.isEmpty {
-                    Section("All Branches") { ForEach(listed.all) { branchRow($0) } }
-                }
-            }
-            .listStyle(.bordered)
-            .focused($focus, equals: .list)
-            .overlay {
-                if listed.isEmpty {
-                    Text("No branches match.").font(.system(size: 12)).foregroundStyle(.secondary)
-                }
-            }
-            .onAppear {
-                guard let selection else { return }
-                proxy.scrollTo(selection, anchor: .center)
-            }
-        }
-    }
-
-    private func branchRow(_ item: ComparisonBranchRow) -> some View {
-        HStack(spacing: 8) {
-            Text(item.name).font(.system(size: 13)).lineLimit(1)
-            Spacer(minLength: 8)
-            Text(item.detail).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-            // Stays put while another row is highlighted, so the saved choice is
-            // still readable mid-pick.
-            Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold))
-                .opacity(item.id == saved ? 1 : 0)
-        }
-        .frame(height: 25)
-        .contentShape(Rectangle())
-        .opacity(item.isEnabled ? 1 : 0.4)
-        .tag(item.id)
-        .selectionDisabled(!item.isEnabled)
-        .simultaneousGesture(TapGesture(count: 2).onEnded { choose(item.id) })
-    }
-
-    /// One match and a Return means that one, without a trip to the list.
-    private func chooseOnlyMatch() {
-        let visible = sections.suggested + sections.all
-        guard visible.count == 1, let only = visible.first, only.isEnabled else { return }
-        choose(only.id)
-    }
-
-    private func moveIntoList() {
-        if selection == nil {
-            selection = (sections.suggested + sections.all).first { $0.isEnabled }?.id
-        }
-        focus = .list
-    }
-
-    private func choose(_ ref: String?) {
-        guard let ref, !ref.isEmpty || automatic != nil else { return }
-        onChoose(ref)
-        dismiss()
+    private var color: Color {
+        if isSelected { return hovered ? .white : .white.opacity(0.85) }
+        return hovered ? Color(nsColor: .systemRed) : Palette.secondaryText
     }
 }
 
-/// Conventional Git graph: round commits joined by a branch or merge line. One
-/// glyph per group, drawn at the head of its section.
-struct GitStatusGlyph: View {
-    let group: WorktreeGroup
+/// ↓behind ↑ahead against the remote copy of this same branch; nothing otherwise.
+private struct WorktreeSyncArrows: View {
+    let remote: RemoteSync
+    let isSelected: Bool
 
     var body: some View {
-        switch group {
-        case .notMerged:
-            Canvas { context, size in
-                context.scaleBy(x: size.width / 16, y: size.height / 16)
-                var lines = Path()
-                lines.move(to: CGPoint(x: 4, y: 11))
-                lines.addLine(to: CGPoint(x: 4, y: 2))
-                lines.move(to: CGPoint(x: 1, y: 5))
-                lines.addLines([CGPoint(x: 4, y: 2), CGPoint(x: 7, y: 5)])
-                lines.move(to: CGPoint(x: 12, y: 5))
-                lines.addLine(to: CGPoint(x: 12, y: 14))
-                lines.move(to: CGPoint(x: 9, y: 11))
-                lines.addLines([CGPoint(x: 12, y: 14), CGPoint(x: 15, y: 11)])
-                context.stroke(lines, with: .foreground, style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
-                var nodes = Path()
-                nodes.addEllipse(in: CGRect(x: 2, y: 11, width: 4, height: 4))
-                nodes.addEllipse(in: CGRect(x: 10, y: 1, width: 4, height: 4))
-                context.stroke(nodes, with: .foreground, lineWidth: 1.3)
+        if case let .sameBranch(_, ahead, behind) = remote, ahead > 0 || behind > 0 {
+            HStack(spacing: 5) {
+                if behind > 0 { Text("↓\(behind)").foregroundStyle(isSelected ? Color.white : Color.secondary) }
+                if ahead > 0 { Text("↑\(ahead)").foregroundStyle(isSelected ? Color.white : Color.primary) }
             }
-        case .broken:
-            ZStack {
-                Image(systemName: "folder").font(.system(size: 14))
-                Image(systemName: "xmark").font(.system(size: 6, weight: .bold)).offset(y: 2)
-            }
-        case .merged: Image(systemName: "checkmark.circle").font(.system(size: 13, weight: .medium))
-        case .localChanges: Image(systemName: "square.and.pencil").font(.system(size: 13, weight: .medium))
+            .font(.system(size: 10.5, design: .monospaced))
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(behind) to pull, \(ahead) to push")
         }
     }
 }
