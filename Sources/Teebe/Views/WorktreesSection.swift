@@ -193,11 +193,11 @@ struct WorktreesSection: View {
 
     private var worktreeListBody: some View {
         VStack(spacing: 0) {
-            ForEach(list.pinned) { worktreeRow($0) }
+            ForEach(list.pinned) { worktreeRow($0, grouped: false) }
             ForEach(list.groups) { group in
                 groupHeader(group)
                 if !collapsedGroups.contains(group.kind) {
-                    ForEach(group.worktrees) { worktreeRow($0) }
+                    ForEach(group.worktrees) { worktreeRow($0, grouped: true) }
                 }
             }
             if selector.worktrees.isEmpty {
@@ -306,8 +306,9 @@ struct WorktreesSection: View {
         .padding(.horizontal, 11).frame(height: WorktreeListPresentation.repoHeight)
     }
 
-    /// Grouping changes layout only: the same row labels work in both modes.
-    private func worktreeRow(_ worktree: Worktree) -> some View {
+    /// `grouped`: the row sits under a group heading, which carries its Git-state
+    /// mark (see `WorktreeStatus.rowMark`).
+    private func worktreeRow(_ worktree: Worktree, grouped: Bool) -> some View {
         let isActive = selector.selectedWorktree?.path == worktree.path
         // The mark, hover card and trash all come from here.
         let status = app.worktreeStatus(for: worktree)
@@ -315,7 +316,7 @@ struct WorktreesSection: View {
         // distinct from the filled accent of the committed worktree. Enter commits it.
         let isHighlighted = app.activeSection == .worktrees && selector.highlightedWorktree?.path == worktree.path
         return HStack(spacing: 0) {
-            WorktreeMarkView(mark: status.mark, isSelected: isActive, paused: selector.isLowPower)
+            WorktreeMarkView(mark: status.rowMark(grouped: grouped), isSelected: isActive, paused: selector.isLowPower)
                 .frame(width: 22, height: 20)
             Text(worktree.branch ?? worktree.name)
                 .font(.system(size: 13, weight: .medium))

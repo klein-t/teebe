@@ -67,6 +67,14 @@ struct WorktreeStatus: Equatable {
 
     var showsTrash: Bool { trashAction != nil }
 
+    /// The mark the row itself draws. Inside a group the heading already says the
+    /// Git state, so a grouped row only keeps an agent orb; pinned rows sit above
+    /// the groups and keep their mark.
+    func rowMark(grouped: Bool) -> WorktreeMark {
+        guard grouped, !isPinned, mark != .working, mark != .waiting else { return mark }
+        return .none
+    }
+
     private static func group(_ facts: Facts, isMergedClean: Bool) -> WorktreeGroup {
         if facts.hasUncommitted { return .localChanges }
         if facts.isMissing { return .broken }

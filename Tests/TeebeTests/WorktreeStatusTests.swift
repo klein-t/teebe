@@ -85,6 +85,23 @@ struct WorktreeStatusTests {
         #expect(status(entry(primary, merged: [dev])).isPinned)
     }
 
+    @Test("grouped rows leave the git-state mark to their group heading; orbs and pinned rows keep theirs")
+    func groupedRowMark() {
+        let merged = status(entry(merged: [dev]))
+        #expect(merged.rowMark(grouped: false) == .merged)
+        #expect(merged.rowMark(grouped: true) == .none)
+        #expect(status(entry(), count: 2).rowMark(grouped: true) == .none)
+        #expect(status(entry()).rowMark(grouped: true) == .none)
+        #expect(status(entry { $0.isBroken = true }).rowMark(grouped: true) == .none)
+        #expect(status(entry(), info: .init(agentState: .working)).rowMark(grouped: true) == .working)
+        #expect(status(entry(), info: .init(agentState: .needsAttention)).rowMark(grouped: true) == .waiting)
+        let devTree = Worktree(path: "/dev", branch: "dev")
+        let target = entry(devTree, merged: [dev]) { $0.isTarget = true }
+        #expect(status(target, count: 1).rowMark(grouped: true) == .uncommitted)
+        let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
+        #expect(status(entry(primary, merged: [dev])).rowMark(grouped: true) == .merged)
+    }
+
     @Test("cards match the agreed copy")
     func cards() {
         let merged = status(entry(merged: [main, dev]))
