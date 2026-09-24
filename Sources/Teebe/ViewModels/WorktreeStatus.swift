@@ -5,7 +5,7 @@ import TeebeCore
 /// applies wins. Agent activity and uncommitted work outrank what Git says about
 /// merging, because they are what needs attention now.
 enum WorktreeMark: Equatable {
-    /// An agent is mid-turn, or files are changing with no agent (the `LiveDot` rule).
+    /// An agent is mid-turn, or files are changing with no agent.
     case working
     /// The agent finished its turn and is waiting for the user.
     case waiting
@@ -307,6 +307,24 @@ struct WorktreeRemovalPrompt: Equatable {
     /// Removal is never forced, so Git refuses a folder with uncommitted work or a
     /// submodule. The prompt says why and does not offer Remove.
     let canRemove: Bool
+
+    private init(title: String, facts: [WorktreeCardFact], explanation: String) {
+        self.title = title
+        self.facts = facts
+        self.explanation = explanation
+        offersBranchDeletion = false
+        canRemove = true
+    }
+
+    /// The missing-row trash: `git worktree prune` forgets every missing worktree at
+    /// once, so the prompt says so instead of naming one row.
+    static func prune(missingCount: Int) -> WorktreeRemovalPrompt {
+        WorktreeRemovalPrompt(
+            title: "Forget missing worktrees?",
+            facts: [WorktreeCardFact(icon: .missing, text: WorktreeWording.plural(missingCount, "missing worktree"), tone: .muted)],
+            explanation: "Clears Git’s leftover records of every missing worktree, not only this one. "
+                + "Nothing on disk changes and branches are kept.")
+    }
 
     init(worktree: Worktree, status: WorktreeStatus, merge: WorktreeMergeEntry?, isAgentActive: Bool) {
         let name = worktree.branch ?? worktree.name

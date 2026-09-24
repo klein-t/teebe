@@ -41,7 +41,7 @@ struct WorktreeStatusTests {
         #expect(status(entry(merged: [dev]) { $0.hasLocalChanges = true }).mark == .uncommitted)
         #expect(status(merged, count: 2, info: .init(agentState: .needsAttention)).mark == .waiting)
         #expect(status(merged, count: 2, info: .init(agentState: .working)).mark == .working)
-        // Files changing with no agent is the same pulsing rule as LiveDot…
+        // Files changing with no agent reads as working too…
         #expect(status(merged, info: .init(isLive: true)).mark == .working)
         // …but a waiting agent outranks stray file activity.
         #expect(status(merged, info: .init(isLive: true, agentState: .needsAttention)).mark == .waiting)
@@ -211,6 +211,18 @@ struct WorktreeStatusTests {
         #expect(forget.title == "Forget “feature”?")
         #expect(forget.canRemove)
         #expect(!forget.offersBranchDeletion)
+    }
+
+    @Test("the missing-row trash prunes every missing record, and its prompt says so")
+    func prunePrompt() {
+        let one = WorktreeRemovalPrompt.prune(missingCount: 1)
+        #expect(one.title == "Forget missing worktrees?")
+        #expect(one.facts.map { $0.text } == ["1 missing worktree"])
+        #expect(one.explanation == "Clears Git’s leftover records of every missing worktree, not only this one. "
+                + "Nothing on disk changes and branches are kept.")
+        #expect(one.canRemove)
+        #expect(!one.offersBranchDeletion)
+        #expect(WorktreeRemovalPrompt.prune(missingCount: 3).facts.map { $0.text } == ["3 missing worktrees"])
     }
 
     @Test("lists read naturally")
