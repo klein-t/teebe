@@ -9,6 +9,8 @@ import TeebeCore
 final class SelectorModel {
     /// Per-worktree sync/activity summary for the WORKTREES list.
     struct WorktreeInfo: Equatable {
+        /// Commits to push / pull against the remote copy of this same branch;
+        /// zero when the branch tracks another branch or nothing (see `remote`).
         var ahead: Int = 0
         var behind: Int = 0
         var changeCount: Int = 0
@@ -16,6 +18,8 @@ final class SelectorModel {
         /// What the AI agent working in this worktree is doing (from its
         /// Claude Code session log).
         var agentState: AgentActivityState = .idle
+        /// The branch against its same-named remote branch.
+        var remote: RemoteSync = .notOnRemote
 
         /// Whether there is anything to pull or push — rows hide the "↓ ↑"
         /// indicator entirely when both counts are zero.
@@ -285,12 +289,14 @@ final class SelectorModel {
         for worktree in worktrees {
             let status = statuses[worktree.path] ?? nil
             let agent = agentStates[worktree.path] ?? .idle
+            let remote = status.map(RemoteSync.init(status:)) ?? .notOnRemote
             info[worktree.path] = WorktreeInfo(
-                ahead: status?.ahead ?? 0,
-                behind: status?.behind ?? 0,
+                ahead: remote.ahead,
+                behind: remote.behind,
                 changeCount: status?.changes.count ?? 0,
                 isLive: environment.activityMonitor.isBusy(worktreePath: worktree.path, within: 5, now: now),
-                agentState: agent
+                agentState: agent,
+                remote: remote
             )
         }
         notifyAgentTransitions(from: worktreeInfo, to: info)

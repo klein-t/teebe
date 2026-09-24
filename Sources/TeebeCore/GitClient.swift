@@ -50,6 +50,9 @@ public struct StatusResult: Equatable, Sendable {
     public var isDetached: Bool
     public var oid: String?
     public var changes: [FileChange]
+    /// An upstream is configured but Git has no ahead/behind for it: the remote
+    /// branch it tracked is gone (deleted, then pruned by a fetch).
+    public var isUpstreamGone: Bool
 
     public init(
         branch: String? = nil,
@@ -58,7 +61,8 @@ public struct StatusResult: Equatable, Sendable {
         behind: Int = 0,
         isDetached: Bool = false,
         oid: String? = nil,
-        changes: [FileChange] = []
+        changes: [FileChange] = [],
+        isUpstreamGone: Bool = false
     ) {
         self.branch = branch
         self.upstream = upstream
@@ -67,6 +71,7 @@ public struct StatusResult: Equatable, Sendable {
         self.isDetached = isDetached
         self.oid = oid
         self.changes = changes
+        self.isUpstreamGone = isUpstreamGone
     }
 }
 
