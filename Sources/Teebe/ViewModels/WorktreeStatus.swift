@@ -133,6 +133,12 @@ private struct Facts {
     var hasUncommitted: Bool { changes > 0 || entry?.hasLocalChanges == true }
     var isMissing: Bool { entry?.isBroken == true }
     var isTarget: Bool { entry?.isTarget == true }
+    /// Merged and unprotected: only the uncommitted work stands in the way.
+    var isRemovableOnceClean: Bool {
+        guard var clean = entry else { return false }
+        clean.hasLocalChanges = false
+        return clean.canRemove(includingIgnored: true)
+    }
 
     func card(mark: WorktreeMark, isRemovable: Bool, defaultBranch: String?) -> WorktreeCard {
         let remote = WorktreeWording.remoteFact(info.remote)
@@ -154,7 +160,7 @@ private struct Facts {
         case .uncommitted:
             return WorktreeCard(
                 title: changes > 0 ? WorktreeWording.plural(changes, "uncommitted change") : "Uncommitted changes",
-                subtitle: entry?.mergeStatus == .merged ? "Commit or discard them before removing." : "Not yet committed.",
+                subtitle: isRemovableOnceClean ? "Commit or discard them before removing." : "Not committed yet.",
                 facts: [isTarget ? nil : mergeFact, remote].compactMap { $0 } + details())
         case .missing:
             return WorktreeCard(title: "Worktree missing",

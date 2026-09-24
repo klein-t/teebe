@@ -60,6 +60,8 @@ struct WorktreeStatusTests {
         #expect(status(target).isPinned)
         #expect(!status(target).showsTrash)
         #expect(status(target, count: 1).mark == .uncommitted)
+        // A target can't be removed, so its edits are not a removal blocker.
+        #expect(status(target, count: 1).card.subtitle == "Not committed yet.")
         #expect(status(target, info: .init(agentState: .working)).mark == .working)
         #expect(!facts(status(target, count: 1)).contains { $0.hasPrefix("Merged") })
         #expect(status(target).card.title == "dev")
@@ -83,6 +85,17 @@ struct WorktreeStatusTests {
         let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
         #expect(!status(entry(primary, merged: [dev])).showsTrash)
         #expect(status(entry(primary, merged: [dev])).isPinned)
+    }
+
+    @Test("only a row that would otherwise be safe to delete says to commit before removing")
+    func uncommittedSubtitle() {
+        #expect(status(entry(merged: [dev]), count: 2).card.subtitle == "Commit or discard them before removing.")
+        let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
+        #expect(status(entry(locked, merged: [dev]) { $0.problem = "Locked worktree" }, count: 2).card.subtitle
+                == "Not committed yet.")
+        let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
+        #expect(status(entry(primary, merged: [dev]), count: 2).card.subtitle == "Not committed yet.")
+        #expect(status(entry(), count: 2).card.subtitle == "Not committed yet.")
     }
 
     @Test("grouped rows leave the git-state mark to their group heading; orbs and pinned rows keep theirs")
@@ -121,7 +134,7 @@ struct WorktreeStatusTests {
 
         let unmerged = status(entry(), count: 1, info: .init(remote: .sameBranch(remote: "origin", ahead: 4, behind: 0)))
         #expect(unmerged.card.title == "1 uncommitted change")
-        #expect(unmerged.card.subtitle == "Not yet committed.")
+        #expect(unmerged.card.subtitle == "Not committed yet.")
         #expect(unmerged.card.facts == [
             WorktreeCardFact(icon: .branch, text: "Not merged yet", tone: .muted),
             WorktreeCardFact(icon: .cloud, text: "4 to push", tone: .normal)
