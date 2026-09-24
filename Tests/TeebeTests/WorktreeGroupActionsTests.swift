@@ -8,6 +8,10 @@ import TeebeCore
 private actor RemovalStub: WorktreeCleanupChecking {
     let snapshot: CleanupSnapshot
     private(set) var removed: [String] = []
+    private(set) var branchRequests: [Bool] = []
+    /// What a removal says happened to the branch when deletion was asked for.
+    var branchOutcome: BranchDeletion = .deleted
+    func setBranchOutcome(_ outcome: BranchDeletion) { branchOutcome = outcome }
     /// The worktree this refuses to remove.
     var refuses: String?
     init(snapshot: CleanupSnapshot, refuses: String? = nil) {
@@ -16,13 +20,15 @@ private actor RemovalStub: WorktreeCleanupChecking {
     }
     private(set) var scans = 0
     func resetScans() { scans = 0 }
-    func scan(repoPath: String, targetOverride: String?) async throws -> CleanupSnapshot {
+    func scan(repoPath: String, extraTarget: String?) async throws -> CleanupSnapshot {
         scans += 1
         return snapshot
     }
-    func remove(repoPath: String, entry: CleanupEntry, target: CleanupBranch, includingIgnored: Bool) async throws {
+    func remove(repoPath: String, entry: CleanupEntry, includingIgnored: Bool, deleteBranch: Bool) async throws -> BranchDeletion {
         guard entry.id != refuses else { throw CleanupError.changed }
         removed.append(entry.id)
+        branchRequests.append(deleteBranch)
+        return deleteBranch ? branchOutcome : .notRequested
     }
 }
 
@@ -48,7 +54,7 @@ struct WorktreeGroupActionsTests {
 
     private func snapshot(_ entries: [CleanupEntry]) -> CleanupSnapshot {
         let targets = CleanupTargets.parse("refs/heads/main\u{0}abc\u{0}\u{0}\n")
-        return CleanupSnapshot(targets: targets, target: targets.branches.first, entries: entries)
+        return CleanupSnapshot(targets: targets, mergeTargets: targets.branches, entries: entries)
     }
 
     /// Bring an app up on `repo` with `stub`'s scan as the merge result the rows show.
@@ -57,7 +63,7 @@ struct WorktreeGroupActionsTests {
         let app = AppModel(environment: makeTestEnvironment(git: git, monitor: monitor), mergeService: stub)
         app.mergeStatus.scanDebounce = .zero
         _ = await app.addRepository(path: repo.path)
-        await app.mergeStatus.refresh(repo: repo, targetOverride: nil, enabled: true, revision: nil)
+        await app.mergeStatus.refresh(repo: repo, extraTarget: nil, enabled: true, revision: nil)
         return app
     }
 
@@ -98,11 +104,14 @@ struct WorktreeGroupActionsTests {
 
         #expect(actions.confirmationTitle([plain]) == "Remove 1 worktree folder?")
         #expect(actions.confirmationTitle([plain, ignored]) == "Remove 2 worktree folders?")
-        #expect(actions.confirmationMessage([plain])
+        #expect(actions.confirmationMessage([plain], deleteBranch: false)
                 == "The folders will be deleted from your Mac. Branches will be kept.")
-        #expect(actions.confirmationMessage([plain, ignored])
+        #expect(actions.confirmationMessage([plain, ignored], deleteBranch: false)
                 == "The folders will be deleted from your Mac. Branches will be kept. "
                 + "Ignored files such as build output will be deleted too.")
+        #expect(actions.confirmationMessage([plain], deleteBranch: true)
+                == "The folders will be deleted from your Mac. "
+                + "Their local branches will be deleted too; remote branches are kept.")
     }
 
     @Test("one refused removal is reported and the rest still run, then the list is rescanned")
@@ -121,7 +130,7 @@ struct WorktreeGroupActionsTests {
         git.worktreesResult = [primary, Worktree(path: "/a", branch: "a")]
         counter.reset()
         await stub.resetScans()
-        await actions.remove(entries)?.value
+        await actions.remove(entries, deleteBranch: false)?.value
 
         #expect(await stub.removed == ["/b"])
         #expect(app.errorMessage == "Couldn't remove a: " + (CleanupError.changed.errorDescription ?? ""))
@@ -144,7 +153,7 @@ struct WorktreeGroupActionsTests {
         let actions = WorktreeGroupActions(app: app, service: stub)
 
         monitor.recordActivity(worktreePath: "/busy", at: Date())
-        await actions.remove(entries)?.value
+        await actions.remove(entries, deleteBranch: true)?.value
 
         #expect(await stub.removed.isEmpty)
         #expect(app.errorMessage == "Couldn't remove busy: it is in use.")
@@ -170,26 +179,67 @@ struct WorktreeGroupActionsTests {
         #expect(!actions.isWorking)
     }
 
-    @Test("the comparison branch is remembered per repository and forgotten with it")
-    func comparisonBranchPreference() async {
+    @Test("the row trash removes a merged row, browsed or not, passing the branch choice through")
+    func trashRemovesMergedRow() async {
+        let git = FakeGitClient()
+        let feature = Worktree(path: "/feature", branch: "feature", head: "abc")
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true), feature]
+        let entry = merged("/feature", branch: "feature")
+        let stub = RemovalStub(snapshot: snapshot([entry]))
+        let app = await app(git, stub: stub)
+        await app.selector.selectWorktree(feature)
+        let actions = WorktreeGroupActions(app: app, service: stub)
+        // Bulk clean-up leaves the browsed row alone…
+        #expect(actions.eligibleEntries(for: git.worktreesResult).isEmpty)
+        // …but the row's own trash is an explicit choice.
+        await stub.setBranchOutcome(.kept)
+        await actions.perform(.remove(entry), deleteBranch: true)?.value
+        #expect(await stub.removed == ["/feature"])
+        #expect(await stub.branchRequests == [true])
+        #expect(app.errorMessage == "Removed feature, but kept its branch: it changed or Git refused to delete it.")
+    }
+
+    @Test("the trash on a missing row prunes")
+    func trashPrunesMissingRow() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        let stub = RemovalStub(snapshot: snapshot([]))
+        let app = await app(git, stub: stub)
+        await WorktreeGroupActions(app: app, service: stub).perform(.prune, deleteBranch: true)?.value
+        #expect(git.prunedRepos == ["/repo"])
+    }
+
+    @Test("the extra merge target is remembered per repository and forgotten with it")
+    func extraMergeTargetPreference() async {
         let git = FakeGitClient()
         git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
         let env = makeTestEnvironment(git: git)
         let app = AppModel(environment: env)
         _ = await app.addRepository(path: repo.path)
 
-        app.setCleanupTarget("refs/heads/dev", for: repo.path)
+        let revision = app.mergeTargetRevision
+        app.setExtraMergeTarget("refs/heads/dev", for: repo.path)
+        #expect(app.mergeTargetRevision == revision + 1)
         app.saveLayout(SectionLayout(windowHeight: 400), forRepo: repo.path)
-        #expect(AppModel(environment: env).cleanupTarget(for: repo.path) == "refs/heads/dev")
-        #expect(app.cleanupTarget(for: "/another") == nil)
+        #expect(AppModel(environment: env).extraMergeTarget(for: repo.path) == "refs/heads/dev")
+        #expect(app.extraMergeTarget(for: "/another") == nil)
 
-        app.setCleanupTarget(nil, for: repo.path)
+        app.setExtraMergeTarget(nil, for: repo.path)
         #expect(env.store.load().cleanupTargetByRepo?[repo.path] == nil)
 
-        app.setCleanupTarget("refs/heads/dev", for: repo.path)
+        app.setExtraMergeTarget("refs/heads/dev", for: repo.path)
         app.removeRepository(repo)
         let reopened = AppModel(environment: env)
-        #expect(reopened.cleanupTarget(for: repo.path) == nil)
+        #expect(reopened.extraMergeTarget(for: repo.path) == nil)
         #expect(reopened.layout(forRepo: repo.path) == nil)
+    }
+
+    @Test("deleting the branch on removal defaults on and remembers the last choice")
+    func deleteBranchPreference() {
+        let env = makeTestEnvironment()
+        #expect(AppModel(environment: env).deleteBranchOnRemove)
+        AppModel(environment: env).deleteBranchOnRemove = false
+        #expect(!AppModel(environment: env).deleteBranchOnRemove)
+        #expect(env.store.load().deleteBranchOnRemove == false)
     }
 }

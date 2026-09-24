@@ -6,41 +6,50 @@ import TeebeCore
 @MainActor
 @Suite("Worktree groups and section sizing")
 struct WorktreeListPresentationTests {
-    @Test("dirty and broken worktrees never enter the merged group; ignored files stay details")
+    @Test("dirty and broken worktrees never enter the Safe to delete group; ignored files stay details")
     func classification() {
         var entry = CleanupEntry(worktree: Worktree(path: "/feature"))
         entry.mergeStatus = .merged
-        #expect(WorktreeGroup.classify(status(entry)) == .merged)
+        #expect(status(entry).group == .merged)
         entry.hasIgnoredFiles = true
-        #expect(WorktreeGroup.classify(status(entry)) == .merged)
+        #expect(status(entry).group == .merged)
         #expect(!entry.canRemove(includingIgnored: false))
         entry.hasLocalChanges = true
-        #expect(WorktreeGroup.classify(status(entry)) == .localChanges)
+        #expect(status(entry).group == .localChanges)
+        entry.hasLocalChanges = false
         entry.isBroken = true
-        #expect(WorktreeGroup.classify(status(entry)) == .broken)
+        #expect(status(entry).group == .broken)
     }
 
-    @Test("a status Git cannot confirm is not merged, and says why in its own line")
+    @Test("a status Git cannot confirm is not merged")
     func unconfirmedFoldsIntoNotMerged() {
         var skipped = CleanupEntry(worktree: Worktree(path: "/skipped"))
         skipped.mergeStatus = .merged
         skipped.hasUncheckedFiles = true
-        #expect(WorktreeGroup.classify(status(skipped)) == .notMerged)
-        #expect(detail(skipped) == "Some files are marked unchanged in Git.")
+        #expect(status(skipped).group == .notMerged)
 
         var submodule = CleanupEntry(worktree: Worktree(path: "/submodule"))
         submodule.mergeStatus = .merged
         submodule.hasSubmodules = true
-        #expect(WorktreeGroup.classify(status(submodule)) == .notMerged)
-        #expect(detail(submodule) == "Contains a submodule.")
+        #expect(status(submodule).group == .notMerged)
 
         var unknown = CleanupEntry(worktree: Worktree(path: "/unknown"))
         unknown.problem = "Could not inspect this worktree"
-        #expect(WorktreeGroup.classify(status(unknown)) == .notMerged)
-        #expect(detail(unknown) == "Could not inspect this worktree.")
+        #expect(status(unknown).group == .notMerged)
 
         // No result at all is the same answer: nothing confirmed it merged.
-        #expect(WorktreeGroup.classify(nil) == .notMerged)
+        let unscanned = WorktreeStatus(worktree: Worktree(path: "/new"), merge: nil, info: .init(),
+                                       targetNames: ["dev"], defaultBranch: "dev", isChecking: true)
+        #expect(unscanned.group == .notMerged)
+    }
+
+    @Test("agent activity never moves a row between groups")
+    func agentDoesNotRegroup() {
+        var entry = CleanupEntry(worktree: Worktree(path: "/feature", branch: "feature"))
+        entry.mergeStatus = .merged
+        for agent in [AgentActivityState.idle, .working, .needsAttention] {
+            #expect(status(entry, info: .init(agentState: agent)).group == .merged)
+        }
     }
 
     @Test("group order, collapsed navigation, and the comparison checkout stay consistent")
@@ -57,11 +66,11 @@ struct WorktreeListPresentationTests {
         targetEntry.isTarget = true
         let trees = [primary, clean, dirty, target]
         let entries = [clean.path: status(cleanEntry), dirty.path: status(dirtyEntry), target.path: status(targetEntry)]
-        let open = WorktreeListPresentation(worktrees: trees, entries: entries, grouped: true,
+        let open = WorktreeListPresentation(worktrees: trees, statuses: entries, grouped: true,
                                            collapsed: [], hasRepository: true)
-        let closed = WorktreeListPresentation(worktrees: trees, entries: entries, grouped: true,
+        let closed = WorktreeListPresentation(worktrees: trees, statuses: entries, grouped: true,
                                              collapsed: [.merged], hasRepository: true)
-        #expect(open.visibleWorktrees.map(\.path) == ["/primary", "/dev", "/merged", "/dirty"])
+        #expect(open.visibleWorktrees.map(\.path) == ["/primary", "/dev", "/dirty", "/merged"])
         #expect(closed.visibleWorktrees.map(\.path) == ["/primary", "/dev", "/dirty"])
         #expect(open.naturalHeight - closed.naturalHeight == WorktreeListPresentation.rowHeight)
         let selector = AppModel(environment: makeTestEnvironment()).selector
@@ -70,59 +79,46 @@ struct WorktreeListPresentationTests {
         #expect(selector.highlightedWorktree?.path == "/dev")
         selector.moveWorktreeHighlight(by: 10, in: closed.visibleWorktrees)
         #expect(selector.highlightedWorktree?.path == "/dirty")
-        let flat = WorktreeListPresentation(worktrees: trees, entries: entries, grouped: false,
+        let flat = WorktreeListPresentation(worktrees: trees, statuses: entries, grouped: false,
                                            collapsed: [.merged], hasRepository: true)
         #expect(flat.groups.isEmpty)
         #expect(flat.visibleWorktrees == trees)
     }
 
-    @Test("group tooltips name the branch merge status was compared against")
+    @Test("group tooltips name every branch worktrees are checked against")
     func groupExplanations() {
-        #expect(WorktreeGroup.merged.explanation(comparedTo: "origin/dev")
-            == "Every commit is already in origin/dev and the folder has no uncommitted changes.")
-        #expect(WorktreeGroup.localChanges.explanation(comparedTo: "origin/dev")
+        #expect(WorktreeGroup.merged.explanation(targets: ["dev", "main"])
+            == "Merged into dev or main with nothing uncommitted. Removing the folder loses no work.")
+        #expect(WorktreeGroup.localChanges.explanation(targets: ["dev"])
             == "Edited or new files in the folder that are not committed yet.")
-        #expect(WorktreeGroup.notMerged.explanation(comparedTo: "origin/dev")
-            == "The folder is clean, but its commits are not in origin/dev yet.")
-        #expect(WorktreeGroup.broken.explanation(comparedTo: "origin/dev")
-            == "Git still lists this worktree, but its folder or .git link is missing.")
-        // The real comparison branch is substituted, not a hardcoded default.
-        #expect(WorktreeGroup.merged.explanation(comparedTo: "main").contains("already in main and"))
+        #expect(WorktreeGroup.notMerged.explanation(targets: ["dev", "develop", "main"])
+            == "Committed work not found in dev, develop or main yet, or Git couldn't check.")
+        #expect(WorktreeGroup.broken.explanation(targets: [])
+            == "Git still lists these worktrees, but their folder or .git link is missing.")
+        #expect(WorktreeGroup.notMerged.explanation(targets: []).contains("a merge target"))
     }
 
     @Test("groups read in a fixed order and their rows sort by branch name")
     func groupOrderAndRowSorting() {
         #expect(WorktreeGroup.allCases.map(\.title)
-            == ["Merged", "Uncommitted changes", "Unmerged commits", "Broken"])
+            == ["Uncommitted changes", "Not merged", "Safe to delete", "Missing"])
         // The raw values back the persisted collapsed-group state: renaming the
         // titles must not silently reset a saved layout.
-        #expect(WorktreeGroup.allCases.map(\.rawValue)
+        #expect(Set(WorktreeGroup.allCases.map(\.rawValue))
             == ["merged", "localChanges", "notMerged", "broken"])
         let zed = Worktree(path: "/one", branch: "zed")
         let alpha = Worktree(path: "/two", branch: "alpha")
         let unnamed = Worktree(path: "/mid")   // detached: falls back to the folder name
-        var entries: [String: WorktreeMergeEntry] = [:]
+        var entries: [String: WorktreeStatus] = [:]
         for tree in [zed, alpha, unnamed] {
             var entry = CleanupEntry(worktree: tree)
             entry.mergeStatus = .merged
             entries[tree.path] = status(entry)
         }
-        let list = WorktreeListPresentation(worktrees: [zed, alpha, unnamed], entries: entries,
+        let list = WorktreeListPresentation(worktrees: [zed, alpha, unnamed], statuses: entries,
                                             grouped: true, collapsed: [], hasRepository: true)
         #expect(list.groups.map(\.kind) == [.merged])
         #expect(list.groups[0].worktrees.map { $0.branch ?? $0.name } == ["alpha", "mid", "zed"])
-    }
-
-    @Test("with no comparison branch the list stays flat and asks for one once")
-    func noComparisonBranch() {
-        let trees = [Worktree(path: "/primary", isPrimary: true), Worktree(path: "/feature", branch: "feature")]
-        var unresolved = CleanupEntry(worktree: trees[1])
-        unresolved.problem = "Choose a comparison branch"
-        let list = WorktreeListPresentation(worktrees: trees, entries: [trees[1].path: status(unresolved)],
-                                            grouped: true, collapsed: [], hasRepository: true, needsTarget: true)
-        #expect(list.needsTarget)
-        #expect(list.groups.isEmpty)
-        #expect(list.visibleWorktrees == trees)
     }
 
     @Test("a worktree removed mid-scan leaves no row behind")
@@ -135,7 +131,7 @@ struct WorktreeListPresentationTests {
         goneEntry.mergeStatus = .merged
         // The scan finished after the worktree was removed, so its result outlives it.
         let list = WorktreeListPresentation(worktrees: [kept],
-                                            entries: [kept.path: status(keptEntry), gone.path: status(goneEntry)],
+                                            statuses: [kept.path: status(keptEntry), gone.path: status(goneEntry)],
                                             grouped: true, collapsed: [], hasRepository: true)
         #expect(list.visibleWorktrees.map(\.path) == ["/kept"])
         #expect(!list.groups.contains { $0.worktrees.contains { $0.path == "/gone" } })
@@ -154,7 +150,7 @@ struct WorktreeListPresentationTests {
         dirtyEntry.hasLocalChanges = true
         let list = WorktreeListPresentation(
             worktrees: [merged, dirty],
-            entries: [merged.path: status(mergedEntry), dirty.path: status(dirtyEntry)],
+            statuses: [merged.path: status(mergedEntry), dirty.path: status(dirtyEntry)],
             grouped: true, collapsed: [.merged, .localChanges], hasRepository: true)
         #expect(list.pinned.isEmpty)
         #expect(list.visibleWorktrees.isEmpty)
@@ -178,10 +174,10 @@ struct WorktreeListPresentationTests {
         staleEntry.mergeStatus = .notConfirmed
         let list = WorktreeListPresentation(
             worktrees: [merged, broken, stale],
-            entries: [merged.path: status(mergedEntry), broken.path: status(brokenEntry),
+            statuses: [merged.path: status(mergedEntry), broken.path: status(brokenEntry),
                       stale.path: status(staleEntry)],
             grouped: true, collapsed: [], hasRepository: true)
-        #expect(list.groups.map(\.kind) == [.merged, .notMerged, .broken])
+        #expect(list.groups.map(\.kind) == [.notMerged, .merged, .broken])
         #expect(list.naturalHeight == WorktreeListPresentation.repoHeight
                 + WorktreeListPresentation.verticalPadding
                 + 3 * WorktreeListPresentation.rowHeight
@@ -206,7 +202,7 @@ struct WorktreeListPresentationTests {
         targetEntry.isTarget = true
         let closed = WorktreeListPresentation(
             worktrees: git.worktreesResult,
-            entries: [clean.path: status(cleanEntry), dirty.path: status(dirtyEntry), target.path: status(targetEntry)],
+            statuses: [clean.path: status(cleanEntry), dirty.path: status(dirtyEntry), target.path: status(targetEntry)],
             grouped: true, collapsed: [.merged], hasRepository: true)
         #expect(!closed.visibleWorktrees.contains { $0.path == "/aaa" })
 
@@ -296,9 +292,8 @@ struct WorktreeListPresentationTests {
                                            draggingDivider: false, liveResizing: true))
     }
 
-    private func status(_ entry: CleanupEntry) -> WorktreeMergeEntry { WorktreeMergeEntry(entry: entry) }
-
-    private func detail(_ entry: CleanupEntry) -> String {
-        MergeIndicatorPresentation(status: status(entry), targetName: "dev", isChecking: false).detail
+    private func status(_ entry: CleanupEntry, info: SelectorModel.WorktreeInfo = .init()) -> WorktreeStatus {
+        WorktreeStatus(worktree: entry.worktree, merge: WorktreeMergeEntry(entry: entry), info: info,
+                       targetNames: ["dev"], defaultBranch: "dev", isChecking: false)
     }
 }

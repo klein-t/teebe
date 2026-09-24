@@ -14,8 +14,9 @@ struct WorktreeMergeEntry: Equatable {
     var localChangeCount = 0
 }
 
-/// Row results can be reused while refreshing, keyed by repository and comparison
-/// branch, so switching back and forth does not rescan every worktree.
+/// Row results can be reused while refreshing, keyed by repository and extra merge
+/// target, so switching back and forth does not rescan every worktree. Results are
+/// stale-while-revalidate: rows keep their last result until a new one completes.
 @MainActor
 @Observable
 final class WorktreeMergeModel {
@@ -28,18 +29,18 @@ final class WorktreeMergeModel {
     static let reuseWindow: TimeInterval = 30
     private let service: WorktreeCleanupChecking
     private var generation = UUID()
-    private struct Key: Hashable { let path: String; let target: String? }
+    private struct Key: Hashable { let path: String; let extraTarget: String? }
     private struct Cached { let snapshot: CleanupSnapshot; let revision: Int? }
     private var cache: [Key: Cached] = [:]
     /// What the rows currently show, so a single-row recheck knows what to scan.
     private var currentRepo: Repository?
-    private var currentTarget: String?
+    private var currentExtraTarget: String?
     /// Checkouts whose HEAD moved and are being rechecked in place.
     private var recheckPaths: Set<String> = []
 
     init(service: WorktreeCleanupChecking) { self.service = service }
 
-    func refresh(repo: Repository?, targetOverride: String?, enabled: Bool, revision: Int? = nil) async {
+    func refresh(repo: Repository?, extraTarget: String?, enabled: Bool, revision: Int? = nil) async {
         let token = UUID()
         generation = token
         isChecking = false
@@ -49,17 +50,24 @@ final class WorktreeMergeModel {
             currentRepo = nil
             return
         }
+        let sameRepository = currentRepo?.path == repo.path
         currentRepo = repo
-        currentTarget = targetOverride
-        let key = Key(path: repo.path, target: targetOverride)
-        snapshot = cache[key]?.snapshot
+        currentExtraTarget = extraTarget
+        let key = Key(path: repo.path, extraTarget: extraTarget)
+        // Keep what the rows show until a result replaces it: within one repository
+        // a ✓ must not blink out while an extra target or new commits are rechecked.
+        if let cached = cache[key]?.snapshot {
+            snapshot = cached
+        } else if !sameRepository {
+            snapshot = nil
+        }
         // `.task(id:)` restarts on every key change, and a commit or a `git worktree
         // add` can bump the key repeatedly within a second. Let the burst settle so
         // one scan runs instead of a queue of cancelled ones.
         try? await Task.sleep(for: scanDebounce)
         guard !Task.isCancelled, generation == token else { return }
-        // The key changed for a reason that cannot move merge ancestry — a
-        // comparison-branch switch, or a rescan after a removal. Show the result
+        // The key changed for a reason that cannot move merge ancestry — an
+        // extra-target switch back, or a rescan after a removal. Show the result
         // that is already in hand, don't repeat the work.
         if let revision, let cached = cache[key], cached.revision == revision,
            Date().timeIntervalSince(cached.snapshot.checkedAt) < Self.reuseWindow {
@@ -69,7 +77,7 @@ final class WorktreeMergeModel {
         isChecking = true
         defer { if generation == token { isChecking = false } }
         do {
-            let result = try await service.scan(repoPath: repo.path, targetOverride: targetOverride)
+            let result = try await service.scan(repoPath: repo.path, extraTarget: extraTarget)
             guard generation == token, !Task.isCancelled else { return }
             snapshot = result
             recheckPaths.removeAll()
@@ -86,21 +94,21 @@ final class WorktreeMergeModel {
     /// has, instead of the whole list being invalidated and regrouped mid-look.
     func recheck(path: String) async {
         guard let repo = currentRepo, let previous = snapshot else { return }
-        let target = currentTarget
-        let key = Key(path: repo.path, target: target)
+        let extraTarget = currentExtraTarget
+        let key = Key(path: repo.path, extraTarget: extraTarget)
         let token = UUID()
         generation = token
         recheckPaths.insert(path)
         try? await Task.sleep(for: scanDebounce)
         guard !Task.isCancelled, generation == token else { return }
         defer { if generation == token { recheckPaths.remove(path) } }
-        guard let result = try? await service.scan(repoPath: repo.path, targetOverride: target),
+        guard let result = try? await service.scan(repoPath: repo.path, extraTarget: extraTarget),
               generation == token, !Task.isCancelled,
               let fresh = result.entries.first(where: { $0.id == path }) else { return }
         var entries = previous.entries
         guard let index = entries.firstIndex(where: { $0.id == path }) else { return }
         entries[index] = fresh
-        let merged = CleanupSnapshot(targets: previous.targets, target: previous.target,
+        let merged = CleanupSnapshot(targets: previous.targets, mergeTargets: previous.mergeTargets,
                                      entries: entries, checkedAt: previous.checkedAt)
         snapshot = merged
         store(merged, key: key, revision: cache[key]?.revision)

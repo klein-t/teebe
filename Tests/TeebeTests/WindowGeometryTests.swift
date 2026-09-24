@@ -39,9 +39,7 @@ struct WindowGeometryTests {
             if !grouped { #expect(list.visibleWorktrees == host.app.selector.worktrees) }
             #expect(host.app.selector.selectedWorktree == selected)
             #expect(host.app.mergeStatus.snapshot?.checkedAt == snapshot.checkedAt)
-            let label = WorktreeRowStatus(status: host.app.mergeStatus.entry(for: merged.id), changeCount: 0,
-                                          targetName: snapshot.target?.name, isChecking: host.app.mergeStatus.isChecking)
-            #expect(label.mergedHelp != nil)
+            #expect(host.app.worktreeStatus(for: merged.worktree).mark == .merged)
             host.expectSettled("grouping \(grouped)")
         }
     }

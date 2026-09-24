@@ -63,12 +63,16 @@ public struct AppState: Codable, Equatable, Sendable {
     /// Appearance override: "light", "dark", or nil to follow the system. Optional so
     /// older state files decode.
     public var appearance: String?
-    /// Saved comparison refs by repository. Missing entries use automatic detection.
+    /// An extra merge target per repository (a full ref), checked in addition to
+    /// the automatic default and integration branches. Missing entries add none.
     public var cleanupTargetByRepo: [String: String]?
     public var showMergeStatus: Bool?
     /// Fetch each repository's remote refs in the background. Optional so older
     /// state files decode; nil means the default (on).
     public var fetchAutomatically: Bool?
+    /// The removal confirmation's "Also delete the branch" choice, remembered
+    /// across sessions. Optional so older state files decode; nil means on.
+    public var deleteBranchOnRemove: Bool?
 
     public init(
         repositories: [PersistedRepository] = [],
@@ -83,7 +87,8 @@ public struct AppState: Codable, Equatable, Sendable {
         appearance: String? = nil,
         cleanupTargetByRepo: [String: String]? = nil,
         showMergeStatus: Bool? = nil,
-        fetchAutomatically: Bool? = nil
+        fetchAutomatically: Bool? = nil,
+        deleteBranchOnRemove: Bool? = nil
     ) {
         self.repositories = repositories
         self.showChangedOnly = showChangedOnly
@@ -98,6 +103,7 @@ public struct AppState: Codable, Equatable, Sendable {
         self.cleanupTargetByRepo = cleanupTargetByRepo
         self.showMergeStatus = showMergeStatus
         self.fetchAutomatically = fetchAutomatically
+        self.deleteBranchOnRemove = deleteBranchOnRemove
     }
 }
 

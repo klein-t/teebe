@@ -83,21 +83,20 @@ struct GitContentInclusionTests {
         fixture.commit("squash")
         fixture.commitFile("page.txt", "header\nsearch button\nnew footer\n")
         let service = WorktreeCleanupService(git: ProcessGitClient())
-        let included = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
+        let included = try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
         let entry = try #require(included.entries.first { !$0.worktree.isPrimary })
         #expect(entry.mergeStatus == .merged)
         #expect(entry.hasEquivalentContent)
         #expect(entry.canRemove(includingIgnored: false))
         fixture.writeFile("page.txt", "header\nsearch button\nworktree footer\n", in: folder)
-        let edited = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
+        let edited = try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
         #expect(edited.entries.first { !$0.worktree.isPrimary }?.canRemove(includingIgnored: false) == false)
         fixture.stage(in: folder)
         fixture.commit("new worktree footer", in: folder)
-        let advanced = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
+        let advanced = try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
         #expect(advanced.entries.first { !$0.worktree.isPrimary }?.mergeStatus == .notConfirmed)
-        let target = try #require(included.target)
         await #expect(throws: (any Error).self) {
-            try await service.remove(repoPath: fixture.repoPath, entry: entry, target: target, includingIgnored: false)
+            try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: false, deleteBranch: false)
         }
     }
 
@@ -124,7 +123,7 @@ struct GitContentInclusionTests {
         #expect(try await !check.containsChanges(from: "added", in: "main", repoPath: fixture.repoPath))
         #expect(try await !check.containsChanges(from: "reverted", in: "main", repoPath: fixture.repoPath))
         let snapshot = try await WorktreeCleanupService(git: ProcessGitClient())
-            .scan(repoPath: fixture.repoPath, targetOverride: nil)
+            .scan(repoPath: fixture.repoPath, extraTarget: nil)
         for branch in ["added", "reverted"] {
             let entry = try #require(snapshot.entries.first { $0.worktree.branch == branch })
             #expect(entry.mergeStatus == .notConfirmed)
@@ -183,14 +182,13 @@ struct GitContentInclusionTests {
         fixture.writeFile("untracked.txt", "keep this", in: folder)
         try FileManager.default.removeItem(at: folder.appendingPathComponent(".git"))
         let service = WorktreeCleanupService(git: ProcessGitClient())
-        let snapshot = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
+        let snapshot = try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
         let entry = try #require(snapshot.entries.first { !$0.worktree.isPrimary })
         #expect(entry.isBroken)
         #expect(entry.problem?.contains(".git link is missing") == true)
         #expect(!entry.canRemove(includingIgnored: true))
-        let target = try #require(snapshot.target)
         await #expect(throws: (any Error).self) {
-            try await service.remove(repoPath: fixture.repoPath, entry: entry, target: target, includingIgnored: true)
+            try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: true, deleteBranch: false)
         }
         #expect(try String(contentsOf: folder.appendingPathComponent("untracked.txt"), encoding: .utf8) == "keep this")
     }
@@ -207,17 +205,16 @@ struct GitContentInclusionTests {
         fixture.git(["merge", "--squash", "feature"])
         fixture.commit("squash")
         let service = WorktreeCleanupService(git: ProcessGitClient())
-        let snapshot = try await service.scan(repoPath: fixture.repoPath, targetOverride: nil)
+        let snapshot = try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
         let entry = try #require(snapshot.entries.first { !$0.worktree.isPrimary })
-        let target = try #require(snapshot.target)
         #expect(entry.hasEquivalentContent)
         #expect(entry.canRemove(includingIgnored: false))
         fixture.writeFile("untracked.txt", "keep", in: folder)
         await #expect(throws: (any Error).self) {
-            try await service.remove(repoPath: fixture.repoPath, entry: entry, target: target, includingIgnored: false)
+            try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: false, deleteBranch: false)
         }
         fixture.deleteFile("untracked.txt", in: folder)
-        try await service.remove(repoPath: fixture.repoPath, entry: entry, target: target, includingIgnored: false)
+        try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: false, deleteBranch: false)
         #expect(!FileManager.default.fileExists(atPath: folder.path))
         #expect(!fixture.git(["rev-parse", "--verify", "feature"]).isEmpty)
     }

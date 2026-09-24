@@ -1,44 +1,30 @@
 import Foundation
 import TeebeCore
 
-/// The one vocabulary for a checkout's state: group headers and row tooltips read
-/// these names, so nothing is called two different things. Case order is display
-/// order. Ignored files remain a detail, not a merge state. The raw values are
-/// persisted (collapsed groups per repo), so they outlive any rename of the titles.
+/// The groups a checkout's Git state puts it in. Agent activity never moves a row
+/// between groups. Case order is display order. The raw values are persisted
+/// (collapsed groups per repo), so they outlive any rename of the titles.
 enum WorktreeGroup: String, CaseIterable, Identifiable {
-    case merged, localChanges, notMerged, broken
+    case localChanges, notMerged, merged, broken
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .merged: "Merged"
-        // The names say what is in the folder, not a verdict: "Uncommitted changes"
-        // is files you have not committed, "Unmerged commits" is commits the
-        // comparison branch does not have.
         case .localChanges: "Uncommitted changes"
-        case .notMerged: "Unmerged commits"
-        case .broken: "Broken"
+        case .notMerged: "Not merged"
+        case .merged: "Safe to delete"
+        case .broken: "Missing"
         }
     }
-    /// The header tooltip: one sentence saying what put a checkout in this group,
-    /// naming the branch the comparison actually ran against rather than a generic
-    /// "the main branch".
-    func explanation(comparedTo branch: String) -> String {
+    /// The header tooltip: what put a checkout in this group, naming the branches
+    /// worktrees are checked against (e.g. ["dev", "main"]).
+    func explanation(targets: [String]) -> String {
+        let targetList = targets.isEmpty ? "a merge target" : WorktreeWording.list(targets, joiner: "or")
         switch self {
-        case .merged: "Every commit is already in \(branch) and the folder has no uncommitted changes."
-        case .localChanges: "Edited or new files in the folder that are not committed yet."
-        case .notMerged: "The folder is clean, but its commits are not in \(branch) yet."
-        case .broken: "Git still lists this worktree, but its folder or .git link is missing."
+        case .localChanges: return "Edited or new files in the folder that are not committed yet."
+        case .notMerged: return "Committed work not found in \(targetList) yet, or Git couldn't check."
+        case .merged: return "Merged into \(targetList) with nothing uncommitted. Removing the folder loses no work."
+        case .broken: return "Git still lists these worktrees, but their folder or .git link is missing."
         }
-    }
-    /// A status Git could not confirm — a skipped file, a submodule, no result at
-    /// all — is not merged as far as anything here is concerned. The row's tooltip
-    /// carries the reason; a group of its own only asked the user to judge it.
-    static func classify(_ status: WorktreeMergeEntry?) -> WorktreeGroup {
-        guard let entry = status?.entry else { return .notMerged }
-        if entry.isBroken { return .broken }
-        if entry.hasLocalChanges { return .localChanges }
-        if entry.hasUncheckedFiles || entry.hasSubmodules { return .notMerged }
-        return entry.mergeStatus == .merged ? .merged : .notMerged
     }
 }
 
@@ -52,24 +38,21 @@ struct WorktreeListPresentation {
     let groups: [Group]
     let visibleWorktrees: [Worktree]
     let naturalHeight: CGFloat
-    /// No comparison branch resolved, so every group would be the catch-all one.
-    /// The list stays flat and the view asks for a branch once, not per row.
-    let needsTarget: Bool
 
     static let rowHeight: CGFloat = 26
     static let groupHeight: CGFloat = 25
     static let repoHeight: CGFloat = 29
     static let verticalPadding: CGFloat = 8
 
-    init(worktrees: [Worktree], entries: [String: WorktreeMergeEntry], grouped: Bool,
-         collapsed: Set<WorktreeGroup>, hasRepository: Bool, needsTarget: Bool = false) {
-        self.needsTarget = needsTarget
-        let isGrouped = grouped && !needsTarget
-        pinned = isGrouped ? worktrees.filter { $0.isPrimary || entries[$0.path]?.entry.isTarget == true } : worktrees
+    /// `statuses` is keyed by worktree path; a worktree without one is not pinned
+    /// (unless primary) and falls in Not merged.
+    init(worktrees: [Worktree], statuses: [String: WorktreeStatus], grouped: Bool,
+         collapsed: Set<WorktreeGroup>, hasRepository: Bool) {
+        pinned = grouped ? worktrees.filter { $0.isPrimary || statuses[$0.path]?.isPinned == true } : worktrees
         let pinnedPaths = Set(pinned.map(\.path))
-        let remaining = isGrouped ? worktrees.filter { !pinnedPaths.contains($0.path) } : []
+        let remaining = grouped ? worktrees.filter { !pinnedPaths.contains($0.path) } : []
         groups = WorktreeGroup.allCases.compactMap { kind in
-            let rows = remaining.filter { WorktreeGroup.classify(entries[$0.path]) == kind }
+            let rows = remaining.filter { (statuses[$0.path]?.group ?? .notMerged) == kind }
                 .sorted { Self.sortKey($0).localizedStandardCompare(Self.sortKey($1)) == .orderedAscending }
             return rows.isEmpty ? nil : Group(kind: kind, worktrees: rows)
         }
@@ -84,16 +67,24 @@ struct WorktreeListPresentation {
 }
 
 extension AppModel {
+    /// Everything one row shows: mark, hover card, group, trash. The single source
+    /// both the list grouping and the row read, so they never disagree.
+    func worktreeStatus(for worktree: Worktree) -> WorktreeStatus {
+        let info = selector.info(for: worktree)
+        let local = selector.worktree.statusPath == worktree.path ? selector.worktree.status : nil
+        let snapshot = mergeStatus.snapshot
+        return WorktreeStatus(
+            worktree: worktree,
+            merge: mergeStatus.entry(for: worktree.path, localStatus: local, localChangeCount: info.changeCount),
+            info: info, targetNames: snapshot?.targetNames ?? [],
+            defaultBranch: snapshot?.targets.automatic?.shortName, isChecking: mergeStatus.isChecking)
+    }
+
     func worktreeList(collapsed: Set<WorktreeGroup>) -> WorktreeListPresentation {
-        let entries = selector.worktrees.compactMap { tree -> WorktreeMergeEntry? in
-            let local = selector.worktree.statusPath == tree.path ? selector.worktree.status : nil
-            return mergeStatus.entry(for: tree.path, localStatus: local,
-                                     localChangeCount: selector.info(for: tree).changeCount)
-        }
-        return WorktreeListPresentation(worktrees: selector.worktrees,
-                                       entries: Dictionary(uniqueKeysWithValues: entries.map { ($0.entry.id, $0) }),
+        let statuses = Dictionary(selector.worktrees.map { ($0.path, worktreeStatus(for: $0)) },
+                                  uniquingKeysWith: { first, _ in first })
+        return WorktreeListPresentation(worktrees: selector.worktrees, statuses: statuses,
                                        grouped: groupWorktreesByMergeStatus, collapsed: collapsed,
-                                       hasRepository: selector.selectedRepo != nil,
-                                       needsTarget: mergeStatus.snapshot.map { $0.target == nil } ?? false)
+                                       hasRepository: selector.selectedRepo != nil)
     }
 }

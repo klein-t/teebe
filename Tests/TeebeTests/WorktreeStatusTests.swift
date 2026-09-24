@@ -1,0 +1,200 @@
+import Foundation
+import Testing
+import TeebeCore
+@testable import Teebe
+
+@Suite("Worktree status marks and cards")
+struct WorktreeStatusTests {
+    private let feature = Worktree(path: "/feature", branch: "feature", head: "abc")
+    private static let catalog = CleanupTargets.parse(
+        "refs/remotes/origin/dev\u{0}d\u{0}\u{0}\nrefs/remotes/origin/main\u{0}m\u{0}\u{0}\n")
+    private let dev = catalog.branches[0]
+    private let main = catalog.branches[1]
+
+    private func entry(_ worktree: Worktree? = nil, merged into: [CleanupBranch] = [],
+                       squashed: Bool = false, _ tweak: (inout CleanupEntry) -> Void = { _ in }) -> CleanupEntry {
+        var entry = CleanupEntry(worktree: worktree ?? feature)
+        entry.mergeStatus = into.isEmpty ? .notConfirmed : .merged
+        entry.mergedTargets = into
+        entry.hasEquivalentContent = squashed
+        tweak(&entry)
+        return entry
+    }
+
+    private func status(_ entry: CleanupEntry?, worktree: Worktree? = nil, count: Int = 0,
+                        info: SelectorModel.WorktreeInfo = .init(), isChecking: Bool = false) -> WorktreeStatus {
+        WorktreeStatus(worktree: worktree ?? entry?.worktree ?? feature,
+                       merge: entry.map { WorktreeMergeEntry(entry: $0, localChangeCount: count) },
+                       info: info, targetNames: ["main", "dev"], defaultBranch: "main", isChecking: isChecking)
+    }
+
+    private func facts(_ status: WorktreeStatus) -> [String] { status.card.facts.map { $0.text } }
+
+    @Test("one mark per row, highest precedence wins")
+    func precedence() {
+        let merged = entry(merged: [dev])
+        #expect(status(merged).mark == .merged)
+        #expect(status(entry()).mark == .notMerged)
+        #expect(status(nil, isChecking: true).mark == .notMerged)
+        #expect(status(entry(merged: [dev]) { $0.isBroken = true }).mark == .missing)
+        #expect(status(merged, count: 2).mark == .uncommitted)
+        #expect(status(entry(merged: [dev]) { $0.hasLocalChanges = true }).mark == .uncommitted)
+        #expect(status(merged, count: 2, info: .init(agentState: .needsAttention)).mark == .waiting)
+        #expect(status(merged, count: 2, info: .init(agentState: .working)).mark == .working)
+        // Files changing with no agent is the same pulsing rule as LiveDot…
+        #expect(status(merged, info: .init(isLive: true)).mark == .working)
+        // …but a waiting agent outranks stray file activity.
+        #expect(status(merged, info: .init(isLive: true, agentState: .needsAttention)).mark == .waiting)
+        // Git could be hiding local work: no ✓.
+        #expect(status(entry(merged: [dev]) { $0.hasUncheckedFiles = true }).mark == .notMerged)
+        #expect(status(entry(merged: [dev]) { $0.hasSubmodules = true }).mark == .notMerged)
+        // Ignored files don't block the ✓.
+        #expect(status(entry(merged: [dev]) { $0.hasIgnoredFiles = true }).mark == .merged)
+    }
+
+    @Test("a merge target's own checkout has no merge mark but still shows activity and edits")
+    func targetCheckout() {
+        let devTree = Worktree(path: "/dev", branch: "dev")
+        let target = entry(devTree, merged: [dev]) { $0.isTarget = true }
+        #expect(status(target).mark == .none)
+        #expect(status(target).isPinned)
+        #expect(!status(target).showsTrash)
+        #expect(status(target, count: 1).mark == .uncommitted)
+        #expect(status(target, info: .init(agentState: .working)).mark == .working)
+        #expect(!facts(status(target, count: 1)).contains { $0.hasPrefix("Merged") })
+        #expect(status(target).card.title == "dev")
+        #expect(status(target).card.subtitle == "Integration branch. Other worktrees are checked against it.")
+        let mainTree = Worktree(path: "/repo", branch: "main", isPrimary: true)
+        let mainEntry = entry(mainTree, merged: [main]) { $0.isTarget = true }
+        #expect(status(mainEntry).card.subtitle == "Default branch. Other worktrees are checked against it.")
+    }
+
+    @Test("the trash shows on removable ✓ rows and missing rows only")
+    func trash() {
+        let merged = entry(merged: [dev])
+        #expect(status(merged).trashAction == .remove(merged))
+        #expect(status(entry(merged: [dev]) { $0.isBroken = true }).trashAction == .prune)
+        #expect(!status(entry()).showsTrash)
+        #expect(!status(merged, info: .init(agentState: .working)).showsTrash)
+        let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
+        let lockedEntry = entry(locked, merged: [dev]) { $0.problem = "Locked worktree" }
+        #expect(status(lockedEntry).mark == .merged)
+        #expect(!status(lockedEntry).showsTrash)
+        let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
+        #expect(!status(entry(primary, merged: [dev])).showsTrash)
+        #expect(status(entry(primary, merged: [dev])).isPinned)
+    }
+
+    @Test("cards match the agreed copy")
+    func cards() {
+        let merged = status(entry(merged: [main, dev]))
+        #expect(merged.card.title == "Safe to delete")
+        #expect(merged.card.subtitle == "Merged into main and dev. Nothing uncommitted.")
+        #expect(facts(merged) == ["Not on remote"])
+
+        let squashed = status(entry(merged: [dev], squashed: true),
+                              info: .init(remote: .remoteDeleted))
+        #expect(squashed.card.subtitle == "Merged into dev (squashed). Nothing uncommitted.")
+        #expect(facts(squashed) == ["Remote branch deleted"])
+
+        let dirty = status(entry(merged: [dev], squashed: true), count: 8)
+        #expect(dirty.card.title == "8 uncommitted changes")
+        #expect(dirty.card.subtitle == "Commit or discard them before removing.")
+        #expect(facts(dirty) == ["Merged into dev (squashed)", "Not on remote"])
+
+        let unmerged = status(entry(), count: 1, info: .init(remote: .sameBranch(remote: "origin", ahead: 4, behind: 0)))
+        #expect(unmerged.card.title == "1 uncommitted change")
+        #expect(unmerged.card.subtitle == "Not yet committed.")
+        #expect(unmerged.card.facts == [
+            WorktreeCardFact(icon: .branch, text: "Not merged yet", tone: .muted),
+            WorktreeCardFact(icon: .cloud, text: "4 to push", tone: .normal)
+        ])
+
+        let working = status(entry(), count: 3, info: .init(agentState: .working,
+                                                            remote: .sameBranch(remote: "origin", ahead: 2, behind: 3)))
+        #expect(working.card.title == "Agent working")
+        #expect(working.card.subtitle == "A Claude Code session is running here.")
+        #expect(facts(working) == ["3 uncommitted changes", "Not merged yet", "2 to push · 3 to pull"])
+
+        let waiting = status(entry(), info: .init(agentState: .needsAttention, remote: .sameBranch(remote: "origin", ahead: 0, behind: 0)))
+        #expect(waiting.card.title == "Agent waiting for you")
+        #expect(facts(waiting) == ["Not merged yet", "Up to date with origin"])
+
+        let ring = status(entry())
+        #expect(ring.card.title == "Not merged yet")
+        #expect(ring.card.subtitle == "Committed work not in main or dev.")
+
+        let unknown = status(entry { $0.mergeStatus = .unknown; $0.problem = "Could not inspect this worktree" })
+        #expect(unknown.card.title == "Couldn’t check")
+        #expect(unknown.card.subtitle == "Git couldn’t compare this branch.")
+
+        let missing = status(entry { $0.isBroken = true; $0.problem = "Broken worktree: its folder is missing." })
+        #expect(missing.card.title == "Worktree missing")
+        #expect(missing.card.subtitle == "The folder was moved or deleted outside git. Git still lists it; remove to clean up the record.")
+        #expect(missing.card.facts.isEmpty)
+    }
+
+    @Test("a row with no result yet reads as checking, then as unknown")
+    func noResultYet() {
+        let checking = status(nil, isChecking: true)
+        #expect(checking.card.title == "Checking…")
+        #expect(checking.card.subtitle == "Looking for this branch in main or dev.")
+        #expect(status(nil).card.title == "Couldn’t check")
+    }
+
+    @Test("merged but protected keeps ✓ and says why it won't be removed")
+    func mergedButProtected() {
+        let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
+        let card = status(entry(locked, merged: [dev]) { $0.problem = "Locked worktree" }).card
+        #expect(card.title == "Merged")
+        #expect(card.subtitle == "Merged into dev. It's locked, so Teebe won't remove it.")
+        #expect(!card.facts.contains { $0.text == "Locked" })
+        let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
+        #expect(status(entry(primary, merged: [dev])).card.subtitle
+                == "Merged into dev. This is the main checkout, so Teebe won't remove it.")
+    }
+
+    @Test("detail facts surface what else matters, without repeating the headline")
+    func details() {
+        let ignored = status(entry(merged: [dev]) { $0.hasIgnoredFiles = true; $0.ignoredPaths = [".build/", "node_modules/", "x"] })
+        #expect(facts(ignored) == ["Not on remote", "Ignored files remain (.build/, node_modules/, …)"])
+        let skipped = status(entry(merged: [dev]) { $0.hasUncheckedFiles = true })
+        #expect(skipped.card.title == "Couldn’t confirm it’s safe")
+        #expect(skipped.card.subtitle == "Merged into dev, but some files are marked unchanged in Git.")
+        #expect(facts(skipped) == ["Not on remote"])
+        let detached = Worktree(path: "/d", head: "abc", isDetached: true)
+        #expect(facts(status(entry(detached))).contains("Detached HEAD"))
+    }
+
+    @Test("the removal prompt offers branch deletion only when the work is already merged")
+    func removalPrompt() {
+        let merged = entry(merged: [dev])
+        let safe = WorktreeRemovalPrompt(worktree: feature, status: status(merged),
+                                         merge: WorktreeMergeEntry(entry: merged), isAgentActive: false)
+        #expect(safe.title == "Remove “feature”?")
+        #expect(safe.facts.map { $0.text } == ["Merged into dev", "Nothing uncommitted"])
+        #expect(safe.explanation == "The worktree folder is deleted. Its commits are already merged.")
+        #expect(safe.offersBranchDeletion)
+
+        let unmerged = entry()
+        let risky = WorktreeRemovalPrompt(worktree: feature, status: status(unmerged, count: 2),
+                                          merge: WorktreeMergeEntry(entry: unmerged, localChangeCount: 2), isAgentActive: true)
+        #expect(risky.facts.map { $0.text } == ["Not merged yet", "2 uncommitted changes will be lost",
+                                            "An agent is active in this worktree"])
+        #expect(risky.explanation == "The worktree folder is deleted. The branch is kept.")
+        #expect(!risky.offersBranchDeletion)
+
+        let gone = entry { $0.isBroken = true; $0.problem = "Broken worktree: its folder is missing." }
+        let forget = WorktreeRemovalPrompt(worktree: feature, status: status(gone),
+                                           merge: WorktreeMergeEntry(entry: gone), isAgentActive: false)
+        #expect(forget.title == "Forget “feature”?")
+        #expect(!forget.offersBranchDeletion)
+    }
+
+    @Test("lists read naturally")
+    func wordingLists() {
+        #expect(WorktreeWording.list(["dev"]) == "dev")
+        #expect(WorktreeWording.list(["dev", "main"]) == "dev and main")
+        #expect(WorktreeWording.list(["dev", "develop", "main"], joiner: "or") == "dev, develop or main")
+    }
+}

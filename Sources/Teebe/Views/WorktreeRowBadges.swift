@@ -3,7 +3,7 @@ import SwiftUI
 /// Keep the name readable in narrow windows. Sync counts remain in the row's
 /// hover help when there is only room for local changes and merge status.
 struct WorktreeRowBadges: View {
-    let status: WorktreeRowStatus
+    let status: WorktreeStatus
     let info: SelectorModel.WorktreeInfo
     let isSelected: Bool
 
@@ -13,7 +13,7 @@ struct WorktreeRowBadges: View {
                 labels
                 if info.hasSync {
                     Text(info.syncText).font(.system(size: 11)).monospacedDigit()
-                        .hoverHelp("\(info.behind) commits behind, \(info.ahead) ahead of upstream, based on local Git data.",
+                        .hoverHelp("\(info.behind) to pull, \(info.ahead) to push, against the remote copy of this branch.",
                                    highlight: false)
                 }
             }
@@ -23,13 +23,13 @@ struct WorktreeRowBadges: View {
         .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
     }
 
+    /// Placeholder until the row redesign draws `status.mark`.
     @ViewBuilder
     private var labels: some View {
-        if let changes = status.changesLabel {
-            Text(changes).font(.system(size: 10)).monospacedDigit()
-                .hoverHelp(status.changesHelp, highlight: false)
+        if status.changeCount > 0 {
+            Text("\(status.changeCount) change\(status.changeCount == 1 ? "" : "s")").font(.system(size: 10)).monospacedDigit()
         }
-        if let explanation = status.mergedHelp {
+        if status.mark == .merged {
             Label("Merged", systemImage: "arrow.triangle.merge")
                 .font(.system(size: 11, weight: .medium))
                 .labelStyle(.titleAndIcon)
@@ -39,7 +39,6 @@ struct WorktreeRowBadges: View {
                             in: RoundedRectangle(cornerRadius: 6))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Merged")
-                .hoverHelp(explanation)
         }
     }
 }
