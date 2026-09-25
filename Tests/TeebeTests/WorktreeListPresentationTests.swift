@@ -39,7 +39,7 @@ struct WorktreeListPresentationTests {
 
         // No result at all is the same answer: nothing confirmed it merged.
         let unscanned = WorktreeStatus(worktree: Worktree(path: "/new"), merge: nil, info: .init(),
-                                       targetNames: ["dev"], defaultBranch: "dev", isChecking: true)
+                                       targetNames: ["dev"], isChecking: true)
         #expect(unscanned.group == .notMerged)
     }
 
@@ -294,6 +294,6 @@ struct WorktreeListPresentationTests {
 
     private func status(_ entry: CleanupEntry, info: SelectorModel.WorktreeInfo = .init()) -> WorktreeStatus {
         WorktreeStatus(worktree: entry.worktree, merge: WorktreeMergeEntry(entry: entry), info: info,
-                       targetNames: ["dev"], defaultBranch: "dev", isChecking: false)
+                       targetNames: ["dev"], isChecking: false)
     }
 }

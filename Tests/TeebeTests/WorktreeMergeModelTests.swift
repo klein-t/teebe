@@ -216,7 +216,7 @@ struct WorktreeMergeModelTests {
 
     private func status(_ merge: WorktreeMergeEntry?) -> WorktreeStatus {
         WorktreeStatus(worktree: Worktree(path: "/repo/feature", branch: "feature"), merge: merge, info: .init(),
-                       targetNames: ["dev"], defaultBranch: "dev", isChecking: true)
+                       targetNames: ["dev"], isChecking: true)
     }
     private func group(_ merge: WorktreeMergeEntry?) -> WorktreeGroup { status(merge).group }
     private func mark(_ merge: WorktreeMergeEntry?) -> WorktreeMark { status(merge).mark }

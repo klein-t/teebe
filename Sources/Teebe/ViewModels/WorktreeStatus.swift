@@ -22,9 +22,10 @@ enum WorktreeMark: Equatable {
 
 /// Icons the hover card and removal prompt use. The view maps them to SF Symbols
 /// (suggested: pencil, arrow.triangle.merge, arrow.triangle.branch, icloud,
-/// icloud.slash, lock, questionmark.folder, eye.slash, exclamationmark.triangle).
+/// questionmark.folder, eye.slash, exclamationmark.triangle). The card footer
+/// uses one fixed icon per fact: pencil, branch, cloud.
 enum WorktreeCardIcon: Equatable {
-    case pencil, merge, branch, cloud, cloudOff, lock, missing, ignoredFiles, warning
+    case pencil, merge, branch, cloud, missing, ignoredFiles, warning
 }
 
 struct WorktreeCardFact: Equatable {
@@ -94,10 +95,9 @@ struct WorktreeStatus: Equatable {
     /// - Parameters:
     ///   - merge: the row's last merge result; nil before any scan covered it.
     ///   - targetNames: what the scan checks against, e.g. ["dev", "main"].
-    ///   - defaultBranch: the automatic default's short name, e.g. "main".
     ///   - isChecking: a scan is running (only matters while `merge` is nil).
     init(worktree: Worktree, merge: WorktreeMergeEntry?, info: SelectorModel.WorktreeInfo,
-         targetNames: [String], defaultBranch: String?, isChecking: Bool) {
+         targetNames: [String], isChecking: Bool) {
         let entry = merge?.entry
         let facts = Facts(worktree: worktree, entry: entry, info: info,
                           changes: merge?.localChangeCount ?? info.changeCount,
@@ -117,7 +117,7 @@ struct WorktreeStatus: Equatable {
         } else {
             trashAction = nil
         }
-        card = facts.card(mark: mark, isRemovable: trashAction != nil, defaultBranch: defaultBranch)
+        card = facts.card(mark: mark, isRemovable: trashAction != nil)
     }
 }
 
@@ -140,126 +140,74 @@ private struct Facts {
         return clean.canRemove(includingIgnored: true)
     }
 
-    func card(mark: WorktreeMark, isRemovable: Bool, defaultBranch: String?) -> WorktreeCard {
-        let remote = WorktreeWording.remoteFact(info.remote)
+    /// Every card: a fixed state title, one short sentence, and the same three facts
+    /// (changes, merge, remote) in that order. Missing has no footer: there is no
+    /// folder left to describe.
+    func card(mark: WorktreeMark, isRemovable: Bool) -> WorktreeCard {
+        let (title, subtitle) = headline(mark: mark, isRemovable: isRemovable)
+        let facts = mark == .missing ? [] : [changesFact, mergeFact, WorktreeWording.remoteFact(info.remote)]
+        return WorktreeCard(title: title, subtitle: subtitle, facts: facts)
+    }
+
+    private func headline(mark: WorktreeMark, isRemovable: Bool) -> (String, String) {
         switch mark {
-        case .none:
-            let isDefault = worktree.branch != nil && worktree.branch == defaultBranch
-            return WorktreeCard(title: worktree.branch ?? worktree.name,
-                                subtitle: (isDefault ? "Default branch." : "Integration branch.")
-                                    + " Other worktrees are checked against it.",
-                                facts: [remote] + details())
-        case .working, .waiting:
-            let (title, subtitle) = mark == .waiting
-                ? ("Agent waiting for you", "The session finished its turn.")
-                : info.agentState == .working
-                    ? ("Agent working", "A Claude Code session is running here.")
-                    : ("Files changing", "Something is writing to this folder right now.")
-            return WorktreeCard(title: title, subtitle: subtitle,
-                                facts: [changesFact, isTarget ? nil : mergeFact, remote].compactMap { $0 } + details())
+        case .none: return ("Base branch", "Other worktrees are compared to it.")
+        case .working:
+            return ("Agent working", info.agentState == .working ? "An agent is working in this worktree."
+                        : "Files are changing in this worktree.")
+        case .waiting: return ("Waiting for you", "An agent is waiting for your input.")
         case .uncommitted:
-            return WorktreeCard(
-                title: changes > 0 ? WorktreeWording.plural(changes, "uncommitted change") : "Uncommitted changes",
-                subtitle: isRemovableOnceClean ? "Commit or discard them before removing." : "Not committed yet.",
-                facts: [isTarget ? nil : mergeFact, remote].compactMap { $0 } + details())
-        case .missing:
-            return WorktreeCard(title: "Worktree missing",
-                                subtitle: WorktreeWording.missingReason(entry) + " Git still lists it; remove to clean up the record.",
-                                facts: [])
+            return ("Uncommitted changes", isRemovableOnceClean ? "Commit or discard them before removing."
+                        : "Work here isn’t committed yet.")
+        case .missing: return ("Missing", "The folder is gone. Remove it to clean up.")
         case .merged:
-            return mergedCard(isRemovable: isRemovable, remote: remote)
-        case .notMerged:
-            return notMergedCard(remote: remote)
+            return isRemovable ? ("Safe to delete", "All its work is merged. You can remove it.")
+                : ("Merged", protectionReason + ", so Teebe won’t remove it.")
+        case .notMerged: return notMergedHeadline
         }
     }
 
-    private func mergedCard(isRemovable: Bool, remote: WorktreeCardFact) -> WorktreeCard {
-        let merged = WorktreeWording.mergedText(entry)
-        guard !isRemovable else {
-            return WorktreeCard(title: "Safe to delete", subtitle: merged + ". Nothing uncommitted.",
-                                facts: [remote] + details())
-        }
-        let reason: String
-        var said = ""
-        if worktree.isPrimary {
-            reason = "This is the main checkout, so Teebe won't remove it."
-        } else if worktree.isLocked {
-            reason = "It's locked, so Teebe won't remove it."
-            said = "Locked"
-        } else if worktree.isDetached {
-            reason = "Its HEAD is detached, so Teebe won't remove it."
-            said = "Detached HEAD"
-        } else {
-            reason = "Teebe won't remove it."
-        }
-        return WorktreeCard(title: "Merged", subtitle: merged + ". " + reason,
-                            facts: [remote] + details().filter { $0.text != said })
-    }
-
-    private func notMergedCard(remote: WorktreeCardFact) -> WorktreeCard {
-        let facts = [remote] + details()
+    /// No ✓: not merged, not known yet, or merged but Git could be hiding local work.
+    private var notMergedHeadline: (String, String) {
         guard let entry else {
-            guard isChecking else {
-                return WorktreeCard(title: "Couldn’t check", subtitle: "Git couldn’t compare this branch.", facts: facts)
-            }
-            let subtitle = targetNames.isEmpty ? "Comparing this branch with its merge targets."
-                : "Looking for this branch in \(WorktreeWording.list(targetNames, joiner: "or"))."
-            return WorktreeCard(title: "Checking…", subtitle: subtitle, facts: facts)
+            guard isChecking else { return ("Couldn’t check", "Git couldn’t compare this branch.") }
+            let targets = targetNames.isEmpty ? "its merge targets" : WorktreeWording.list(targetNames, joiner: "or")
+            return ("Checking…", "Looking for this branch in \(targets).")
         }
         switch entry.mergeStatus {
-        case .merged:
-            // Merged commits, but Git could be hiding local work: no ✓.
-            let (why, said) = entry.hasUncheckedFiles
-                ? ("some files are marked unchanged in Git.", "Some files are marked unchanged in Git")
-                : ("it contains a submodule.", "Contains a submodule")
-            return WorktreeCard(title: "Couldn’t confirm it’s safe",
-                                subtitle: WorktreeWording.mergedText(entry) + ", but " + why,
-                                facts: [remote] + details().filter { $0.text != said })
-        case .notConfirmed:
-            let subtitle = targetNames.isEmpty ? "Committed work not merged yet."
-                : "Committed work not in \(WorktreeWording.list(targetNames, joiner: "or"))."
-            return WorktreeCard(title: "Not merged yet", subtitle: subtitle, facts: facts)
-        case .unknown:
-            let subtitle = entry.problem == "No branch to compare against"
-                ? "No default or integration branch to compare against."
-                : "Git couldn’t compare this branch."
-            return WorktreeCard(title: "Couldn’t check", subtitle: subtitle, facts: facts)
+        case .merged: return ("Merged", protectionReason + ", so Teebe won’t remove it.")
+        case .notConfirmed: return ("Not merged", "Its commits aren’t merged yet.")
+        case .unknown: return ("Couldn’t check", "Git couldn’t compare this branch.")
         }
     }
 
-    var changesFact: WorktreeCardFact? {
-        guard hasUncommitted else { return nil }
+    /// Why a merged row stays, as the start of a sentence.
+    private var protectionReason: String {
+        if worktree.isPrimary { return "The main checkout" }
+        if worktree.isLocked { return "Locked" }
+        if worktree.isDetached { return "Detached HEAD" }
+        if entry?.hasUncheckedFiles == true { return "Some files are marked unchanged in Git" }
+        if entry?.hasSubmodules == true { return "It contains a submodule" }
+        return "Protected"
+    }
+
+    var changesFact: WorktreeCardFact {
+        guard hasUncommitted else { return WorktreeCardFact(icon: .pencil, text: "No uncommitted changes", tone: .muted) }
         return WorktreeCardFact(icon: .pencil,
                                 text: changes > 0 ? WorktreeWording.plural(changes, "uncommitted change") : "Uncommitted changes",
                                 tone: .warn)
     }
 
     var mergeFact: WorktreeCardFact {
-        guard let entry else {
-            return WorktreeCardFact(icon: .branch, text: isChecking ? "Checking if merged…" : "Couldn’t check if merged",
-                                    tone: .muted)
-        }
+        func muted(_ text: String) -> WorktreeCardFact { WorktreeCardFact(icon: .branch, text: text, tone: .muted) }
+        if isTarget { return muted("Merge target") }
+        guard let entry else { return muted(isChecking ? "Checking merge status…" : "Couldn’t check merge status") }
         switch entry.mergeStatus {
-        case .merged: return WorktreeCardFact(icon: .merge, text: WorktreeWording.mergedText(entry), tone: .normal)
-        case .notConfirmed: return WorktreeCardFact(icon: .branch, text: "Not merged yet", tone: .muted)
-        case .unknown: return WorktreeCardFact(icon: .branch, text: "Couldn’t check if merged", tone: .muted)
+        case .merged: return WorktreeCardFact(icon: .branch, text: WorktreeWording.mergedText(entry), tone: .normal)
+        case .notConfirmed:
+            return muted(targetNames.isEmpty ? "Not merged yet" : "Not in \(WorktreeWording.list(targetNames, joiner: "or")) yet")
+        case .unknown: return muted("Couldn’t check merge status")
         }
-    }
-
-    /// Secondary detail worth knowing on hover, shortest first-glance wording.
-    func details() -> [WorktreeCardFact] {
-        var facts: [WorktreeCardFact] = []
-        if let entry, !entry.isBroken {
-            if entry.hasUncheckedFiles {
-                facts.append(WorktreeCardFact(icon: .warning, text: "Some files are marked unchanged in Git", tone: .warn))
-            }
-            if entry.hasSubmodules {
-                facts.append(WorktreeCardFact(icon: .warning, text: "Contains a submodule", tone: .muted))
-            }
-        }
-        if worktree.isLocked { facts.append(WorktreeCardFact(icon: .lock, text: "Locked", tone: .muted)) }
-        if worktree.isDetached { facts.append(WorktreeCardFact(icon: .branch, text: "Detached HEAD", tone: .muted)) }
-        return facts
     }
 }
 
@@ -281,8 +229,8 @@ enum WorktreeWording {
 
     static func remoteFact(_ remote: RemoteSync) -> WorktreeCardFact {
         switch remote {
-        case .remoteDeleted: return WorktreeCardFact(icon: .cloudOff, text: "Remote branch deleted", tone: .muted)
-        case .notOnRemote: return WorktreeCardFact(icon: .cloudOff, text: "Not on remote", tone: .muted)
+        case .remoteDeleted: return WorktreeCardFact(icon: .cloud, text: "Remote branch deleted", tone: .muted)
+        case .notOnRemote: return WorktreeCardFact(icon: .cloud, text: "Not on remote", tone: .muted)
         case let .sameBranch(name, ahead, behind):
             guard ahead > 0 || behind > 0 else {
                 return WorktreeCardFact(icon: .cloud, text: "Up to date with \(name)", tone: .muted)

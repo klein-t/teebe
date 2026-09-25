@@ -74,8 +74,7 @@ extension AppModel {
         let snapshot = mergeStatus.snapshot
         return WorktreeStatus(
             worktree: worktree, merge: mergeEntry(for: worktree, info: info),
-            info: info, targetNames: snapshot?.targetNames ?? [],
-            defaultBranch: snapshot?.targets.automatic?.shortName, isChecking: mergeStatus.isChecking)
+            info: info, targetNames: snapshot?.targetNames ?? [], isChecking: mergeStatus.isChecking)
     }
 
     /// What the removal sheet says for this row, from the same inputs as its mark.

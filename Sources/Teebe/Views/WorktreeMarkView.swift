@@ -126,8 +126,6 @@ struct WorktreeFactRow: View {
         case .merge: "arrow.triangle.merge"
         case .branch: "arrow.triangle.branch"
         case .cloud: "icloud"
-        case .cloudOff: "icloud.slash"
-        case .lock: "lock"
         case .missing: "questionmark.folder"
         case .ignoredFiles: "eye.slash"
         case .warning: "exclamationmark.triangle"
