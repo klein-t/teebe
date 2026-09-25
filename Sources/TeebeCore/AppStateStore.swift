@@ -73,6 +73,9 @@ public struct AppState: Codable, Equatable, Sendable {
     /// The removal confirmation's "Also delete the branch" choice, remembered
     /// across sessions. Optional so older state files decode; nil means on.
     public var deleteBranchOnRemove: Bool?
+    /// The folder last chosen for new worktrees, keyed by repository path.
+    /// Optional so older state files decode; a missing entry means no choice yet.
+    public var worktreeParentByRepo: [String: String]?
 
     public init(
         repositories: [PersistedRepository] = [],
@@ -88,7 +91,8 @@ public struct AppState: Codable, Equatable, Sendable {
         cleanupTargetByRepo: [String: String]? = nil,
         showMergeStatus: Bool? = nil,
         fetchAutomatically: Bool? = nil,
-        deleteBranchOnRemove: Bool? = nil
+        deleteBranchOnRemove: Bool? = nil,
+        worktreeParentByRepo: [String: String]? = nil
     ) {
         self.repositories = repositories
         self.showChangedOnly = showChangedOnly
@@ -104,6 +108,7 @@ public struct AppState: Codable, Equatable, Sendable {
         self.showMergeStatus = showMergeStatus
         self.fetchAutomatically = fetchAutomatically
         self.deleteBranchOnRemove = deleteBranchOnRemove
+        self.worktreeParentByRepo = worktreeParentByRepo
     }
 }
 

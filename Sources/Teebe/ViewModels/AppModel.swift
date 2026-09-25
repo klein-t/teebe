@@ -238,6 +238,7 @@ final class AppModel {
         // tail of entries for projects the user removed long ago.
         state.cleanupTargetByRepo?[repo.path] = nil
         state.layoutByRepo?[repo.path] = nil
+        state.worktreeParentByRepo?[repo.path] = nil
         persist()
     }
 
@@ -357,12 +358,17 @@ final class AppModel {
         guard let repo = selector.selectedRepo else { return }
         let comparison = mergeStatus.snapshot?.targets.automatic?.name
         let primaryBranch = selector.worktrees.first(where: \.isPrimary)?.branch
+        let parent = WorktreeLocation.parentFolder(
+            repoPath: repo.path, remembered: state.worktreeParentByRepo?[repo.path],
+            worktrees: selector.worktrees)
         newWorktree = NewWorktreeModel(repo: repo, branches: selector.branches,
-                                       comparisonBranch: comparison, primaryBranch: primaryBranch)
+                                       comparisonBranch: comparison, primaryBranch: primaryBranch,
+                                       parentFolder: parent,
+                                       registeredPaths: Set(selector.worktrees.map(\.path)))
     }
 
-    /// Pick the worktree folder by hand. Directories only, and new ones can be made
-    /// from inside the panel.
+    /// Pick the folder new worktrees go in. Directories only, and new ones can be
+    /// made from inside the panel.
     func chooseWorktreeLocation(for form: NewWorktreeModel) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -370,12 +376,18 @@ final class AppModel {
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
-        if !form.location.isEmpty {
-            panel.directoryURL = URL(fileURLWithPath: (form.location as NSString).deletingLastPathComponent)
-            panel.nameFieldStringValue = (form.location as NSString).lastPathComponent
-        }
+        panel.directoryURL = URL(fileURLWithPath: form.parentFolder)
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        form.setLocation(url.path)
+        setWorktreeParent(url.path, for: form)
+    }
+
+    /// Use `path` as the folder for this worktree and remember it for the repository.
+    func setWorktreeParent(_ path: String, for form: NewWorktreeModel) {
+        form.setParentFolder(path)
+        var byRepo = state.worktreeParentByRepo ?? [:]
+        byRepo[form.repo.path] = path
+        state.worktreeParentByRepo = byRepo
+        try? environment.store.save(state)
     }
 
     /// Create the worktree the sheet describes. On success the repository is

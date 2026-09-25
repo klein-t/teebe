@@ -60,12 +60,12 @@ struct NewWorktreeSheet: View {
         VStack(alignment: .leading, spacing: 4) {
             LabeledContent("Location") {
                 HStack(spacing: 8) {
-                    // Read-only: the folder is derived from the branch, or picked.
-                    Text(form.location.isEmpty ? "—" : form.location)
+                    // Read-only: the name follows the branch; "Choose…" moves the folder.
+                    Text(displayedLocation)
                         .font(.system(size: 11, design: .monospaced))
-                        .lineLimit(1).truncationMode(.head)
+                        .lineLimit(1).truncationMode(.middle)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+                        .hoverHelp(displayedLocation, highlight: false)
                     Button("Choose…") { app.chooseWorktreeLocation(for: form) }
                 }
             }
@@ -73,6 +73,12 @@ struct NewWorktreeSheet: View {
                 Text(problem).font(.system(size: 11)).foregroundStyle(.red)
             }
         }
+    }
+
+    /// The full path, or the folder it will go in until a branch is typed.
+    private var displayedLocation: String {
+        guard form.location.isEmpty else { return form.location }
+        return form.parentFolder.hasSuffix("/") ? form.parentFolder : form.parentFolder + "/"
     }
 
     private var footer: some View {

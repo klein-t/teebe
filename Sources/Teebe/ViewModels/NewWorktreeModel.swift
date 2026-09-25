@@ -16,8 +16,11 @@ final class NewWorktreeModel {
         didSet { branchDidChange(from: oldValue) }
     }
     var startPoint: String
-    /// Where the worktree folder goes. Follows the branch name until the user
-    /// picks a folder by hand.
+    /// The folder the worktree goes in. Pre-filled (see `WorktreeLocation`);
+    /// "Choose…" changes it.
+    private(set) var parentFolder: String
+    /// Where the worktree folder goes: `<parent>/<repo>-<branch>`, following the
+    /// branch name as it's typed and stepping around folders that already exist.
     private(set) var location = ""
     /// Check out the matching existing branch instead of creating a new one.
     var useExistingBranch = false
@@ -25,10 +28,11 @@ final class NewWorktreeModel {
     /// The failure from the last Create attempt, shown inline in the sheet.
     var errorMessage: String?
 
-    /// True once "Choose…" was used: the location stops tracking the branch name.
-    private var hasCustomLocation = false
     /// Injected so the folder check is testable without touching the disk.
     private let folderExists: @Sendable (String) -> Bool
+    /// Paths git already has a worktree registered at, even if the folder is gone:
+    /// `git worktree add` refuses those too.
+    private let registeredPaths: Set<String>
     /// Every local + remote branch, for the "already exists" check.
     private let allBranches: [Branch]
 
@@ -37,11 +41,15 @@ final class NewWorktreeModel {
         branches: [Branch],
         comparisonBranch: String?,
         primaryBranch: String?,
+        parentFolder: String,
+        registeredPaths: Set<String> = [],
         folderExists: @escaping @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
     ) {
         self.repo = repo
         self.allBranches = branches
         self.folderExists = folderExists
+        self.parentFolder = parentFolder
+        self.registeredPaths = registeredPaths
         self.startPoints = Self.startPointOptions(branches)
         self.startPoint = Self.defaultStartPoint(
             comparison: comparisonBranch, primaryBranch: primaryBranch, options: startPoints)
@@ -86,16 +94,24 @@ final class NewWorktreeModel {
         return startPoint
     }
 
-    func setLocation(_ path: String, custom: Bool = true) {
-        location = path
-        hasCustomLocation = custom
+    /// Put the worktree in another folder; its name still follows the branch.
+    func setParentFolder(_ path: String) {
+        parentFolder = path
+        updateLocation()
     }
 
     private func branchDidChange(from oldValue: String) {
         guard branch != oldValue else { return }
         if existingBranch == nil { useExistingBranch = false }
-        guard !hasCustomLocation else { return }
-        location = Self.defaultLocation(repoPath: repo.path, branch: trimmedBranch)
+        updateLocation()
+    }
+
+    private func updateLocation() {
+        let registered = registeredPaths
+        let exists = folderExists
+        location = WorktreeLocation.path(parent: parentFolder, repoPath: repo.path, branch: trimmedBranch) {
+            registered.contains($0) || exists($0)
+        }
     }
 
     // MARK: - Pure rules
@@ -116,16 +132,6 @@ final class NewWorktreeModel {
         if let comparison, options.contains(comparison) { return comparison }
         if let primaryBranch, options.contains(primaryBranch) { return primaryBranch }
         return options.first ?? ""
-    }
-
-    /// A sibling of the primary checkout, named `<repo folder>-<branch>` with the
-    /// branch's slashes flattened (a folder per path component would nest).
-    static func defaultLocation(repoPath: String, branch: String) -> String {
-        guard !branch.isEmpty else { return "" }
-        let repoFolder = (repoPath as NSString).lastPathComponent
-        let parent = (repoPath as NSString).deletingLastPathComponent
-        let suffix = branch.replacingOccurrences(of: "/", with: "-")
-        return (parent as NSString).appendingPathComponent("\(repoFolder)-\(suffix)")
     }
 
     /// The local or origin branch `name` already refers to, if any: `feat/x` matches
