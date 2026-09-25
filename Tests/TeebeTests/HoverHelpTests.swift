@@ -86,13 +86,14 @@ struct HoverHelpTests {
         #expect(HoverHelpPresenter.frame(size: size, anchor: edge, screen: screen, leadingInset: 24).maxX <= 994)
     }
 
-    @Test func richCardShowsAtItsOwnWidthBelowTheRow() throws {
+    @Test func richCardShowsAtItsOwnWidthBelowTheMark() throws {
         guard CGMainDisplayID() != 0 else { return }
         let window = NSWindow(contentRect: NSRect(x: 100, y: 300, width: 440, height: 400),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let owner = HoverHelpView(frame: NSRect(x: 0, y: 200, width: 440, height: 26))
+        // The owner is the row's mark slot, not the whole row.
+        let owner = HoverHelpView(frame: NSRect(x: 24, y: 200, width: 22, height: 26))
         owner.text = "Safe to delete. Merged into dev."
         owner.card = AnyView(WorktreeHoverCard(
             card: WorktreeCard(title: "Safe to delete", subtitle: "Merged into dev. Nothing uncommitted.",
@@ -106,8 +107,24 @@ struct HoverHelpTests {
         let anchor = window.convertToScreen(owner.convert(owner.bounds, to: nil))
         #expect(panel.frame.width == WorktreeHoverCard.width)
         #expect(panel.frame.height > 50 && panel.frame.height < 160)
-        #expect(abs(panel.frame.minX - (anchor.minX + 24)) < 1)
+        // The card starts at the mark's leading edge, just below it.
+        #expect(abs(panel.frame.minX - anchor.minX) < 1)
         #expect(abs(anchor.minY - panel.frame.maxY - 6) < 1)
+    }
+
+    @Test func richCardWaitsForTheDelayAndLeavesWithThePointer() throws {
+        let owner = HoverHelpView(frame: NSRect(x: 0, y: 0, width: 22, height: 26))
+        owner.text = "Safe to delete. All its work is merged."
+        owner.card = AnyView(Text("card"))
+        let event = try #require(NSEvent.enterExitEvent(
+            with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil
+        ))
+        owner.mouseEntered(with: event)
+        #expect(HoverHelpPresenter.shared.owner === owner)
+        #expect(HoverHelpPresenter.shared.panel == nil)
+        owner.mouseExited(with: event)
+        #expect(HoverHelpPresenter.shared.owner == nil)
     }
 
     @Test func leavingAnOldControlDoesNotCancelTheNewOne() {

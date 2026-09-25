@@ -36,7 +36,7 @@ extension View {
     }
 
     /// The same surface with rich content: shown after the same delay, but at the
-    /// card's own size and starting near the view's leading edge. `summary` is the
+    /// card's own size and starting at the view's leading edge. `summary` is the
     /// plain-text version, for accessibility and to notice when the card changes.
     func hoverCard<Card: View>(_ summary: String, @ViewBuilder card: () -> Card) -> some View {
         background(HoverHelpAnchor(text: summary, highlight: false, card: AnyView(card())))
@@ -200,7 +200,7 @@ final class HoverHelpPresenter {
         content.frame = NSRect(origin: .zero, size: size)
         let anchor = window.convertToScreen(owner.convert(owner.bounds, to: nil))
         let screen = window.screen?.visibleFrame ?? anchor
-        let frame = Self.frame(size: size, anchor: anchor, screen: screen, leadingInset: owner.card == nil ? nil : 24)
+        let frame = Self.frame(size: size, anchor: anchor, screen: screen, leadingInset: owner.card == nil ? nil : 0)
         let popup = NSPanel(contentRect: frame,
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         popup.isReleasedWhenClosed = false

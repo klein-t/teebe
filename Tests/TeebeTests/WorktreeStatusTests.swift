@@ -113,6 +113,17 @@ struct WorktreeStatusTests {
         #expect(status(entry(primary, merged: [dev])).rowMark(grouped: true) == .merged)
     }
 
+    @Test("the hover card opens from the mark, so a row without a visible mark has none")
+    func hoverCardNeedsAMark() {
+        #expect(status(entry(merged: [dev])).hasHoverCard(grouped: false))
+        #expect(!status(entry(merged: [dev])).hasHoverCard(grouped: true))
+        #expect(status(entry(), info: .init(agentState: .working)).hasHoverCard(grouped: true))
+        let devTree = Worktree(path: "/dev", branch: "dev")
+        let target = entry(devTree, merged: [dev]) { $0.isTarget = true }
+        #expect(!status(target).hasHoverCard(grouped: false))
+        #expect(status(target, count: 1).hasHoverCard(grouped: true))
+    }
+
     @Test("every card has a fixed state title, one short sentence, and the same three facts")
     func cards() {
         let merged = status(entry(merged: [main, dev]), info: .init(remote: .sameBranch(remote: "origin", ahead: 0, behind: 0)))

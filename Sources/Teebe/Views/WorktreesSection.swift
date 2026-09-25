@@ -316,13 +316,26 @@ struct WorktreesSection: View {
         // The keyboard cursor (only while WORKTREES is the active section): an outline,
         // distinct from the filled accent of the committed worktree. Enter commits it.
         let isHighlighted = app.activeSection == .worktrees && selector.highlightedWorktree?.path == worktree.path
+        let summary = ([status.card.title + ".", status.card.subtitle] + status.card.facts.map { $0.text + "." })
+            .joined(separator: " ")
         return HStack(spacing: 0) {
-            WorktreeMarkView(mark: status.rowMark(grouped: grouped), isSelected: isActive, paused: selector.isLowPower)
-                .frame(width: 22, height: 20)
+            if status.hasHoverCard(grouped: grouped) {
+                WorktreeMarkHoverTarget(isSelected: isActive) {
+                    WorktreeMarkView(mark: status.rowMark(grouped: grouped), isSelected: isActive, paused: selector.isLowPower)
+                }
+                .hoverCard(summary) {
+                    WorktreeHoverCard(card: status.card, mark: status.mark, paused: selector.isLowPower)
+                }
+            } else {
+                // No mark to hover: the slot stays so names line up.
+                Color.clear.frame(width: 22, height: WorktreeListPresentation.rowHeight)
+            }
             Text(worktree.branch ?? worktree.name)
                 .font(Typography.rowName)
                 .lineLimit(1).truncationMode(.middle)
                 .padding(.leading, 2)
+                // Without a mark there is no card to hover; the text is still read out.
+                .accessibilityHint(status.hasHoverCard(grouped: grouped) ? "" : summary)
             if let action = status.trashAction {
                 WorktreeTrashButton(isSelected: isActive,
                                     label: action == .prune ? "Forget missing worktrees" : "Remove worktree") {
@@ -339,10 +352,6 @@ struct WorktreesSection: View {
         // The name starts where the Changes list's labels do.
         .padding(.leading, 24).padding(.trailing, 11).frame(height: WorktreeListPresentation.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .hoverCard(([status.card.title + ".", status.card.subtitle] + status.card.facts.map { $0.text + "." })
-            .joined(separator: " ")) {
-            WorktreeHoverCard(card: status.card, mark: status.mark, paused: selector.isLowPower)
-        }
         .rowHighlight(isSelected: isActive)
         .foregroundStyle(isActive ? .white : .primary)
         .overlay {
@@ -367,6 +376,32 @@ struct WorktreesSection: View {
             }
         }
         .id(worktree.path)   // scroll-to target for keyboard highlight
+    }
+}
+
+/// The mark's hover area: the whole mark slot at row height, so the card is easy
+/// to reach. Hovering lights a soft circle behind the mark and nudges it up in
+/// size straight away; the card itself follows after the hover-help delay.
+private struct WorktreeMarkHoverTarget<Mark: View>: View {
+    let isSelected: Bool
+    @ViewBuilder var mark: () -> Mark
+    @State private var hovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        mark()
+            .frame(width: 22, height: 20)
+            .scaleEffect(hovered ? 1.08 : 1)
+            .background {
+                Circle()
+                    .fill(isSelected ? Color.white.opacity(0.25) : Color(nsColor: .labelColor).opacity(0.12))
+                    .frame(width: 20, height: 20)
+                    .opacity(hovered ? 1 : 0)
+            }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovered)
+            .frame(width: 22, height: WorktreeListPresentation.rowHeight)
+            .contentShape(Rectangle())
+            .onHover { hovered = $0 }
     }
 }
 

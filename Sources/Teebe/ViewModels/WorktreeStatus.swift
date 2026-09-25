@@ -77,6 +77,9 @@ struct WorktreeStatus: Equatable {
         return .none
     }
 
+    /// The hover card opens from the mark, so a row that draws none has no card.
+    func hasHoverCard(grouped: Bool) -> Bool { rowMark(grouped: grouped) != .none }
+
     private static func group(_ facts: Facts, isMergedClean: Bool) -> WorktreeGroup {
         if facts.hasUncommitted { return .localChanges }
         if facts.isMissing { return .broken }
