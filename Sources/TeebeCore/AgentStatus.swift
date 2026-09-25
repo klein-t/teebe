@@ -58,10 +58,15 @@ public struct AgentSessionEntry: Equatable, Sendable {
         public var name: String
         /// The call's own timeout (Bash `input.timeout`), when it set one.
         public var timeout: TimeInterval?
+        /// The absolute path the call works on, when it names one: a file it
+        /// reads or edits (`file_path`, `notebook_path`), a search root (`path`),
+        /// or the directory a Bash command `cd`s into.
+        public var target: String?
 
-        public init(name: String, timeout: TimeInterval? = nil) {
+        public init(name: String, timeout: TimeInterval? = nil, target: String? = nil) {
             self.name = name
             self.timeout = timeout
+            self.target = target
         }
     }
 
@@ -142,11 +147,32 @@ public struct AgentSessionEntry: Equatable, Sendable {
             entry.toolCalls = blocks.filter { $0["type"] as? String == "tool_use" }.map { block in
                 let input = block["input"] as? [String: Any]
                 let millis = (input?["timeout"] as? NSNumber)?.doubleValue
-                return ToolCall(name: block["name"] as? String ?? "", timeout: millis.map { $0 / 1_000 })
+                return ToolCall(name: block["name"] as? String ?? "", timeout: millis.map { $0 / 1_000 },
+                                target: input.flatMap(target(ofToolInput:)))
             }
         }
         return entry
     }
+
+    /// The absolute path a tool call works on (see `ToolCall.target`).
+    static func target(ofToolInput input: [String: Any]) -> String? {
+        for key in ["file_path", "notebook_path", "path"] {
+            if let path = input[key] as? String, path.hasPrefix("/") { return path }
+        }
+        guard let command = input["command"] as? String else { return nil }
+        let range = NSRange(command.startIndex..., in: command)
+        guard let match = cdPattern.matches(in: command, range: range).last else { return nil }
+        for group in 1...3 {
+            if let groupRange = Range(match.range(at: group), in: command) { return String(command[groupRange]) }
+        }
+        return nil
+    }
+
+    /// `cd /abs/dir` at the start of a command or after `&&`, `;`, `||` or a newline.
+    private static let cdPattern: NSRegularExpression = {
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(pattern: #"(?:^|&&|;|\|\||\n)\s*cd\s+(?:"(/[^"]+)"|'(/[^']+)'|(/[^\s;&|]+))"#)
+    }()
 
     /// Whether an assistant message's stop reason ends the turn: `end_turn`,
     /// the `stop_sequence` of synthetic API-error messages, `max_tokens`…
@@ -182,7 +208,7 @@ public struct AgentSessionEntry: Equatable, Sendable {
         return formatter
     }()
 
-    private static func parseTimestamp(_ string: String) -> Date? {
+    static func parseTimestamp(_ string: String) -> Date? {
         fractionalFormatter.date(from: string) ?? plainFormatter.date(from: string)
     }
 }
@@ -372,7 +398,9 @@ public struct AgentSessionScanner: Sendable {
             let session = live[Self.sessionID(of: file.url)]
             let state = AgentStateDeriver.derive(lastEntry: entry, live: session, now: now, thresholds: thresholds)
             guard state != .idle else { continue }
-            let owner = owningPath(forCwd: entry?.cwd ?? session?.cwd, among: paths) ?? file.launchPath
+            let owner = WorktreeAttribution.owner(
+                targets: recentTargets(in: file.url, includingSidechains: false),
+                cwd: entry?.cwd ?? session?.cwd, among: paths) ?? file.launchPath
             result[owner] = state
         }
         markBusySubagents(in: &result, paths: paths, live: live, now: now)
@@ -419,15 +447,17 @@ public struct AgentSessionScanner: Sendable {
                 let subagents = sessionDir.appendingPathComponent("subagents", isDirectory: true)
                 let busy = sessionFiles(in: subagents)
                     .filter { now.timeIntervalSince($0.mtime) < thresholds.stall }
-                    .compactMap { lastEntry(in: $0.url, includingSidechains: true) }
-                    .filter { AgentStateDeriver.derive(lastEntry: $0, now: now, thresholds: thresholds) == .working }
+                    .compactMap { file in lastEntry(in: file.url, includingSidechains: true).map { (file.url, $0) } }
+                    .filter { AgentStateDeriver.derive(lastEntry: $0.1, now: now, thresholds: thresholds) == .working }
                 guard !busy.isEmpty else { continue }
-                for entry in busy {
-                    result[owningPath(forCwd: entry.cwd, among: paths) ?? path] = .working
+                for (url, entry) in busy {
+                    let targets = recentTargets(in: url, includingSidechains: true)
+                    result[WorktreeAttribution.owner(targets: targets, cwd: entry.cwd, among: paths) ?? path] = .working
                 }
                 let parent = dir.appendingPathComponent(sessionDir.lastPathComponent + ".jsonl")
                 let parentCwd = lastEntry(in: parent, includingSidechains: false)?.cwd
-                result[owningPath(forCwd: parentCwd, among: paths) ?? path] = .working
+                let parentTargets = recentTargets(in: parent, includingSidechains: false)
+                result[WorktreeAttribution.owner(targets: parentTargets, cwd: parentCwd, among: paths) ?? path] = .working
             }
         }
     }
@@ -437,16 +467,6 @@ public struct AgentSessionScanner: Sendable {
             at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
         ) else { return [] }
         return entries.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-    }
-
-    /// The deepest known worktree containing `cwd` — sessions record the exact
-    /// directory they run in, which is often a subdirectory of the worktree.
-    /// nil when `cwd` is missing or outside every known worktree.
-    private func owningPath(forCwd cwd: String?, among paths: [String]) -> String? {
-        guard let cwd else { return nil }
-        return paths
-            .filter { cwd == $0 || cwd.hasPrefix($0 + "/") }
-            .max { $0.count < $1.count }
     }
 
     private func sessionFiles(in dir: URL) -> [(url: URL, mtime: Date)] {
@@ -473,13 +493,7 @@ public struct AgentSessionScanner: Sendable {
     /// scan stops at the first hit instead of materializing every line of the
     /// window when only the last one or two matter.
     private func lastEntry(in url: URL, includingSidechains: Bool) -> AgentSessionEntry? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
-        guard let size = try? handle.seekToEnd() else { return nil }
-        let offset = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
-        guard (try? handle.seek(toOffset: offset)) != nil,
-              let data = try? handle.readToEnd(), !data.isEmpty
-        else { return nil }
+        guard let data = tail(of: url) else { return nil }
         let newline = UInt8(ascii: "\n")
         var end = data.endIndex
         while end > data.startIndex {
@@ -499,6 +513,42 @@ public struct AgentSessionScanner: Sendable {
             end = start > data.startIndex ? start - 1 : data.startIndex
         }
         return nil
+    }
+
+    /// The last `tailBytes` of a file; nil when unreadable or empty.
+    private func tail(of url: URL) -> Data? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return nil }
+        let offset = size > UInt64(tailBytes) ? size - UInt64(tailBytes) : 0
+        guard (try? handle.seek(toOffset: offset)) != nil,
+              let data = try? handle.readToEnd(), !data.isEmpty
+        else { return nil }
+        return data
+    }
+
+    /// The paths the session's recent tool calls worked on, newest first: calls
+    /// within `WorktreeAttribution.targetWindow` of its newest entry, at most
+    /// `targetLimit` of them. Only read for sessions that are not idle.
+    private func recentTargets(in url: URL, includingSidechains: Bool) -> [String] {
+        guard let data = tail(of: url) else { return [] }
+        var targets: [String] = []
+        var newest: Date?
+        let newline = UInt8(ascii: "\n")
+        var end = data.endIndex
+        while end > data.startIndex, targets.count < WorktreeAttribution.targetLimit {
+            let start = data[data.startIndex..<end].lastIndex(of: newline).map { $0 + 1 } ?? data.startIndex
+            if start < end,
+               let line = String(data: data[start..<end], encoding: .utf8),
+               let entry = AgentSessionEntry.parse(line: line),
+               includingSidechains || !entry.isSidechain {
+                if let newest, newest.timeIntervalSince(entry.timestamp) > WorktreeAttribution.targetWindow { break }
+                newest = newest ?? entry.timestamp
+                targets += entry.toolCalls.reversed().compactMap(\.target)
+            }
+            end = start > data.startIndex ? start - 1 : data.startIndex
+        }
+        return targets
     }
 
     /// Tool calls on the lines just before `data`'s end that belong to message
