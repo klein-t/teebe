@@ -64,6 +64,19 @@ private func assistantBlockLine(
     """
 }
 
+/// One tool_use block line; parallel calls of one message share `messageID`.
+private func toolCallLine(
+    _ name: String, input: String = "{}", messageID: String = "msg_2", at date: Date, sidechain: Bool = false
+) -> String {
+    """
+    {"parentUuid":"u1","isSidechain":\(sidechain),"type":"assistant",\
+    "message":{"model":"claude-sonnet","id":"\(messageID)","type":"message","role":"assistant",\
+    "content":[{"type":"tool_use","id":"toolu_\(name)","name":"\(name)","input":\(input)}],\
+    "stop_reason":"tool_use","stop_sequence":null},\
+    "uuid":"a5","timestamp":"\(iso(date))","cwd":"/Users/k/Documents/CODE/teebe","sessionId":"s1"}
+    """
+}
+
 /// The synthetic message Claude Code logs when a request fails (API error,
 /// usage limit, not logged in): the turn is over.
 private func apiErrorLine(at date: Date) -> String {
@@ -211,6 +224,14 @@ struct AgentSessionEntryTests {
         #expect(AgentSessionEntry.parse(line: line) == nil)
     }
 
+    @Test("a tool_use line carries its message id and each call's name and timeout")
+    func toolCalls() throws {
+        let line = toolCallLine("Bash", input: #"{"command":"swift build","timeout":480000}"#, messageID: "msg_9", at: date)
+        let entry = try #require(AgentSessionEntry.parse(line: line))
+        #expect(entry.messageID == "msg_9")
+        #expect(entry.toolCalls == [AgentSessionEntry.ToolCall(name: "Bash", timeout: 480)])
+    }
+
     @Test("meta / non-message lines parse to nil")
     func metaLinesAreNil() {
         for line in metaLines {
@@ -288,6 +309,41 @@ struct AgentStateDeriverTests {
     func stalled() {
         #expect(AgentStateDeriver.derive(lastEntry: entry(.assistantToolUse, age: 700), now: now, thresholds: thresholds)
             == .needsAttention)
+    }
+
+    func pending(_ calls: [(String, TimeInterval?)], age: TimeInterval) -> AgentActivityState {
+        var pending = entry(.assistantToolUse, age: age)
+        pending.toolCalls = calls.map { AgentSessionEntry.ToolCall(name: $0.0, timeout: $0.1) }
+        return AgentStateDeriver.derive(lastEntry: pending, now: now, thresholds: thresholds)
+    }
+
+    @Test("a pending question to the user waits on the user at once", arguments: ["AskUserQuestion", "ExitPlanMode"])
+    func questionTool(name: String) {
+        #expect(pending([(name, nil)], age: 2) == .needsAttention)
+    }
+
+    @Test("a near-instant tool still pending past the quick window is a permission prompt")
+    func quickToolPending() {
+        #expect(pending([("Edit", nil)], age: 30) == .working)
+        #expect(pending([("Edit", nil)], age: 90) == .needsAttention)
+    }
+
+    @Test("a quick tool pending beside a slow sibling follows the slow one")
+    func mixedParallelCalls() {
+        #expect(pending([("Bash", nil), ("Read", nil)], age: 90) == .working)
+    }
+
+    @Test("a long tool call keeps working until the general stall")
+    func longToolWorks() {
+        #expect(pending([("Bash", nil)], age: 500) == .working)
+        #expect(pending([("mcp__server__audit", nil)], age: 500) == .working)
+        #expect(pending([("mcp__server__audit", nil)], age: 700) == .needsAttention)
+    }
+
+    @Test("a command with a longer timeout than the stall keeps working until that timeout")
+    func explicitTimeout() {
+        #expect(pending([("Bash", 900)], age: 700) == .working)
+        #expect(pending([("Bash", 900)], age: 1_000) == .needsAttention)
     }
 
     @Test("anything past the idle threshold is idle", arguments: [
@@ -455,6 +511,17 @@ struct AgentSessionScannerTests {
             [assistantToolUseLine(at: now.addingTimeInterval(-20)), interruptLine(at: now.addingTimeInterval(-10))],
             to: fx.dir.appendingPathComponent("s1.jsonl"))
         #expect(fx.scanner.state(forWorktreePath: worktreePath, now: now) == .needsAttention)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("parallel calls: a pending quick call on the last line doesn't hide a slow sibling")
+    func parallelToolCalls() throws {
+        let fx = try makeFixture()
+        try write(
+            [toolCallLine("Bash", input: #"{"command":"swift test"}"#, at: now.addingTimeInterval(-121)),
+             toolCallLine("Read", input: #"{"file_path":"/tmp/x"}"#, at: now.addingTimeInterval(-120))],
+            to: fx.dir.appendingPathComponent("s1.jsonl"))
+        #expect(fx.scanner.state(forWorktreePath: worktreePath, now: now) == .working)
         try? FileManager.default.removeItem(at: fx.root)
     }
 

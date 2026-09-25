@@ -19,10 +19,15 @@ public struct AgentStatusThresholds: Equatable, Sendable {
     public var stall: TimeInterval
     /// Anything older than this is treated as no agent at all.
     public var idle: TimeInterval
+    /// How long a near-instant built-in tool (Read, Edit, Grep…) may stay
+    /// pending before the silence means a permission prompt; also the grace
+    /// added to a call's own timeout.
+    public var quickTool: TimeInterval
 
-    public init(stall: TimeInterval = 600, idle: TimeInterval = 1_800) {
+    public init(stall: TimeInterval = 600, idle: TimeInterval = 1_800, quickTool: TimeInterval = 60) {
         self.stall = stall
         self.idle = idle
+        self.quickTool = quickTool
     }
 }
 
@@ -48,9 +53,27 @@ public struct AgentSessionEntry: Equatable, Sendable {
         case interrupted
     }
 
+    /// One tool call requested by an assistant message.
+    public struct ToolCall: Equatable, Sendable {
+        public var name: String
+        /// The call's own timeout (Bash `input.timeout`), when it set one.
+        public var timeout: TimeInterval?
+
+        public init(name: String, timeout: TimeInterval? = nil) {
+            self.name = name
+            self.timeout = timeout
+        }
+    }
+
     public var kind: Kind
     public var timestamp: Date
     public var isSidechain: Bool
+    /// The API message this line is a block of (assistant lines only). Parallel
+    /// tool calls are separate lines sharing it.
+    public var messageID: String?
+    /// The tool calls of an `.assistantToolUse` entry — after a tail scan, every
+    /// call of its message, not only the last line's.
+    public var toolCalls: [ToolCall] = []
     /// The directory the session was operating in when this entry was logged.
     /// This is the ground truth for *which worktree* the agent is in: a session
     /// launched in the primary checkout that moves into a linked worktree keeps
@@ -108,12 +131,21 @@ public struct AgentSessionEntry: Equatable, Sendable {
                 kind = .humanPrompt
             }
         }
-        return AgentSessionEntry(
+        var entry = AgentSessionEntry(
             kind: kind,
             timestamp: timestamp,
             isSidechain: dict["isSidechain"] as? Bool ?? false,
             cwd: dict["cwd"] as? String
         )
+        if type == "assistant" {
+            entry.messageID = message["id"] as? String
+            entry.toolCalls = blocks.filter { $0["type"] as? String == "tool_use" }.map { block in
+                let input = block["input"] as? [String: Any]
+                let millis = (input?["timeout"] as? NSNumber)?.doubleValue
+                return ToolCall(name: block["name"] as? String ?? "", timeout: millis.map { $0 / 1_000 })
+            }
+        }
+        return entry
     }
 
     /// Whether an assistant message's stop reason ends the turn: `end_turn`,
@@ -168,9 +200,32 @@ public enum AgentStateDeriver {
         switch entry.kind {
         case .assistantText, .interrupted:
             return .needsAttention
-        case .humanPrompt, .toolResult, .assistantToolUse, .assistantPartial:
+        case .assistantToolUse:
+            if entry.toolCalls.contains(where: { questionTools.contains($0.name) }) { return .needsAttention }
+            return age >= pendingLimit(entry.toolCalls, thresholds: thresholds) ? .needsAttention : .working
+        case .humanPrompt, .toolResult, .assistantPartial:
             return age >= thresholds.stall ? .needsAttention : .working
         }
+    }
+
+    /// Tools whose call *is* a question to the user (a choice, a plan to approve).
+    static let questionTools: Set<String> = ["AskUserQuestion", "ExitPlanMode"]
+    /// Built-in tools that finish in well under a second once allowed to run.
+    static let quickTools: Set<String> = [
+        "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Glob", "Grep", "TodoWrite"
+    ]
+
+    /// How long pending tool calls may stay silent before that silence means
+    /// the agent is waiting on the user. The log can't tell a permission prompt
+    /// from a call that is still running, so the limit follows what the calls
+    /// can legitimately take: near-instant built-ins get a short window; any
+    /// other call (a build, a subagent, an MCP request) the general stall, or
+    /// its own timeout when longer — a running command never reads as waiting.
+    private static func pendingLimit(_ calls: [AgentSessionEntry.ToolCall],
+                                     thresholds: AgentStatusThresholds) -> TimeInterval {
+        if !calls.isEmpty, calls.allSatisfy({ quickTools.contains($0.name) }) { return thresholds.quickTool }
+        let longestTimeout = calls.compactMap(\.timeout).max() ?? 0
+        return max(thresholds.stall, longestTimeout + thresholds.quickTool)
     }
 }
 
@@ -328,10 +383,34 @@ public struct AgentSessionScanner: Sendable {
                let line = String(data: data[start..<end], encoding: .utf8),
                let entry = AgentSessionEntry.parse(line: line),
                includingSidechains || !entry.isSidechain {
-                return entry
+                guard entry.kind == .assistantToolUse, let id = entry.messageID else { return entry }
+                // Parallel calls are separate lines: gather the whole message's
+                // calls, so a quick call last doesn't hide a slow sibling.
+                var merged = entry
+                merged.toolCalls = siblingToolCalls(of: id, in: data[data.startIndex..<start]) + entry.toolCalls
+                return merged
             }
             end = start > data.startIndex ? start - 1 : data.startIndex
         }
         return nil
+    }
+
+    /// Tool calls on the lines just before `data`'s end that belong to message
+    /// `id` (its blocks are contiguous; the first foreign entry ends the run).
+    private func siblingToolCalls(of id: String, in data: Data) -> [AgentSessionEntry.ToolCall] {
+        var calls: [AgentSessionEntry.ToolCall] = []
+        let newline = UInt8(ascii: "\n")
+        var end = data.endIndex > data.startIndex ? data.endIndex - 1 : data.startIndex
+        while end > data.startIndex {
+            let start = data[data.startIndex..<end].lastIndex(of: newline).map { $0 + 1 } ?? data.startIndex
+            if start < end,
+               let line = String(data: data[start..<end], encoding: .utf8),
+               let entry = AgentSessionEntry.parse(line: line) {
+                guard entry.messageID == id else { break }
+                calls = entry.toolCalls + calls
+            }
+            end = start > data.startIndex ? start - 1 : data.startIndex
+        }
+        return calls
     }
 }
