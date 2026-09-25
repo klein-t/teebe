@@ -116,6 +116,8 @@ struct MergeGlyphShape: Shape {
 /// An icon-led line of the hover card and the removal sheets.
 struct WorktreeFactRow: View {
     let fact: WorktreeCardFact
+    /// Secondary in the hover card, body in the sheets.
+    var font = Typography.secondary
 
     var body: some View {
         HStack(spacing: 8) {
@@ -123,7 +125,7 @@ struct WorktreeFactRow: View {
                 .frame(width: 13, height: 13)
                 .foregroundStyle(iconColor)
             Text(fact.text)
-                .font(.system(size: 11.5)).monospacedDigit()
+                .font(font).monospacedDigit()
                 .foregroundStyle(fact.tone == .muted ? Color.secondary : Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -173,8 +175,8 @@ struct WorktreeHoverCard: View {
                     .frame(width: 22, height: 20)
                     .padding(.top, -1)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(card.title).font(.system(size: 12.5, weight: .semibold))
-                    Text(card.subtitle).font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    Text(card.title).font(Typography.bodyEmphasis)
+                    Text(card.subtitle).font(Typography.secondary).foregroundStyle(.secondary)
                         .lineSpacing(1.5)
                 }
                 .fixedSize(horizontal: false, vertical: true)

@@ -18,12 +18,12 @@ struct WorktreeRemovalSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title).font(.system(size: 13, weight: .semibold))
+            Text(title).font(Typography.heading)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.bottom, 10)
             if !facts.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(facts.enumerated()), id: \.offset) { WorktreeFactRow(fact: $0.element) }
+                    ForEach(Array(facts.enumerated()), id: \.offset) { WorktreeFactRow(fact: $0.element, font: Typography.body) }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -31,13 +31,13 @@ struct WorktreeRemovalSheet: View {
                 .padding(.bottom, 12)
             }
             Text(explanation)
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .font(Typography.body).foregroundStyle(.secondary)
                 .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
             if let deleteBranch {
                 Toggle(deleteBranchTitle, isOn: deleteBranch)
                     .toggleStyle(.checkbox)
-                    .font(.system(size: 12))
+                    .font(Typography.body)
                     .padding(.top, 12)
             }
             HStack(spacing: 8) {

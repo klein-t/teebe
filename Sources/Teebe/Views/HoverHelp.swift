@@ -6,7 +6,6 @@ import SwiftUI
 /// Controls with their own hover chrome pass `highlight: false`.
 enum HelpStyle {
     static let delay: Duration = .milliseconds(350)
-    static let fontSize: CGFloat = 12
     static let horizontalPadding: CGFloat = 10
     static let verticalPadding: CGFloat = 7
     static let maximumWidth: CGFloat = 300
@@ -21,7 +20,7 @@ struct HelpInfo: View {
 
     var body: some View {
         Image(systemName: "info.circle")
-            .font(.system(size: HelpStyle.fontSize))
+            .font(Typography.body)
             .foregroundStyle(.secondary)
             .frame(width: 22, height: 22)
             .hoverHelp(explanation)
@@ -185,7 +184,7 @@ final class HoverHelpPresenter {
     func show(owner: HoverHelpView, window: NSWindow) {
         let root = owner.card.map { AnyView($0.fixedSize(horizontal: false, vertical: true)) } ?? AnyView(
             Text(owner.text)
-                .font(.system(size: HelpStyle.fontSize))
+                .font(Typography.body)
                 .foregroundStyle(.primary)
                 .padding(.horizontal, HelpStyle.horizontalPadding).padding(.vertical, HelpStyle.verticalPadding)
                 .frame(maxWidth: HelpStyle.maximumWidth)

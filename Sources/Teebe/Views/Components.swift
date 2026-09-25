@@ -74,6 +74,22 @@ enum Palette {
     }
 }
 
+/// The type scale of the worktree list, its hover help and its sheets: one
+/// system font (SF Pro), three sizes. Code and paths keep their monospaced design
+/// elsewhere on purpose.
+enum Typography {
+    /// Worktree row names.
+    static let rowName = Font.system(size: 13, weight: .medium)
+    /// Dialog headings.
+    static let heading = Font.system(size: 13, weight: .semibold)
+    /// Tooltip text, card titles (semibold), sheet text and facts.
+    static let body = Font.system(size: 12)
+    static let bodyEmphasis = Font.system(size: 12, weight: .semibold)
+    /// Card subtitles and facts, sync arrows, group headings (semibold) and counts.
+    static let secondary = Font.system(size: 11)
+    static let secondaryEmphasis = Font.system(size: 11, weight: .semibold)
+}
+
 /// A monospace colored git-status letter (M/A/D/U…), matching the reference.
 struct StatusLetter: View {
     let change: FileChange

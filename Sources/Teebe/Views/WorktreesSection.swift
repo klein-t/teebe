@@ -224,8 +224,8 @@ struct WorktreesSection: View {
                     // System colors throughout: they are the only ones that follow light,
                     // dark and Increase Contrast, so the row of headings stays consistent.
                     WorktreeMarkView(mark: headerMark(group.kind)).frame(width: 14, height: 15)
-                    Text(group.kind.title).font(.system(size: 11, weight: .semibold))
-                    Text("\(group.worktrees.count)").font(.system(size: 10)).monospacedDigit()
+                    Text(group.kind.title).font(Typography.secondaryEmphasis)
+                    Text("\(group.worktrees.count)").font(Typography.secondary).monospacedDigit()
                         .foregroundStyle(Palette.secondaryText)
                     Spacer(minLength: 4)
                 }
@@ -320,7 +320,7 @@ struct WorktreesSection: View {
             WorktreeMarkView(mark: status.rowMark(grouped: grouped), isSelected: isActive, paused: selector.isLowPower)
                 .frame(width: 22, height: 20)
             Text(worktree.branch ?? worktree.name)
-                .font(.system(size: 13, weight: .medium))
+                .font(Typography.rowName)
                 .lineLimit(1).truncationMode(.middle)
                 .padding(.leading, 2)
             if let action = status.trashAction {
@@ -412,7 +412,7 @@ private struct WorktreeSyncArrows: View {
                 if behind > 0 { Text("↓\(behind)").foregroundStyle(isSelected ? Color.white : Color.secondary) }
                 if ahead > 0 { Text("↑\(ahead)").foregroundStyle(isSelected ? Color.white : Color.primary) }
             }
-            .font(.system(size: 10.5, design: .monospaced))
+            .font(Typography.secondary).monospacedDigit()
             .fixedSize()
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(behind) to pull, \(ahead) to push")
