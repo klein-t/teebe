@@ -139,6 +139,46 @@ struct ClaudeProjectsPathTests {
     }
 }
 
+// MARK: - Which watch events can change the scan
+
+@Suite("Agent watch events that matter")
+struct AgentWatchEventTests {
+    let root = "/Users/k/.claude/projects"
+    let worktrees = ["/Users/k/repo", "/Users/k/repo-wt"]
+
+    @Test("a write in one of the repo's project dirs matters, subagent logs included")
+    func ownProjectDir() {
+        #expect(AgentSessionScanner.eventsMatter(["\(root)/-Users-k-repo-wt/abc.jsonl"],
+                                                 projectsRoot: root, worktreePaths: worktrees))
+        #expect(AgentSessionScanner.eventsMatter(["\(root)/-Users-k-repo/abc/subagents/agent-1.jsonl"],
+                                                 projectsRoot: root, worktreePaths: worktrees))
+    }
+
+    @Test("writes only in other projects' dirs do not: the scan never reads them")
+    func otherProjects() {
+        #expect(!AgentSessionScanner.eventsMatter(["\(root)/-Users-k-other/abc.jsonl",
+                                                   "\(root)/-Users-k-repo-other/x/subagents/a.jsonl"],
+                                                  projectsRoot: root, worktreePaths: worktrees))
+    }
+
+    @Test("anything outside the projects root (live registry, Codex) or an empty batch matters")
+    func outsideRoot() {
+        #expect(AgentSessionScanner.eventsMatter(["/Users/k/.claude/sessions/123.json"],
+                                                 projectsRoot: root, worktreePaths: worktrees))
+        #expect(AgentSessionScanner.eventsMatter(["/Users/k/.codex/sessions/2026/09/25/r.jsonl"],
+                                                 projectsRoot: root, worktreePaths: worktrees))
+        #expect(AgentSessionScanner.eventsMatter([root], projectsRoot: root, worktreePaths: worktrees))
+        #expect(AgentSessionScanner.eventsMatter([], projectsRoot: root, worktreePaths: worktrees))
+    }
+
+    @Test("a projects root given through a firmlink still recognises the real event paths")
+    func firmlinkRoot() {
+        let tmpRoot = "/tmp/fake/projects"
+        #expect(!AgentSessionScanner.eventsMatter(["/private/tmp/fake/projects/-other/a.jsonl"],
+                                                  projectsRoot: tmpRoot, worktreePaths: worktrees))
+    }
+}
+
 // MARK: - Entry parsing
 
 @Suite("AgentSessionEntry parsing")

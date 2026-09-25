@@ -101,7 +101,7 @@ struct AgentStatusModelTests {
 
         // A session-log change re-derives states via the cheap path.
         states["/repo-wt"] = .working
-        await selector.handleAgentWatchEvent()
+        await selector.handleAgentWatchEvent(["/fake/.claude/projects/-repo-wt/s.jsonl"])
         #expect(selector.info(for: selector.worktrees[1]).agentState == .working)
 
         selector.clearSelection()

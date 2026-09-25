@@ -405,8 +405,8 @@ final class SelectorModel {
         // is recursive, so a resumed thread writing to an older date folder is
         // seen too; only the paths Teebe reads cost anything.
         let watcher = environment.makeWatcher()
-        watcher.start(paths: [root, registry] + environment.agentExtraWatchPaths, debounce: 1.0) { [weak self] _ in
-            Task { @MainActor in await self?.handleAgentWatchEvent() }
+        watcher.start(paths: [root, registry] + environment.agentExtraWatchPaths, debounce: 1.0) { [weak self] paths in
+            Task { @MainActor in await self?.handleAgentWatchEvent(paths) }
         }
         agentWatcher = watcher
     }
@@ -460,8 +460,14 @@ final class SelectorModel {
         await refreshAgentStates()
     }
 
-    /// A coalesced batch of session-log writes — re-derive the badges.
-    func handleAgentWatchEvent() async {
+    /// A coalesced batch of session-log writes — re-derive the badges, unless
+    /// every write belongs to another project's sessions (which the scan never
+    /// reads): Claude Code sessions elsewhere log continuously.
+    func handleAgentWatchEvent(_ paths: [String]) async {
+        if let root = environment.agentProjectsRootPath,
+           !AgentSessionScanner.eventsMatter(paths, projectsRoot: root, worktreePaths: worktrees.map(\.path)) {
+            return
+        }
         await refreshAgentStates()
     }
 

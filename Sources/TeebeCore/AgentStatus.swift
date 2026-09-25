@@ -361,6 +361,23 @@ public struct AgentSessionScanner: Sendable {
         String(path.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
     }
 
+    /// Whether a batch of watched file events can change what
+    /// `states(forWorktreePaths:)` reports for `worktreePaths`. The scan only
+    /// reads those paths' project dirs, so writes by sessions of other projects
+    /// under `projectsRoot` cannot; anything outside the root (the live
+    /// registry, other harnesses' folders) and an empty batch always count.
+    public static func eventsMatter(_ eventPaths: [String], projectsRoot: String, worktreePaths: [String]) -> Bool {
+        guard !eventPaths.isEmpty else { return true }
+        let root = WorktreeAttribution.normalized(projectsRoot) + "/"
+        let ownDirs = Set(worktreePaths.map(projectDirName(forWorktreePath:)))
+        return eventPaths.contains { raw in
+            let path = WorktreeAttribution.normalized(raw)
+            guard path.hasPrefix(root), let dir = path.dropFirst(root.count).split(separator: "/").first
+            else { return true }
+            return ownDirs.contains(String(dir))
+        }
+    }
+
     /// The agent state for a single worktree, judged only from sessions logged
     /// under its own project dir.
     public func state(forWorktreePath path: String, now: Date = Date()) -> AgentActivityState {

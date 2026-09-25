@@ -6,7 +6,7 @@ import Testing
 
 /// Every write to `worktreeInfo` re-renders the whole worktree list, so the
 /// periodic and event-driven refreshes must only write when a row's facts really
-/// changed.
+/// changed, and agent-log events from other projects must not rescan at all.
 @MainActor
 @Suite("Refreshes that change nothing stay quiet")
 struct RefreshChurnTests {
@@ -94,5 +94,17 @@ struct RefreshChurnTests {
     func fullRefresh() async {
         let selector = await makeSelector()
         #expect(await !publishes(selector) { await selector.refreshWorktreeInfo() })
+    }
+
+    @Test("session-log writes from other projects do not rescan; the repo's own do")
+    func unrelatedAgentEvents() async {
+        let states = CountingStates()
+        let root = "/fake/.claude/projects"
+        let selector = await makeSelector(states: states, projectsRoot: root)
+        let before = states.count
+        await selector.handleAgentWatchEvent(["\(root)/-Users-k-elsewhere/s.jsonl"])
+        #expect(states.count == before)
+        await selector.handleAgentWatchEvent(["\(root)/-repo-wt/s.jsonl"])
+        #expect(states.count == before + 1)
     }
 }
