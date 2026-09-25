@@ -8,7 +8,7 @@ import Testing
 struct BottomScrollFadeTests {
     @Test func fadesOnlyForRemainingContent() {
         typealias Scroll = BottomFadingScrollView<Text>
-        #expect(Scroll.fadeHeight(contentBottom: 200, viewportHeight: 100) == 10)
+        #expect(Scroll.fadeHeight(contentBottom: 200, viewportHeight: 100) == 12)
         #expect(Scroll.fadeHeight(contentBottom: 100, viewportHeight: 100) == 0)
         #expect(Scroll.fadeHeight(contentBottom: 90, viewportHeight: 100) == 0)
         #expect(Scroll.fadeHeight(contentBottom: 104, viewportHeight: 100) == 4)
@@ -28,6 +28,26 @@ struct BottomScrollFadeTests {
         #expect(none.fade.height == 0)
     }
 
+    @Test("the fallback fade eases in: nearly solid at first, gone at the edge")
+    func fallbackFadeEasesIn() {
+        typealias Scroll = BottomFadingScrollView<Text>
+        #expect(Scroll.fadeOpacity(at: 0) == 1)
+        #expect(Scroll.fadeOpacity(at: 1) == 0)
+        #expect(Scroll.fadeOpacity(at: 0.5) > 0.5, "a linear fade would be half gone here")
+        let samples = stride(from: 0.0, through: 1.0, by: 0.1).map { Scroll.fadeOpacity(at: $0) }
+        #expect(zip(samples, samples.dropFirst()).allSatisfy { $0 > $1 })
+    }
+
+    @Test("macOS 26 uses the system's scroll-edge effect")
+    func systemEdgeEffectOnMacOS26() {
+        guard ProcessInfo.processInfo.environment["TEEBE_FALLBACK_FADE"] == nil else { return }
+        if #available(macOS 26, *) {
+            #expect(BottomFadingScrollView<Text>.usesSystemEdgeEffect)
+        } else {
+            #expect(BottomFadingScrollView<Text>.usesSystemEdgeEffect == false)
+        }
+    }
+
     @Test func realScrollAndResizeUpdateTheFade() async throws {
         guard NSScreen.main != nil else { return }
         var fade: CGFloat = -1
@@ -45,54 +65,25 @@ struct BottomScrollFadeTests {
         window.setContentSize(NSSize(width: 300, height: 100))
         window.orderFront(nil)
         try await Task.sleep(for: .milliseconds(150))
-        #expect(fade == 10)
+        #expect(fade == 12)
         func findScroll(_ view: NSView) -> NSScrollView? {
             if let scroll = view as? NSScrollView { return scroll }
             return view.subviews.lazy.compactMap { findScroll($0) }.first
         }
         let scroll = try #require(findScroll(host))
         let document = try #require(scroll.documentView)
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: document.bounds.height - scroll.contentView.bounds.height))
+        // The real end: past the document by any bottom inset (the edge bar on macOS 26).
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: document.bounds.height - scroll.contentView.bounds.height
+                                                    + scroll.contentInsets.bottom))
         scroll.reflectScrolledClipView(scroll.contentView)
         try await Task.sleep(for: .milliseconds(150))
         #expect(fade == 0)
         scroll.contentView.scroll(to: .zero)
         scroll.reflectScrolledClipView(scroll.contentView)
         try await Task.sleep(for: .milliseconds(150))
-        #expect(fade == 10)
+        #expect(fade == 12)
         window.setContentSize(NSSize(width: 300, height: 600))
         try await Task.sleep(for: .milliseconds(150))
         #expect(fade == 0)
-    }
-}
-
-@MainActor
-@Suite("Divider under a fading list")
-struct SectionDividerLineTests {
-    /// The line a list fades into must never be lighter than the background: in dark
-    /// mode a white hairline under a row dissolving into the dark read as a stray
-    /// light line left behind by the fade.
-    @Test("the divider line is darker than the window background in light and dark", arguments: [
-        NSAppearance.Name.aqua, .darkAqua
-    ])
-    func lineNeverLighterThanBackground(appearance: NSAppearance.Name) throws {
-        let look = try #require(NSAppearance(named: appearance))
-        var line: NSColor?
-        var background: NSColor?
-        look.performAsCurrentDrawingAppearance {
-            line = SectionResizeHandle.lineColor.usingColorSpace(.sRGB)
-            background = NSColor.windowBackgroundColor.usingColorSpace(.sRGB)
-        }
-        let lineColor = try #require(line)
-        let backgroundColor = try #require(background)
-        func composite(_ line: CGFloat, _ back: CGFloat) -> CGFloat {
-            line * lineColor.alphaComponent + back * (1 - lineColor.alphaComponent)
-        }
-        let shown = composite(lineColor.redComponent, backgroundColor.redComponent) * 0.2126
-            + composite(lineColor.greenComponent, backgroundColor.greenComponent) * 0.7152
-            + composite(lineColor.blueComponent, backgroundColor.blueComponent) * 0.0722
-        let back = backgroundColor.redComponent * 0.2126 + backgroundColor.greenComponent * 0.7152
-            + backgroundColor.blueComponent * 0.0722
-        #expect(shown < back - 0.02, "the line must read darker than the background")
     }
 }

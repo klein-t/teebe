@@ -16,19 +16,13 @@ struct SectionResizeHandle: View {
 
     /// Drawn thin, grabbed thick: the capsule stays 3pt while the target is a
     /// comfortable 12pt, centred on it.
-    /// The hairline, darker than the background in both appearances. The lists fade
-    /// into it: a light line in dark mode (the old `primary` at 10%) read as a stray
-    /// stripe left under the dissolving row. Light mode keeps the same 8.5% black.
-    static let lineColor = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(white: 0, alpha: 0.35) : NSColor(white: 0, alpha: 0.085)
-    }
-
     private static let hitPadding: CGFloat = (12 - 1) / 2
 
     var body: some View {
         ZStack {
-            Rectangle().fill(Color(nsColor: Self.lineColor)).frame(height: 1)
+            // The same separator as the title bar's: the lists' bottom edge effect
+            // reads as rows slipping under it.
+            Divider()
             Capsule().fill(hovered || dragging ? Palette.accent : Color.secondary.opacity(0.35))
                 .frame(width: 28, height: 3)
         }
