@@ -259,7 +259,7 @@ struct SelectorModelTests {
         #expect(selector.info(for: git.worktreesResult[0]).isLive == false)
 
         // Once the window elapses, the dot goes idle again.
-        selector.refreshLiveState(now: t.addingTimeInterval(5))
+        selector.refreshLiveState(now: t.addingTimeInterval(GenericActivity.window))
         #expect(selector.info(for: git.worktreesResult[1]).isLive == false)
     }
 
@@ -279,7 +279,7 @@ struct SelectorModelTests {
         // No further file events: the periodic agent poll is the only thing that
         // runs, and it must also let the live flag expire — otherwise the dot
         // (and its repeat-forever pulse animation) runs until the next rescan.
-        await selector.refreshAgentStates(now: t.addingTimeInterval(30))
+        await selector.refreshAgentStates(now: t.addingTimeInterval(GenericActivity.window + 30))
         #expect(selector.info(for: git.worktreesResult[0]).isLive == false)
     }
 

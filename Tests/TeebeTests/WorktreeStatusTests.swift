@@ -177,8 +177,9 @@ struct WorktreeStatusTests {
         #expect(working.card.title == "Agent working")
         #expect(working.card.subtitle == "An agent is working in this worktree.")
         #expect(facts(working) == ["3 uncommitted changes", "Not in main or dev yet", "2 to push · 3 to pull"])
-        // Files changing with no agent share the working mark; the sentence says what is happening.
-        #expect(status(entry(), info: .init(isLive: true)).card.subtitle == "Files are changing in this worktree.")
+        // Files changing or a command running with no agent share the working mark;
+        // the sentence says what is happening.
+        #expect(status(entry(), info: .init(isLive: true)).card.subtitle == "Files are changing or a command is running here.")
 
         let waiting = status(entry(), info: .init(agentState: .needsAttention, remote: .sameBranch(remote: "origin", ahead: 0, behind: 2)))
         #expect(waiting.card.title == "Waiting for you")

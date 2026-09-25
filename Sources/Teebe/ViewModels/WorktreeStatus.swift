@@ -158,7 +158,7 @@ private struct Facts {
         case .none: return ("Base branch", "Other worktrees are compared to it.")
         case .working:
             return ("Agent working", info.agentState == .working ? "An agent is working in this worktree."
-                        : "Files are changing in this worktree.")
+                        : "Files are changing or a command is running here.")
         case .waiting: return ("Waiting for you", "An agent is waiting for your input.")
         case .uncommitted:
             return ("Uncommitted changes", isRemovableOnceClean ? "Commit or discard them before removing."

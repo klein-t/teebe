@@ -22,6 +22,9 @@ struct AppEnvironment {
     let agentProjectsRootPath: String?
     /// Other harnesses' session folders (Codex rollouts), watched alongside.
     let agentExtraWatchPaths: [String]
+    /// The worktrees (of those given) with a busy process in them right now —
+    /// any harness's commands, builds and tests. nil disables the probe.
+    let processActivity: (@Sendable (_ worktreePaths: [String], _ now: Date) -> Set<String>)?
     /// Posts a user-facing notification (title, body).
     let notify: @MainActor (_ title: String, _ body: String) -> Void
     /// Factory for the darwin-notification listener the Claude Code hook pings
@@ -38,6 +41,7 @@ struct AppEnvironment {
         agentStatuses: @escaping @Sendable ([String], Date) -> [String: AgentActivityState] = { _, _ in [:] },
         agentProjectsRootPath: String? = nil,
         agentExtraWatchPaths: [String] = [],
+        processActivity: (@Sendable ([String], Date) -> Set<String>)? = nil,
         notify: @escaping @MainActor (String, String) -> Void = { _, _ in },
         makeAgentPingListener: @escaping @MainActor () -> AgentPingListening = { DarwinAgentPingListener() }
     ) {
@@ -50,6 +54,7 @@ struct AppEnvironment {
         self.agentStatuses = agentStatuses
         self.agentProjectsRootPath = agentProjectsRootPath
         self.agentExtraWatchPaths = agentExtraWatchPaths
+        self.processActivity = processActivity
         self.notify = notify
         self.makeAgentPingListener = makeAgentPingListener
     }
@@ -72,6 +77,7 @@ struct AppEnvironment {
         let codexSessions = ProcessInfo.processInfo.environment["TEEBE_CODEX_SESSIONS_DIR"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? CodexRolloutScanner.defaultSessionsRoot
+        let processes = ProcessActivityProbe()
         let adapters = CombinedAgentActivity([
             AgentSessionScanner(projectsRoot: projectsRoot),
             CodexRolloutScanner(sessionsRoot: codexSessions)
@@ -86,6 +92,7 @@ struct AppEnvironment {
             agentStatuses: { paths, now in adapters.states(forWorktreePaths: paths, now: now) },
             agentProjectsRootPath: projectsRoot.path,
             agentExtraWatchPaths: [codexSessions.path],
+            processActivity: { paths, now in processes.activeWorktrees(among: paths, now: now) },
             notify: AgentNotifier.post
         )
     }

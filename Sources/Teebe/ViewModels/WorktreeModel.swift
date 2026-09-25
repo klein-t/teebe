@@ -153,8 +153,8 @@ final class WorktreeModel {
     private func startWatching(_ path: String) {
         watcher?.stop()
         let watcher = environment.makeWatcher()
-        watcher.start(paths: [path], debounce: 0.25) { [weak self] _ in
-            Task { @MainActor in await self?.handleFileSystemEvent() }
+        watcher.start(paths: [path], debounce: 0.25) { [weak self] paths in
+            Task { @MainActor in await self?.handleFileSystemEvent(paths) }
         }
         self.watcher = watcher
     }
@@ -174,11 +174,13 @@ final class WorktreeModel {
     }
 
     /// Handle a file-watch event for the active worktree: record *external* activity
-    /// (skipping our own recent writes), notify the owner, then refresh. Synchronous
-    /// and parameterized so it is unit-testable without real FSEvents.
-    func handleFileSystemEvent(now: Date = Date()) async {
+    /// (skipping our own recent writes, and changes that are only Git bookkeeping or
+    /// build output), notify the owner, then refresh. Synchronous and parameterized
+    /// so it is unit-testable without real FSEvents; nil paths means unknown.
+    func handleFileSystemEvent(_ paths: [String]? = nil, now: Date = Date()) async {
         guard let worktreePath else { return }
-        if !recentSelfWrite(now: now) {
+        let counts = paths.map { !WorktreeActivityRouter.changedWorktrees(eventPaths: $0, among: [worktreePath]).isEmpty }
+        if !recentSelfWrite(now: now), counts ?? true {
             environment.activityMonitor.recordActivity(worktreePath: worktreePath, at: now)
             onActivity?(worktreePath)
         }
