@@ -21,15 +21,16 @@ enum WorktreeMark: Equatable {
 }
 
 /// Icons the hover card and removal prompt use. The view maps them to SF Symbols
-/// (suggested: pencil, arrow.triangle.merge, arrow.triangle.branch, icloud,
-/// questionmark.folder, eye.slash, exclamationmark.triangle). The card footer
-/// uses one fixed icon per fact: pencil, branch, cloud.
+/// (pencil, icloud, eye.slash, exclamationmark.triangle) or its own drawings (the
+/// git-merge glyph, the broken link). The card footer uses one fixed icon per
+/// fact: pencil, merge, cloud.
 enum WorktreeCardIcon: Equatable {
-    case pencil, merge, branch, cloud, missing, ignoredFiles, warning
+    case pencil, merge, cloud, missing, ignoredFiles, warning
 }
 
 struct WorktreeCardFact: Equatable {
-    enum Tone: Equatable { case normal, muted, warn }
+    /// `positive`: good news (merged), drawn with a green icon.
+    enum Tone: Equatable { case normal, muted, warn, positive }
     let icon: WorktreeCardIcon
     let text: String
     let tone: Tone
@@ -199,11 +200,11 @@ private struct Facts {
     }
 
     var mergeFact: WorktreeCardFact {
-        func muted(_ text: String) -> WorktreeCardFact { WorktreeCardFact(icon: .branch, text: text, tone: .muted) }
+        func muted(_ text: String) -> WorktreeCardFact { WorktreeCardFact(icon: .merge, text: text, tone: .muted) }
         if isTarget { return muted("Merge target") }
         guard let entry else { return muted(isChecking ? "Checking merge status…" : "Couldn’t check merge status") }
         switch entry.mergeStatus {
-        case .merged: return WorktreeCardFact(icon: .branch, text: WorktreeWording.mergedText(entry), tone: .normal)
+        case .merged: return WorktreeCardFact(icon: .merge, text: WorktreeWording.mergedText(entry), tone: .positive)
         case .notConfirmed:
             return muted(targetNames.isEmpty ? "Not merged yet" : "Not in \(WorktreeWording.list(targetNames, joiner: "or")) yet")
         case .unknown: return muted("Couldn’t check merge status")
@@ -304,9 +305,9 @@ struct WorktreeRemovalPrompt: Equatable {
         let entry = merge?.entry
         var facts: [WorktreeCardFact] = []
         switch entry?.mergeStatus {
-        case .merged?: facts.append(WorktreeCardFact(icon: .merge, text: WorktreeWording.mergedText(entry), tone: .normal))
-        case .notConfirmed?: facts.append(WorktreeCardFact(icon: .branch, text: "Not merged yet", tone: .muted))
-        default: facts.append(WorktreeCardFact(icon: .branch, text: "Couldn’t check if merged", tone: .muted))
+        case .merged?: facts.append(WorktreeCardFact(icon: .merge, text: WorktreeWording.mergedText(entry), tone: .positive))
+        case .notConfirmed?: facts.append(WorktreeCardFact(icon: .merge, text: "Not merged yet", tone: .muted))
+        default: facts.append(WorktreeCardFact(icon: .merge, text: "Couldn’t check if merged", tone: .muted))
         }
         let hasUncommitted = status.changeCount > 0 || entry?.hasLocalChanges == true
         if hasUncommitted {

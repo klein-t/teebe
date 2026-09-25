@@ -94,6 +94,25 @@ struct BrokenLinkShape: Shape {
     }
 }
 
+/// The git-merge glyph: a line running down from one commit, with a second
+/// commit curving in to join it. Drawn on a 24-unit grid; stroke it.
+struct MergeGlyphShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let radius: CGFloat = 2.6
+        // The branch that stays: a commit at the top, its line running down.
+        path.addEllipse(in: CGRect(x: 6 - radius, y: 5 - radius, width: radius * 2, height: radius * 2))
+        path.move(to: CGPoint(x: 6, y: 5 + radius))
+        path.addLine(to: CGPoint(x: 6, y: 22))
+        // The merged branch: its commit, bottom right, curving into the line.
+        path.addEllipse(in: CGRect(x: 18.5 - radius, y: 17 - radius, width: radius * 2, height: radius * 2))
+        path.move(to: CGPoint(x: 18.5 - radius, y: 17))
+        path.addQuadCurve(to: CGPoint(x: 6, y: 8.5), control: CGPoint(x: 6, y: 17))
+        return path.applying(CGAffineTransform(translationX: rect.minX, y: rect.minY)
+            .scaledBy(x: rect.width / 24, y: rect.height / 24))
+    }
+}
+
 /// An icon-led line of the hover card and the removal sheets.
 struct WorktreeFactRow: View {
     let fact: WorktreeCardFact
@@ -102,34 +121,40 @@ struct WorktreeFactRow: View {
         HStack(spacing: 8) {
             icon
                 .frame(width: 13, height: 13)
-                .foregroundStyle(fact.tone == .warn ? WorktreeMarkView.uncommittedColor : Color.secondary)
+                .foregroundStyle(iconColor)
             Text(fact.text)
                 .font(.system(size: 11.5)).monospacedDigit()
-                .foregroundStyle(fact.tone == .normal || fact.tone == .warn ? Color.primary : Color.secondary)
+                .foregroundStyle(fact.tone == .muted ? Color.secondary : Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)
     }
 
-    @ViewBuilder
-    private var icon: some View {
-        if fact.icon == .missing {
-            BrokenLinkShape().stroke(style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
-        } else {
-            Image(systemName: Self.symbol(fact.icon)).font(.system(size: 11))
+    private var iconColor: Color {
+        switch fact.tone {
+        case .warn: WorktreeMarkView.uncommittedColor
+        case .positive: Color(nsColor: .systemGreen)
+        case .normal, .muted: Color.secondary
         }
     }
 
-    static func symbol(_ icon: WorktreeCardIcon) -> String {
-        switch icon {
-        case .pencil: "pencil"
-        case .merge: "arrow.triangle.merge"
-        case .branch: "arrow.triangle.branch"
-        case .cloud: "icloud"
-        case .missing: "questionmark.folder"
-        case .ignoredFiles: "eye.slash"
-        case .warning: "exclamationmark.triangle"
+    @ViewBuilder
+    private var icon: some View {
+        switch fact.icon {
+        case .missing:
+            BrokenLinkShape().stroke(style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
+        case .merge:
+            // About the weight of an 11 pt SF Symbol in this 13 pt slot.
+            MergeGlyphShape().stroke(style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
+        case .pencil: symbol("pencil")
+        case .cloud: symbol("icloud")
+        case .ignoredFiles: symbol("eye.slash")
+        case .warning: symbol("exclamationmark.triangle")
         }
+    }
+
+    private func symbol(_ name: String) -> some View {
+        Image(systemName: name).font(.system(size: 11))
     }
 }
 

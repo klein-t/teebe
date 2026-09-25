@@ -120,13 +120,13 @@ struct WorktreeStatusTests {
         #expect(merged.card.subtitle == "All its work is merged. You can remove it.")
         #expect(merged.card.facts == [
             WorktreeCardFact(icon: .pencil, text: "No uncommitted changes", tone: .muted),
-            WorktreeCardFact(icon: .branch, text: "Merged into main and dev", tone: .normal),
+            WorktreeCardFact(icon: .merge, text: "Merged into main and dev", tone: .positive),
             WorktreeCardFact(icon: .cloud, text: "Up to date with origin", tone: .muted)
         ])
 
         let squashed = status(entry(merged: [dev], squashed: true), info: .init(remote: .remoteDeleted))
         #expect(facts(squashed) == ["No uncommitted changes", "Merged into dev (squashed)", "Remote branch deleted"])
-        #expect(squashed.card.facts.map(\.icon) == [.pencil, .branch, .cloud])
+        #expect(squashed.card.facts.map(\.icon) == [.pencil, .merge, .cloud])
 
         let dirty = status(entry(merged: [dev], squashed: true), count: 8)
         #expect(dirty.card.title == "Uncommitted changes")
@@ -139,7 +139,7 @@ struct WorktreeStatusTests {
         #expect(unmerged.card.subtitle == "Work here isn’t committed yet.")
         #expect(unmerged.card.facts == [
             WorktreeCardFact(icon: .pencil, text: "1 uncommitted change", tone: .warn),
-            WorktreeCardFact(icon: .branch, text: "Not in main or dev yet", tone: .muted),
+            WorktreeCardFact(icon: .merge, text: "Not in main or dev yet", tone: .muted),
             WorktreeCardFact(icon: .cloud, text: "4 to push", tone: .normal)
         ])
 
@@ -213,6 +213,8 @@ struct WorktreeStatusTests {
                                          merge: WorktreeMergeEntry(entry: merged), isAgentActive: false)
         #expect(safe.title == "Remove “feature”?")
         #expect(safe.facts.map { $0.text } == ["Merged into dev", "Nothing uncommitted"])
+        // One merge glyph everywhere; green only when the fact says merged.
+        #expect(safe.facts[0] == WorktreeCardFact(icon: .merge, text: "Merged into dev", tone: .positive))
         #expect(safe.explanation == "The worktree folder is deleted. Its commits are already merged.")
         #expect(safe.offersBranchDeletion)
 
@@ -230,6 +232,7 @@ struct WorktreeStatusTests {
         #expect(risky.facts.map { $0.text } == ["Not merged yet", "2 uncommitted changes: commit or discard them first",
                                             "An agent is active in this worktree"])
         #expect(risky.facts[1].tone == .warn)
+        #expect(risky.facts[0] == WorktreeCardFact(icon: .merge, text: "Not merged yet", tone: .muted))
         #expect(risky.explanation == "Git only removes a worktree with nothing uncommitted. The branch is kept.")
         #expect(!risky.canRemove)
         #expect(!risky.offersBranchDeletion)
