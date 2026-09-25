@@ -65,3 +65,34 @@ struct BottomScrollFadeTests {
         #expect(fade == 0)
     }
 }
+
+@MainActor
+@Suite("Divider under a fading list")
+struct SectionDividerLineTests {
+    /// The line a list fades into must never be lighter than the background: in dark
+    /// mode a white hairline under a row dissolving into the dark read as a stray
+    /// light line left behind by the fade.
+    @Test("the divider line is darker than the window background in light and dark", arguments: [
+        NSAppearance.Name.aqua, .darkAqua
+    ])
+    func lineNeverLighterThanBackground(appearance: NSAppearance.Name) throws {
+        let look = try #require(NSAppearance(named: appearance))
+        var line: NSColor?
+        var background: NSColor?
+        look.performAsCurrentDrawingAppearance {
+            line = SectionResizeHandle.lineColor.usingColorSpace(.sRGB)
+            background = NSColor.windowBackgroundColor.usingColorSpace(.sRGB)
+        }
+        let lineColor = try #require(line)
+        let backgroundColor = try #require(background)
+        func composite(_ line: CGFloat, _ back: CGFloat) -> CGFloat {
+            line * lineColor.alphaComponent + back * (1 - lineColor.alphaComponent)
+        }
+        let shown = composite(lineColor.redComponent, backgroundColor.redComponent) * 0.2126
+            + composite(lineColor.greenComponent, backgroundColor.greenComponent) * 0.7152
+            + composite(lineColor.blueComponent, backgroundColor.blueComponent) * 0.0722
+        let back = backgroundColor.redComponent * 0.2126 + backgroundColor.greenComponent * 0.7152
+            + backgroundColor.blueComponent * 0.0722
+        #expect(shown < back - 0.02, "the line must read darker than the background")
+    }
+}
