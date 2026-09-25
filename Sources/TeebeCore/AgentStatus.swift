@@ -44,6 +44,8 @@ public struct AgentSessionEntry: Equatable, Sendable {
         /// A block of the turn's final assistant message (`end_turn`, or the
         /// `stop_sequence` of a synthetic API-error message) — the turn ended.
         case assistantText
+        /// The user interrupted the turn (Esc) — the agent is back to waiting.
+        case interrupted
     }
 
     public var kind: Kind
@@ -90,8 +92,21 @@ public struct AgentSessionEntry: Equatable, Sendable {
             } else {
                 kind = .assistantPartial
             }
+        } else if blockTypes.contains("tool_result") {
+            kind = .toolResult
         } else {
-            kind = blockTypes.contains("tool_result") ? .toolResult : .humanPrompt
+            // A compaction summary neither starts nor ends a turn.
+            if dict["isCompactSummary"] as? Bool == true { return nil }
+            let text = leadingText(of: message["content"])
+            if text.hasPrefix("[Request interrupted by user") {
+                kind = .interrupted
+            } else if localCommandPrefixes.contains(where: text.hasPrefix) {
+                // Local slash commands (`/model`, `/effort`, `/compact`…) are
+                // logged as user lines, but the model never answers them.
+                return nil
+            } else {
+                kind = .humanPrompt
+            }
         }
         return AgentSessionEntry(
             kind: kind,
@@ -107,6 +122,19 @@ public struct AgentSessionEntry: Equatable, Sendable {
     private static func endsTurn(stopReason: String?) -> Bool {
         guard let stopReason else { return false }
         return stopReason != "tool_use" && stopReason != "pause_turn"
+    }
+
+    private static let localCommandPrefixes = [
+        "<command-name>", "<command-message>", "<command-args>",
+        "<local-command-stdout>", "<local-command-stderr>", "<local-command-caveat>"
+    ]
+
+    /// A user message's text: the string content, or its first text block.
+    private static func leadingText(of content: Any?) -> String {
+        if let string = content as? String { return String(string.drop(while: \.isWhitespace)) }
+        let blocks = (content as? [[String: Any]]) ?? []
+        let text = blocks.first { $0["type"] as? String == "text" }?["text"] as? String ?? ""
+        return String(text.drop(while: \.isWhitespace))
     }
 
     // Built once — ISO8601DateFormatter is expensive to construct and thread-safe,
@@ -138,7 +166,7 @@ public enum AgentStateDeriver {
         let age = now.timeIntervalSince(entry.timestamp)
         if age >= thresholds.idle { return .idle }
         switch entry.kind {
-        case .assistantText:
+        case .assistantText, .interrupted:
             return .needsAttention
         case .humanPrompt, .toolResult, .assistantToolUse, .assistantPartial:
             return age >= thresholds.stall ? .needsAttention : .working
