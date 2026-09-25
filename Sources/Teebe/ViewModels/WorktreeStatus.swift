@@ -180,7 +180,8 @@ private struct Facts {
         }
         switch entry.mergeStatus {
         case .merged: return ("Merged", protectionReason + ", so Teebe won’t remove it.")
-        case .notConfirmed: return ("Not merged", "Its commits aren’t merged yet.")
+        case .notConfirmed:
+            return ("Not merged", entry.hasNoCommits ? "No commits yet." : "Its commits aren’t merged yet.")
         case .unknown: return ("Couldn’t check", "Git couldn’t compare this branch.")
         }
     }
@@ -209,6 +210,7 @@ private struct Facts {
         switch entry.mergeStatus {
         case .merged: return WorktreeCardFact(icon: .merge, text: WorktreeWording.mergedText(entry), tone: .positive)
         case .notConfirmed:
+            if entry.hasNoCommits { return muted("No commits yet") }
             return muted(targetNames.isEmpty ? "Not merged yet" : "Not in \(WorktreeWording.list(targetNames, joiner: "or")) yet")
         case .unknown: return muted("Couldn’t check merge status")
         }
@@ -309,7 +311,9 @@ struct WorktreeRemovalPrompt: Equatable {
         var facts: [WorktreeCardFact] = []
         switch entry?.mergeStatus {
         case .merged?: facts.append(WorktreeCardFact(icon: .merge, text: WorktreeWording.mergedText(entry), tone: .positive))
-        case .notConfirmed?: facts.append(WorktreeCardFact(icon: .merge, text: "Not merged yet", tone: .muted))
+        case .notConfirmed?:
+            facts.append(WorktreeCardFact(icon: .merge, text: entry?.hasNoCommits == true ? "No commits yet" : "Not merged yet",
+                                          tone: .muted))
         default: facts.append(WorktreeCardFact(icon: .merge, text: "Couldn’t check if merged", tone: .muted))
         }
         let hasUncommitted = status.changeCount > 0 || entry?.hasLocalChanges == true

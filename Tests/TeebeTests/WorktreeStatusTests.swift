@@ -52,6 +52,24 @@ struct WorktreeStatusTests {
         #expect(status(entry(merged: [dev]) { $0.hasIgnoredFiles = true }).mark == .merged)
     }
 
+    @Test("a branch with no commits of its own gets the ring and says so, never the trash")
+    func freshBranch() {
+        let fresh = status(entry { $0.hasNoCommits = true })
+        #expect(fresh.mark == .notMerged)
+        #expect(fresh.group == .notMerged)
+        #expect(!fresh.showsTrash)
+        #expect(fresh.card.title == "Not merged")
+        #expect(fresh.card.subtitle == "No commits yet.")
+        #expect(facts(fresh) == ["No uncommitted changes", "No commits yet", "Not on remote"])
+        // Its first untracked file makes it uncommitted work, like any other row.
+        #expect(status(entry { $0.hasNoCommits = true }, count: 1).mark == .uncommitted)
+        let prompt = WorktreeRemovalPrompt(worktree: feature, status: fresh,
+                                           merge: WorktreeMergeEntry(entry: entry { $0.hasNoCommits = true }),
+                                           isAgentActive: false)
+        #expect(prompt.facts.first == WorktreeCardFact(icon: .merge, text: "No commits yet", tone: .muted))
+        #expect(!prompt.offersBranchDeletion)
+    }
+
     @Test("a merge target's own checkout has no merge mark but still shows activity and edits")
     func targetCheckout() {
         let devTree = Worktree(path: "/dev", branch: "dev")

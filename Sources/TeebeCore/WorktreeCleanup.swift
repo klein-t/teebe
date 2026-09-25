@@ -98,6 +98,10 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
     public var hasUncheckedFiles = false
     /// The checkout's branch is one of the merge targets.
     public var isTarget = false
+    /// The branch has no commits of its own yet: its tip is still where it was
+    /// created from. Ancestry would call it merged, but there is no work of its
+    /// own to be merged, so it is reported as not merged.
+    public var hasNoCommits = false
     public var problem: String?
     public var id: String { worktree.path }
 
@@ -289,6 +293,12 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             entry.mergedTargets = merge.targets
             entry.hasEquivalentContent = merge.byContent
             entry.mergeStatus = merge.targets.isEmpty ? .notConfirmed : .merged
+            if !merge.targets.isEmpty, !merge.byContent, !entry.isTarget, let branch = worktree.branch,
+               await hasNoCommits(branch: branch, head: entry.worktree.head, targets: targets, in: worktree.path) {
+                entry.hasNoCommits = true
+                entry.mergedTargets = []
+                entry.mergeStatus = .notConfirmed
+            }
         } catch {
             entry.mergeStatus = .unknown
             entry.mergedTargets = []
@@ -318,6 +328,34 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             return ([target], true)
         }
         return ([], false)
+    }
+
+    /// Whether `branch` never got a commit of its own. Its reflog says where it was
+    /// created: when the oldest entry is `branch: Created from <start>`, the tip is
+    /// still that commit, and the start is a target, HEAD or a commit id, nothing
+    /// was committed on it (a branch cut from another feature branch carries that
+    /// branch's commits, so it doesn't count). Without such a reflog (expired,
+    /// renamed, created by plumbing) only a tip sitting exactly on a target's tip
+    /// counts: there is nothing there that could be its own.
+    private func hasNoCommits(branch: String, head: String, targets: [CleanupBranch], in path: String) async -> Bool {
+        let fallback = targets.contains { $0.sha == head }
+        guard let result = try? await git.run(
+            ["reflog", "show", "--format=%H%x00%gs", "refs/heads/" + branch, "--"], in: path),
+            result.succeeded,
+            let oldest = result.stdoutString.split(separator: "\n").last?
+                .split(separator: "\u{0}", maxSplits: 1, omittingEmptySubsequences: false),
+            oldest.count == 2
+        else { return fallback }
+        let prefix = "branch: Created from "
+        guard oldest[1].hasPrefix(prefix) else { return fallback }
+        guard String(oldest[0]) == head else { return false }
+        var start = String(oldest[1].dropFirst(prefix.count))
+        for refPrefix in ["refs/heads/", "refs/remotes/"] where start.hasPrefix(refPrefix) {
+            start = String(start.dropFirst(refPrefix.count))
+        }
+        let isCommitID = start.count >= 7 && start.allSatisfy(\.isHexDigit)
+        let targetNames = Set(targets.flatMap { [$0.name, $0.shortName] } + CleanupTargets.integrationNames)
+        return start == "HEAD" || isCommitID || targetNames.contains(start)
     }
 
     /// The checkout is a merge target's own branch: local `dev`, or the local

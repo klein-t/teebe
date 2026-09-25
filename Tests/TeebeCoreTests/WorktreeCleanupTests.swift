@@ -72,7 +72,8 @@ struct WorktreeCleanupTests {
         let fixture = try GitFixture()
         defer { fixture.cleanup() }
         fixture.commitFile(".gitignore", "cache/\n")
-        fixture.addWorktree(name: "feature", branch: "feature")
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.commitAndFastForward(branch: "feature", in: folder)
         let service = WorktreeCleanupService(git: ProcessGitClient())
         let first = try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
         let entry = try #require(first.entries.first { !$0.worktree.isPrimary })
@@ -105,6 +106,7 @@ struct WorktreeCleanupTests {
         defer { fixture.cleanup() }
         fixture.commitFile(".gitignore", "cache/\nsecrets.env\n")
         let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.commitAndFastForward(branch: "feature", in: folder)
         let cache = folder.appendingPathComponent("cache")
         try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
         try Data("local".utf8).write(to: cache.appendingPathComponent("data.txt"))
@@ -177,6 +179,7 @@ struct WorktreeCleanupTests {
         defer { fixture.cleanup() }
         fixture.commitFile("a.txt", "base")
         let locked = fixture.addWorktree(name: "locked", branch: "locked")
+        fixture.commitAndFastForward(branch: "locked", in: locked)
         let detached = fixture.root.appendingPathComponent("detached", isDirectory: true)
         fixture.git(["worktree", "add", "-q", "--detach", detached.path, "HEAD"])
         fixture.git(["worktree", "lock", locked.path])
@@ -249,6 +252,8 @@ struct WorktreeCleanupTests {
         fixture.git(["update-ref", "refs/remotes/origin/dev", "HEAD"])
         fixture.git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/dev"])
         let feature = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.commitAndFastForward(branch: "feature", in: feature)
+        fixture.git(["update-ref", "refs/remotes/origin/dev", "HEAD"])
         fixture.git(["branch", "--set-upstream-to=origin/dev", "feature"])
         let dev = fixture.addWorktree(name: "dev", branch: "dev")
         let service = WorktreeCleanupService(git: ProcessGitClient())

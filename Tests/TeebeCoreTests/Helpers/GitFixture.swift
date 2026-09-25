@@ -96,6 +96,16 @@ final class GitFixture {
         return url
     }
 
+    /// Give a linked worktree's branch a commit of its own and fast-forward the
+    /// primary's branch onto it, so the branch is merged with work of its own
+    /// (a branch with no commits at all is never "merged").
+    func commitAndFastForward(branch: String, in folder: URL, file: String = "work.txt") {
+        writeFile(file, "work on \(branch)", in: folder)
+        stage([file], in: folder)
+        commit("work on \(branch)", in: folder)
+        git(["merge", "-q", "--ff-only", branch])
+    }
+
     func currentHead() -> String {
         git(["rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
