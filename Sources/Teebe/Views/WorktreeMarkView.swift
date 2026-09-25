@@ -27,11 +27,10 @@ struct WorktreeMarkView: View {
         case .working:
             ThinkingOrbView(state: .solving,
                             ink: isDark || isSelected ? .white : Color(red: 0x14 / 255, green: 0x63 / 255, blue: 0xD6 / 255),
-                            isDark: isDark || isSelected, paused: paused)
-                .scaleEffect(0.85)
+                            isDark: isDark || isSelected, scale: 0.85, paused: paused)
         case .waiting:
-            ThinkingOrbView(state: .breathing, ink: waitingInk, isDark: isDark || isSelected, paused: paused)
-                .scaleEffect(0.85)
+            ThinkingOrbView(state: .breathing, ink: waitingInk, isDark: isDark || isSelected, scale: 0.85,
+                            paused: paused)
         case .uncommitted:
             Circle().fill(isSelected ? Color.white : Self.uncommittedColor).frame(width: 8, height: 8)
         case .missing:
