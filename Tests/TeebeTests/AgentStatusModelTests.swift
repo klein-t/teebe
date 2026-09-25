@@ -106,6 +106,16 @@ struct AgentStatusModelTests {
         #expect(watcher?.isWatching == false)
     }
 
+    @Test("the agent watcher also covers Claude Code's live session registry")
+    func registryWatched() async {
+        // A permission prompt flips the registry to waiting without writing a
+        // session-log line, so only a registry watch sees it at once.
+        let box = WatcherBox()
+        let selector = makeSelector(states: FakeAgentStates(), box: box, projectsRoot: "/fake/.claude/projects")
+        await selector.selectRepo(repo)
+        #expect(box.watching("/fake/.claude/projects")?.watchedPaths.contains("/fake/.claude/sessions") == true)
+    }
+
     @Test("without a projects root no agent watcher is started")
     func noRootNoWatcher() async {
         let states = FakeAgentStates()

@@ -367,8 +367,12 @@ final class SelectorModel {
         agentWatcher?.stop()
         agentWatcher = nil
         guard !isLowPower, let root = environment.agentProjectsRootPath else { return }
+        // Claude Code's live session registry sits beside the projects root; a
+        // permission prompt flips it to waiting without writing any session log.
+        let registry = URL(fileURLWithPath: root).deletingLastPathComponent()
+            .appendingPathComponent("sessions", isDirectory: true).path
         let watcher = environment.makeWatcher()
-        watcher.start(paths: [root], debounce: 1.0) { [weak self] _ in
+        watcher.start(paths: [root, registry], debounce: 1.0) { [weak self] _ in
             Task { @MainActor in await self?.handleAgentWatchEvent() }
         }
         agentWatcher = watcher

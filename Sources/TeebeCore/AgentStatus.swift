@@ -187,8 +187,73 @@ public struct AgentSessionEntry: Equatable, Sendable {
     }
 }
 
+/// A session Claude Code itself reports in its live registry
+/// (`~/.claude/sessions/<pid>.json`, rewritten on every status change). It is
+/// exact where the log can only guess: a permission prompt, a question or a
+/// dialog is `waiting`; a turn in flight — or background agents it delegated —
+/// is `busy`.
+public struct LiveAgentSession: Equatable, Sendable {
+    public enum Status: Equatable, Sendable {
+        case busy, waiting, idle
+    }
+
+    public var sessionID: String
+    public var cwd: String?
+    public var status: Status
+    public var statusChangedAt: Date?
+
+    public init(sessionID: String, cwd: String?, status: Status, statusChangedAt: Date?) {
+        self.sessionID = sessionID
+        self.cwd = cwd
+        self.status = status
+        self.statusChangedAt = statusChangedAt
+    }
+
+    /// Parse one registry file; nil when it isn't a session with a known status.
+    public static func parse(_ data: Data) -> (pid: Int32, session: LiveAgentSession)? {
+        guard let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let pid = (dict["pid"] as? NSNumber)?.int32Value,
+              let sessionID = dict["sessionId"] as? String
+        else { return nil }
+        let status: Status
+        switch dict["status"] as? String {
+        case "busy": status = .busy
+        case "waiting": status = .waiting
+        case "idle", "shell": status = .idle
+        default: return nil
+        }
+        let changedAt = (dict["statusUpdatedAt"] as? NSNumber).map {
+            Date(timeIntervalSince1970: $0.doubleValue / 1_000)
+        }
+        return (pid, LiveAgentSession(sessionID: sessionID, cwd: dict["cwd"] as? String,
+                                      status: status, statusChangedAt: changedAt))
+    }
+}
+
 /// Maps the last main-chain session entry to an activity state.
 public enum AgentStateDeriver {
+    /// With a `live` registry status the session's own report wins: busy is
+    /// working, waiting needs the user, idle means the turn is over — unless the
+    /// log has moved on since (a prompt landed before the registry caught up).
+    public static func derive(
+        lastEntry: AgentSessionEntry?,
+        live: LiveAgentSession?,
+        now: Date,
+        thresholds: AgentStatusThresholds = AgentStatusThresholds()
+    ) -> AgentActivityState {
+        let logState = derive(lastEntry: lastEntry, now: now, thresholds: thresholds)
+        guard let live else { return logState }
+        switch live.status {
+        case .busy: return .working
+        case .waiting: return .needsAttention
+        case .idle:
+            if let entry = lastEntry, let changedAt = live.statusChangedAt, entry.timestamp > changedAt {
+                return logState
+            }
+            return logState == .working ? .needsAttention : logState
+        }
+    }
+
     public static func derive(
         lastEntry: AgentSessionEntry?,
         now: Date,
@@ -238,14 +303,24 @@ public struct AgentSessionScanner: Sendable {
     /// Injectable so tests can exercise the window boundary with small files.
     public var tailBytes: Int
 
+    /// Claude Code's live session registry (`~/.claude/sessions`).
+    public var sessionsRoot: URL
+    /// Whether a pid is still running — registry files can outlive a crash.
+    public var isProcessAlive: @Sendable (Int32) -> Bool
+
     public init(
         projectsRoot: URL = AgentSessionScanner.defaultProjectsRoot,
         thresholds: AgentStatusThresholds = AgentStatusThresholds(),
-        tailBytes: Int = 256 * 1_024
+        tailBytes: Int = 256 * 1_024,
+        sessionsRoot: URL? = nil,
+        isProcessAlive: @escaping @Sendable (Int32) -> Bool = AgentSessionScanner.processIsAlive
     ) {
         self.projectsRoot = projectsRoot
         self.thresholds = thresholds
         self.tailBytes = tailBytes
+        self.sessionsRoot = sessionsRoot ?? projectsRoot.deletingLastPathComponent()
+            .appendingPathComponent("sessions", isDirectory: true)
+        self.isProcessAlive = isProcessAlive
     }
 
     public static var defaultProjectsRoot: URL {
@@ -274,14 +349,18 @@ public struct AgentSessionScanner: Sendable {
     public func states(forWorktreePaths paths: [String], now: Date = Date()) -> [String: AgentActivityState] {
         var result: [String: AgentActivityState] = [:]
         for path in paths { result[path] = .idle }
+        let live = liveSessions()
         // Every fresh session file across every project dir (files idle-old by
-        // mtime can only be idle — skip without reading them).
+        // mtime can only be idle — skip without reading them — unless the
+        // session is live: a parent waiting on a long background agent logs
+        // nothing).
         var files: [(launchPath: String, url: URL, mtime: Date)] = []
         var seen = Set<URL>()
         for path in paths {
             let dir = projectsRoot.appendingPathComponent(
                 Self.projectDirName(forWorktreePath: path), isDirectory: true)
-            for file in sessionFiles(in: dir) where now.timeIntervalSince(file.mtime) < thresholds.idle {
+            for file in sessionFiles(in: dir)
+            where now.timeIntervalSince(file.mtime) < thresholds.idle || live[Self.sessionID(of: file.url)] != nil {
                 guard seen.insert(file.url.standardizedFileURL).inserted else { continue }
                 files.append((path, file.url, file.mtime))
             }
@@ -289,27 +368,54 @@ public struct AgentSessionScanner: Sendable {
         // Oldest first, so when two sessions land on the same worktree the newer
         // session's verdict wins (the per-dir "newest file wins" rule, kept).
         for file in files.sorted(by: { $0.mtime < $1.mtime }) {
-            guard let entry = lastEntry(in: file.url, includingSidechains: false) else { continue }
-            let state = AgentStateDeriver.derive(lastEntry: entry, now: now, thresholds: thresholds)
+            let entry = lastEntry(in: file.url, includingSidechains: false)
+            let session = live[Self.sessionID(of: file.url)]
+            let state = AgentStateDeriver.derive(lastEntry: entry, live: session, now: now, thresholds: thresholds)
             guard state != .idle else { continue }
-            let owner = owningPath(forCwd: entry.cwd, among: paths) ?? file.launchPath
+            let owner = owningPath(forCwd: entry?.cwd ?? session?.cwd, among: paths) ?? file.launchPath
             result[owner] = state
         }
-        markBusySubagents(in: &result, paths: paths, now: now)
+        markBusySubagents(in: &result, paths: paths, live: live, now: now)
         return result
+    }
+
+    public static func processIsAlive(_ pid: Int32) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    private static func sessionID(of logURL: URL) -> String {
+        logURL.deletingPathExtension().lastPathComponent
+    }
+
+    /// Registry entries whose process is still running, by session id.
+    private func liveSessions() -> [String: LiveAgentSession] {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: sessionsRoot, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ) else { return [:] }
+        var sessions: [String: LiveAgentSession] = [:]
+        for file in files where file.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: file),
+                  let entry = LiveAgentSession.parse(data),
+                  isProcessAlive(entry.pid) else { continue }
+            sessions[entry.session.sessionID] = entry.session
+        }
+        return sessions
     }
 
     /// Subagents log to `<project>/<sessionId>/subagents/agent-*.jsonl`, not to
     /// the parent's file. A busy one means work is happening both in the
     /// worktree it runs in and in its parent's — a parent that launched a
     /// background subagent and ended its own turn is still busy.
-    private func markBusySubagents(in result: inout [String: AgentActivityState], paths: [String], now: Date) {
+    private func markBusySubagents(in result: inout [String: AgentActivityState], paths: [String],
+                                   live: [String: LiveAgentSession], now: Date) {
         var seen = Set<URL>()
         for path in paths {
             let dir = projectsRoot.appendingPathComponent(
                 Self.projectDirName(forWorktreePath: path), isDirectory: true)
             guard seen.insert(dir.standardizedFileURL).inserted else { continue }
             for sessionDir in subdirectories(of: dir) {
+                // A live parent that isn't busy has no agent running under it.
+                if let parent = live[sessionDir.lastPathComponent], parent.status != .busy { continue }
                 let subagents = sessionDir.appendingPathComponent("subagents", isDirectory: true)
                 let busy = sessionFiles(in: subagents)
                     .filter { now.timeIntervalSince($0.mtime) < thresholds.stall }

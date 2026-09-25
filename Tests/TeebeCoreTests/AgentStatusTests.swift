@@ -715,3 +715,121 @@ struct AgentScannerSubagentTests {
         try? FileManager.default.removeItem(at: fx.root)
     }
 }
+
+// MARK: - Live session registry (`~/.claude/sessions/<pid>.json`)
+
+@Suite("AgentSessionScanner live registry")
+struct AgentScannerRegistryTests {
+    let now = Date(timeIntervalSince1970: 1_784_000_000)
+    let worktree = "/Users/k/Documents/CODE/teebe"
+
+    struct Fixture {
+        var scanner: AgentSessionScanner
+        var root: URL
+        var projectDir: URL
+        var sessionsDir: URL
+    }
+
+    /// `alive` lists the pids the fake process table reports as running.
+    func makeFixture(alive: Set<Int32> = [101]) throws -> Fixture {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("teebe-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let projectDir = root.appendingPathComponent("projects", isDirectory: true)
+            .appendingPathComponent(AgentSessionScanner.projectDirName(forWorktreePath: worktree), isDirectory: true)
+        let sessionsDir = root.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        let scanner = AgentSessionScanner(
+            projectsRoot: root.appendingPathComponent("projects", isDirectory: true),
+            thresholds: AgentStatusThresholds(stall: 600, idle: 1_800),
+            sessionsRoot: sessionsDir,
+            isProcessAlive: { alive.contains($0) })
+        return Fixture(scanner: scanner, root: root, projectDir: projectDir, sessionsDir: sessionsDir)
+    }
+
+    func writeLog(_ lines: [String], _ fx: Fixture, session: String = "s1", mtime: Date) throws {
+        let url = fx.projectDir.appendingPathComponent("\(session).jsonl")
+        try lines.joined(separator: "\n").appending("\n").write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: url.path)
+    }
+
+    /// The registry file shape Claude Code writes (trimmed to what matters).
+    func register(_ fx: Fixture, pid: Int32 = 101, session: String = "s1", status: String,
+                  waitingFor: String? = nil, changedAt: Date) throws {
+        let waiting = waitingFor.map { #","waitingFor":"\#($0)""# } ?? ""
+        let json = """
+        {"pid":\(pid),"sessionId":"\(session)","cwd":"\(worktree)","kind":"interactive","entrypoint":"cli",\
+        "status":"\(status)"\(waiting),"statusUpdatedAt":\(Int(changedAt.timeIntervalSince1970 * 1_000))}
+        """
+        try json.write(to: fx.sessionsDir.appendingPathComponent("\(pid).json"), atomically: true, encoding: .utf8)
+    }
+
+    @Test("a live session waiting on a permission prompt needs attention although its log looks mid-tool")
+    func permissionPrompt() throws {
+        let fx = try makeFixture()
+        try writeLog([toolCallLine("Bash", input: #"{"command":"rm -rf build"}"#, at: now.addingTimeInterval(-5))],
+                     fx, mtime: now.addingTimeInterval(-5))
+        try register(fx, status: "waiting", waitingFor: "permission prompt", changedAt: now.addingTimeInterval(-4))
+        #expect(fx.scanner.state(forWorktreePath: worktree, now: now) == .needsAttention)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("a live busy session is working although its own turn ended (a background agent runs)")
+    func busyAfterTurnEnd() throws {
+        let fx = try makeFixture()
+        try writeLog([assistantTextLine(at: now.addingTimeInterval(-300))], fx, mtime: now.addingTimeInterval(-300))
+        try register(fx, status: "busy", changedAt: now.addingTimeInterval(-320))
+        #expect(fx.scanner.state(forWorktreePath: worktree, now: now) == .working)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("a live busy session is working even when its log has been silent past the idle window")
+    func busyWithOldLog() throws {
+        let fx = try makeFixture()
+        try writeLog([assistantTextLine(at: now.addingTimeInterval(-2_400))], fx, mtime: now.addingTimeInterval(-2_400))
+        try register(fx, status: "busy", changedAt: now.addingTimeInterval(-2_500))
+        #expect(fx.scanner.state(forWorktreePath: worktree, now: now) == .working)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("a live idle session whose log still looks mid-turn is waiting on the user")
+    func idleOverridesStaleLog() throws {
+        let fx = try makeFixture()
+        try writeLog([assistantToolUseLine(at: now.addingTimeInterval(-40))], fx, mtime: now.addingTimeInterval(-40))
+        try register(fx, status: "idle", changedAt: now.addingTimeInterval(-30))
+        #expect(fx.scanner.state(forWorktreePath: worktree, now: now) == .needsAttention)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("a prompt logged after the registry last said idle is working — the log is ahead")
+    func logAheadOfRegistry() throws {
+        let fx = try makeFixture()
+        try writeLog([humanPromptLine(at: now.addingTimeInterval(-1))], fx, mtime: now.addingTimeInterval(-1))
+        try register(fx, status: "idle", changedAt: now.addingTimeInterval(-60))
+        #expect(fx.scanner.state(forWorktreePath: worktree, now: now) == .working)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("a registry entry whose process is gone is ignored — the log decides")
+    func deadProcessIgnored() throws {
+        let fx = try makeFixture(alive: [])
+        try writeLog([assistantTextLine(at: now.addingTimeInterval(-20))], fx, mtime: now.addingTimeInterval(-20))
+        try register(fx, status: "busy", changedAt: now.addingTimeInterval(-60))
+        #expect(fx.scanner.state(forWorktreePath: worktree, now: now) == .needsAttention)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("a subagent of a live session that is not busy is not running")
+    func subagentOfIdleParent() throws {
+        let fx = try makeFixture()
+        try writeLog([assistantTextLine(at: now.addingTimeInterval(-60))], fx, mtime: now.addingTimeInterval(-60))
+        let sub = fx.projectDir.appendingPathComponent("s1/subagents", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try assistantToolUseLine(at: now.addingTimeInterval(-90), sidechain: true)
+            .write(to: sub.appendingPathComponent("agent-a1.jsonl"), atomically: true, encoding: .utf8)
+        try register(fx, status: "idle", changedAt: now.addingTimeInterval(-55))
+        #expect(fx.scanner.state(forWorktreePath: worktree, now: now) == .needsAttention)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+}
