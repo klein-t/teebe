@@ -70,7 +70,9 @@ struct FilesSection: View {
                             return .handled
                         }
                     ScrollViewReader { proxy in
-                        ScrollView {
+                        // Rows fade into the window's bottom edge while more are below,
+                        // like the WORKTREES and CHANGES lists.
+                        BottomFadingScrollView {
                             FileRowsView(app: app, preview: preview)
                         }
                         .scrollBounceBehavior(.basedOnSize)
