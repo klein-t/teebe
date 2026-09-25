@@ -108,13 +108,24 @@ final class SelectorModel {
     /// e.g. after a file-watch event reports external activity.
     func refreshLiveState(now: Date = Date()) {
         var anyLive = false
+        var info = worktreeInfo
         for wt in worktrees {
-            var info = worktreeInfo[wt.path] ?? WorktreeInfo()
-            info.isLive = environment.activityMonitor.isBusy(worktreePath: wt.path, within: liveWindow, now: now)
-            anyLive = anyLive || info.isLive
-            worktreeInfo[wt.path] = info
+            var entry = info[wt.path] ?? WorktreeInfo()
+            entry.isLive = environment.activityMonitor.isBusy(worktreePath: wt.path, within: liveWindow, now: now)
+            anyLive = anyLive || entry.isLive
+            info[wt.path] = entry
         }
+        publish(info)
         scheduleLiveExpiry(anyLive: anyLive)
+    }
+
+    /// Every write to `worktreeInfo` re-renders the whole worktree list, and most
+    /// refreshes (polls, file bursts, log writes) find nothing new: only write
+    /// when a row's facts changed. Writing through the dictionary's subscript
+    /// would notify observers even when the value is unchanged.
+    private func publish(_ info: [String: WorktreeInfo]) {
+        guard info != worktreeInfo else { return }
+        worktreeInfo = info
     }
 
     /// While any dot is lit, keep a single pending re-check just past the busy
@@ -319,7 +330,7 @@ final class SelectorModel {
             )
         }
         notifyAgentTransitions(from: worktreeInfo, to: info)
-        worktreeInfo = info
+        publish(info)
     }
 
     func info(for worktree: Worktree) -> WorktreeInfo {
@@ -343,7 +354,7 @@ final class SelectorModel {
             info[worktree.path] = entry
         }
         notifyAgentTransitions(from: worktreeInfo, to: info)
-        worktreeInfo = info
+        publish(info)
     }
 
     /// Notify only on the working → needsAttention edge: the turn just ended (or
@@ -511,7 +522,7 @@ final class SelectorModel {
             countRefreshPending.removeAll()
             for path in batch {
                 guard let status = try? await statusService.status(worktreePath: path),
-                      var info = worktreeInfo[path] else { continue }
+                      var info = worktreeInfo[path], info.changeCount != status.changes.count else { continue }
                 info.changeCount = status.changes.count
                 worktreeInfo[path] = info
             }
