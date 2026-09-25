@@ -16,6 +16,18 @@ struct BottomScrollFadeTests {
         #expect(Scroll.fadeHeight(contentBottom: 200, viewportHeight: 8) == 4)
     }
 
+    @Test("the mask spans the full width, scrollbar included, and the fade ends at the viewport's bottom")
+    func maskCoversTheWholeViewport() {
+        typealias Scroll = BottomFadingScrollView<Text>
+        let size = CGSize(width: 300, height: 120)
+        let layout = Scroll.maskLayout(size: size, fadeHeight: 10)
+        #expect(layout.solid == CGRect(x: 0, y: 0, width: 300, height: 110))
+        #expect(layout.fade == CGRect(x: 0, y: 110, width: 300, height: 10))
+        let none = Scroll.maskLayout(size: size, fadeHeight: 0)
+        #expect(none.solid == CGRect(origin: .zero, size: size))
+        #expect(none.fade.height == 0)
+    }
+
     @Test func realScrollAndResizeUpdateTheFade() async throws {
         guard NSScreen.main != nil else { return }
         var fade: CGFloat = -1

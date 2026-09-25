@@ -76,6 +76,32 @@ struct WindowGeometryTests {
         #expect(abs(host.window.frame.height - (original.height - 80)) <= 1)
     }
 
+    @Test("each list's viewport ends on its divider line, with no padding between")
+    func listsEndOnTheirDividers() async throws {
+        guard let host = try await GeometryHost.make() else { return }
+        defer { host.tearDown() }
+        let dirty = try #require(host.app.selector.worktrees.first { $0.branch == "feat/dirty" })
+        await host.app.selector.selectWorktree(dirty)
+        await host.settleGeometry()
+        let content = try #require(host.window.contentView)
+        // Top to bottom: WORKTREES, CHANGES, FILES, in the hosting view's top-down space.
+        let viewports = host.scrollViews(in: content).map { $0.convert($0.bounds, to: content) }
+            .map { content.isFlipped ? $0 : NSRect(x: $0.minX, y: content.bounds.height - $0.maxY,
+                                                    width: $0.width, height: $0.height) }
+            .sorted { $0.minY < $1.minY }
+        try #require(viewports.count == 3)
+        let changes = try #require(host.hooks.changesFrame)
+        let files = try #require(host.hooks.filesFrame)
+        // The divider's line is drawn at the top of its slot; the slot is the line
+        // plus `dividerExtra`, and sits between two sections.
+        let slot = 1 + SectionSizing.dividerExtra
+        #expect(abs(changes.minY - slot - viewports[0].maxY) < 0.5, "WORKTREES stops short of its divider")
+        #expect(abs(changes.maxY - viewports[1].maxY) < 0.5, "CHANGES stops short of its divider")
+        #expect(abs(files.minY - changes.maxY - slot) < 0.5)
+        #expect(abs(content.bounds.height - viewports[2].maxY) < 0.5, "FILES stops short of the window edge")
+        for viewport in viewports { #expect(viewport.width == content.bounds.width, "a list is narrower than the window") }
+    }
+
     @Test("a constrained splitter keeps its pane sizes when released")
     func constrainedDividerDoesNotExpandOnRelease() async throws {
         guard let host = try await GeometryHost.make(filesHeight: 140) else { return }
@@ -401,6 +427,11 @@ private final class GeometryHost {
     }
 
     func endDrag() { hooks.endDividerDrag?() }
+
+    func scrollViews(in view: NSView) -> [NSScrollView] {
+        if let scroll = view as? NSScrollView { return [scroll] }
+        return view.subviews.flatMap(scrollViews)
+    }
 
     /// Do not accept a transient match between frame and target: queued AppKit and
     /// SwiftUI callbacks can still move both. Require a quiet interval as well.
