@@ -234,13 +234,48 @@ public struct AgentSessionScanner: Sendable {
         // Oldest first, so when two sessions land on the same worktree the newer
         // session's verdict wins (the per-dir "newest file wins" rule, kept).
         for file in files.sorted(by: { $0.mtime < $1.mtime }) {
-            guard let entry = lastMainChainEntry(in: file.url) else { continue }
+            guard let entry = lastEntry(in: file.url, includingSidechains: false) else { continue }
             let state = AgentStateDeriver.derive(lastEntry: entry, now: now, thresholds: thresholds)
             guard state != .idle else { continue }
             let owner = owningPath(forCwd: entry.cwd, among: paths) ?? file.launchPath
             result[owner] = state
         }
+        markBusySubagents(in: &result, paths: paths, now: now)
         return result
+    }
+
+    /// Subagents log to `<project>/<sessionId>/subagents/agent-*.jsonl`, not to
+    /// the parent's file. A busy one means work is happening both in the
+    /// worktree it runs in and in its parent's — a parent that launched a
+    /// background subagent and ended its own turn is still busy.
+    private func markBusySubagents(in result: inout [String: AgentActivityState], paths: [String], now: Date) {
+        var seen = Set<URL>()
+        for path in paths {
+            let dir = projectsRoot.appendingPathComponent(
+                Self.projectDirName(forWorktreePath: path), isDirectory: true)
+            guard seen.insert(dir.standardizedFileURL).inserted else { continue }
+            for sessionDir in subdirectories(of: dir) {
+                let subagents = sessionDir.appendingPathComponent("subagents", isDirectory: true)
+                let busy = sessionFiles(in: subagents)
+                    .filter { now.timeIntervalSince($0.mtime) < thresholds.stall }
+                    .compactMap { lastEntry(in: $0.url, includingSidechains: true) }
+                    .filter { AgentStateDeriver.derive(lastEntry: $0, now: now, thresholds: thresholds) == .working }
+                guard !busy.isEmpty else { continue }
+                for entry in busy {
+                    result[owningPath(forCwd: entry.cwd, among: paths) ?? path] = .working
+                }
+                let parent = dir.appendingPathComponent(sessionDir.lastPathComponent + ".jsonl")
+                let parentCwd = lastEntry(in: parent, includingSidechains: false)?.cwd
+                result[owningPath(forCwd: parentCwd, among: paths) ?? path] = .working
+            }
+        }
+    }
+
+    private func subdirectories(of dir: URL) -> [URL] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return entries.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
     }
 
     /// The deepest known worktree containing `cwd` — sessions record the exact
@@ -267,15 +302,16 @@ public struct AgentSessionScanner: Sendable {
             }
     }
 
-    /// Scan the tail of the file backwards for the last parseable entry that
-    /// belongs to the main conversation (sidechains are subagent chatter).
+    /// Scan the tail of the file backwards for the last parseable entry. In a
+    /// session file only the main conversation counts (sidechains are subagent
+    /// chatter); a subagent's own file is all sidechain.
     ///
     /// Lines are located and decoded individually, from the end: a tail window
     /// that opens mid-multibyte-character (or mid-line) only invalidates that
     /// first truncated line instead of poisoning a whole-buffer decode, and the
     /// scan stops at the first hit instead of materializing every line of the
     /// window when only the last one or two matter.
-    private func lastMainChainEntry(in url: URL) -> AgentSessionEntry? {
+    private func lastEntry(in url: URL, includingSidechains: Bool) -> AgentSessionEntry? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         guard let size = try? handle.seekToEnd() else { return nil }
@@ -291,7 +327,7 @@ public struct AgentSessionScanner: Sendable {
             if start < end,
                let line = String(data: data[start..<end], encoding: .utf8),
                let entry = AgentSessionEntry.parse(line: line),
-               !entry.isSidechain {
+               includingSidechains || !entry.isSidechain {
                 return entry
             }
             end = start > data.startIndex ? start - 1 : data.startIndex

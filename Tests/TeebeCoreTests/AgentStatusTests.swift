@@ -556,3 +556,95 @@ struct AgentScannerAttributionTests {
         try? FileManager.default.removeItem(at: fx.root)
     }
 }
+
+// MARK: - Scanner subagents (`<project>/<sessionId>/subagents/agent-*.jsonl`)
+
+@Suite("AgentSessionScanner subagents")
+struct AgentScannerSubagentTests {
+    let now = Date(timeIntervalSince1970: 1_784_000_000)
+    let primary = "/Users/k/Documents/CODE/teebe"
+    let linked = "/Users/k/Documents/CODE/teebe/.claude/worktrees/audit"
+    var paths: [String] { [primary, linked] }
+
+    struct Fixture {
+        var scanner: AgentSessionScanner
+        var root: URL
+        var primaryDir: URL
+    }
+
+    func makeFixture() throws -> Fixture {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("teebe-tests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let primaryDir = root.appendingPathComponent(
+            AgentSessionScanner.projectDirName(forWorktreePath: primary), isDirectory: true)
+        try FileManager.default.createDirectory(at: primaryDir, withIntermediateDirectories: true)
+        let scanner = AgentSessionScanner(
+            projectsRoot: root, thresholds: AgentStatusThresholds(stall: 600, idle: 1_800))
+        return Fixture(scanner: scanner, root: root, primaryDir: primaryDir)
+    }
+
+    func write(_ lines: [String], to url: URL, mtime: Date) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try lines.joined(separator: "\n").appending("\n").write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: url.path)
+    }
+
+    func subagentURL(_ fx: Fixture, session: String = "s1", agent: String = "agent-a1") -> URL {
+        fx.primaryDir.appendingPathComponent(session, isDirectory: true)
+            .appendingPathComponent("subagents", isDirectory: true)
+            .appendingPathComponent("\(agent).jsonl")
+    }
+
+    @Test("a busy subagent badges the worktree it runs in, and its parent session's")
+    func busySubagent() throws {
+        let fx = try makeFixture()
+        // The parent launched a background subagent and ended its turn.
+        try write(
+            [assistantTextLine(at: now.addingTimeInterval(-40), cwd: primary)],
+            to: fx.primaryDir.appendingPathComponent("s1.jsonl"), mtime: now.addingTimeInterval(-40))
+        try write(
+            [assistantToolUseLine(at: now.addingTimeInterval(-8), sidechain: true, cwd: linked)],
+            to: subagentURL(fx), mtime: now.addingTimeInterval(-8))
+        let states = fx.scanner.states(forWorktreePaths: paths, now: now)
+        #expect(states[linked] == .working)
+        #expect(states[primary] == .working)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("a subagent mid-message (streaming block, null stop_reason) is working")
+    func streamingSubagent() throws {
+        let fx = try makeFixture()
+        try write(
+            [assistantBlockLine("text", stop: nil, at: now.addingTimeInterval(-3), sidechain: true, cwd: linked)],
+            to: subagentURL(fx), mtime: now.addingTimeInterval(-3))
+        #expect(fx.scanner.states(forWorktreePaths: paths, now: now)[linked] == .working)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("a finished subagent adds nothing — the parent's own verdict stands")
+    func finishedSubagent() throws {
+        let fx = try makeFixture()
+        try write(
+            [assistantTextLine(at: now.addingTimeInterval(-30), cwd: primary)],
+            to: fx.primaryDir.appendingPathComponent("s1.jsonl"), mtime: now.addingTimeInterval(-30))
+        try write(
+            [assistantBlockLine("text", stop: "end_turn", at: now.addingTimeInterval(-35), sidechain: true, cwd: linked)],
+            to: subagentURL(fx), mtime: now.addingTimeInterval(-35))
+        let states = fx.scanner.states(forWorktreePaths: paths, now: now)
+        #expect(states[primary] == .needsAttention)
+        #expect(states[linked] == .idle)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("a subagent silent past the stall threshold is not counted as working")
+    func stalledSubagent() throws {
+        let fx = try makeFixture()
+        try write(
+            [assistantToolUseLine(at: now.addingTimeInterval(-900), sidechain: true, cwd: linked)],
+            to: subagentURL(fx), mtime: now.addingTimeInterval(-900))
+        #expect(fx.scanner.states(forWorktreePaths: paths, now: now)[linked] == .idle)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+}
