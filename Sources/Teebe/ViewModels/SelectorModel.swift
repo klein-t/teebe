@@ -70,6 +70,8 @@ final class SelectorModel {
     /// Vars so tests can shrink them.
     var agentPollInterval: TimeInterval = 30
     var lowPowerAgentPollInterval: TimeInterval = 120
+    /// Delay before the catch-up re-derive that follows a hook ping.
+    var agentPingSettle: TimeInterval = 2
     /// One-shot follow-up scheduled while any live dot is lit, so `isLive` expires
     /// shortly after the busy window lapses instead of latching until the next
     /// event (a latched dot keeps a repeat-forever pulse animation burning CPU).
@@ -348,7 +350,7 @@ final class SelectorModel {
         startAgentWatcher()
         let listener = environment.makeAgentPingListener()
         listener.start { [weak self] in
-            Task { @MainActor in await self?.refreshAgentStates() }
+            Task { @MainActor in await self?.handleAgentPing() }
         }
         agentPingListener = listener
         agentPollTask = Task { [weak self] in
@@ -413,6 +415,16 @@ final class SelectorModel {
             await worktree.resumeWatching()
             await refreshWorktrees()
         }
+    }
+
+    /// A Claude Code hook pinged. Hooks run a beat before Claude Code records
+    /// what they announce (UserPromptSubmit fires before the prompt is logged
+    /// or the session registry turns busy), so look again once it has — in low
+    /// power nothing else would until the slow poll.
+    func handleAgentPing() async {
+        await refreshAgentStates()
+        try? await Task.sleep(for: .seconds(agentPingSettle))
+        await refreshAgentStates()
     }
 
     /// A coalesced batch of session-log writes — re-derive the badges.

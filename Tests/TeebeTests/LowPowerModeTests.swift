@@ -87,6 +87,22 @@ struct LowPowerModeTests {
         #expect(rig.spy.posted.count == 1)
     }
 
+    @Test("a ping that lands before Claude Code records the new state is followed by a catch-up re-derive")
+    func pingCatchUp() async throws {
+        let rig = await makeRig()
+        rig.selector.agentPingSettle = 0.2
+        await rig.selector.setLowPower(true)
+
+        // UserPromptSubmit pings before the prompt is logged or the session
+        // registry turns busy; the state only changes a moment later.
+        rig.ping.fire()
+        try await Task.sleep(for: .milliseconds(50))
+        rig.states["/repo-wt"] = .working
+        try await Task.sleep(for: .milliseconds(500))
+
+        #expect(rig.selector.info(for: rig.selector.worktrees[1]).agentState == .working)
+    }
+
     @Test("exiting low power restarts watchers and re-derives state")
     func exitingRestartsAndRefreshes() async {
         let rig = await makeRig()
