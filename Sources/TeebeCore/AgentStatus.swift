@@ -36,7 +36,13 @@ public struct AgentSessionEntry: Equatable, Sendable {
         case toolResult
         /// An assistant message that requests a tool — mid-turn.
         case assistantToolUse
-        /// An assistant message with no tool call — the turn's final text.
+        /// A block of an assistant message that does not end the turn: its
+        /// message goes on to call a tool (a later line), or it is still
+        /// streaming (`stop_reason` null — subagent logs write blocks as they
+        /// stream). Mid-turn.
+        case assistantPartial
+        /// A block of the turn's final assistant message (`end_turn`, or the
+        /// `stop_sequence` of a synthetic API-error message) — the turn ended.
         case assistantText
     }
 
@@ -74,7 +80,16 @@ public struct AgentSessionEntry: Equatable, Sendable {
         let blockTypes = Set(blocks.compactMap { $0["type"] as? String })
         let kind: Kind
         if type == "assistant" {
-            kind = blockTypes.contains("tool_use") ? .assistantToolUse : .assistantText
+            // Each content block is its own line; only the stop reason says
+            // whether this message ended the turn. Main-chain lines carry the
+            // message's final reason, subagent lines are null until the last.
+            if blockTypes.contains("tool_use") {
+                kind = .assistantToolUse
+            } else if endsTurn(stopReason: message["stop_reason"] as? String) {
+                kind = .assistantText
+            } else {
+                kind = .assistantPartial
+            }
         } else {
             kind = blockTypes.contains("tool_result") ? .toolResult : .humanPrompt
         }
@@ -84,6 +99,14 @@ public struct AgentSessionEntry: Equatable, Sendable {
             isSidechain: dict["isSidechain"] as? Bool ?? false,
             cwd: dict["cwd"] as? String
         )
+    }
+
+    /// Whether an assistant message's stop reason ends the turn: `end_turn`,
+    /// the `stop_sequence` of synthetic API-error messages, `max_tokens`…
+    /// Null (still streaming), `tool_use` and `pause_turn` keep it going.
+    private static func endsTurn(stopReason: String?) -> Bool {
+        guard let stopReason else { return false }
+        return stopReason != "tool_use" && stopReason != "pause_turn"
     }
 
     // Built once — ISO8601DateFormatter is expensive to construct and thread-safe,
@@ -117,7 +140,7 @@ public enum AgentStateDeriver {
         switch entry.kind {
         case .assistantText:
             return .needsAttention
-        case .humanPrompt, .toolResult, .assistantToolUse:
+        case .humanPrompt, .toolResult, .assistantToolUse, .assistantPartial:
             return age >= thresholds.stall ? .needsAttention : .working
         }
     }

@@ -31,7 +31,7 @@ private func assistantToolUseLine(at date: Date, sidechain: Bool = false, cwd: S
     """
     {"parentUuid":"u1","isSidechain":\(sidechain),"type":"assistant",\
     "message":{"role":"assistant","content":[{"type":"text","text":"Looking."},\
-    {"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]},\
+    {"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}],"stop_reason":"tool_use"},\
     "uuid":"a1","timestamp":"\(iso(date))","cwd":"\(cwd)","sessionId":"s1"}
     """
 }
@@ -39,8 +39,39 @@ private func assistantToolUseLine(at date: Date, sidechain: Bool = false, cwd: S
 private func assistantTextLine(at date: Date, sidechain: Bool = false, cwd: String = "/Users/k/Documents/CODE/teebe") -> String {
     """
     {"parentUuid":"u2","isSidechain":\(sidechain),"type":"assistant",\
-    "message":{"role":"assistant","content":[{"type":"text","text":"Done — here is the answer."}]},\
+    "message":{"role":"assistant","content":[{"type":"text","text":"Done — here is the answer."}],"stop_reason":"end_turn"},\
     "uuid":"a2","timestamp":"\(iso(date))","cwd":"\(cwd)","sessionId":"s1"}
+    """
+}
+
+/// One content block of an assistant message. Claude Code writes every block of
+/// a message as its own line sharing `message.id`; main-chain lines carry the
+/// message's final `stop_reason`, subagent lines are written while the message
+/// still streams (`stop_reason` null) until the final one.
+private func assistantBlockLine(
+    _ block: String, stop: String?, at date: Date, sidechain: Bool = false,
+    cwd: String = "/Users/k/Documents/CODE/teebe"
+) -> String {
+    let content = block == "thinking"
+        ? #"{"type":"thinking","thinking":"Let me check.","signature":"sig"}"#
+        : #"{"type":"text","text":"Checking the tests first."}"#
+    let stopJSON = stop.map { "\"\($0)\"" } ?? "null"
+    return """
+    {"parentUuid":"u1","isSidechain":\(sidechain),"type":"assistant",\
+    "message":{"model":"claude-sonnet","id":"msg_1","type":"message","role":"assistant",\
+    "content":[\(content)],"stop_reason":\(stopJSON),"stop_sequence":null},\
+    "uuid":"a3","timestamp":"\(iso(date))","cwd":"\(cwd)","sessionId":"s1"}
+    """
+}
+
+/// The synthetic message Claude Code logs when a request fails (API error,
+/// usage limit, not logged in): the turn is over.
+private func apiErrorLine(at date: Date) -> String {
+    """
+    {"parentUuid":"u1","isSidechain":false,"type":"assistant",\
+    "message":{"model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","type":"message",\
+    "content":[{"type":"text","text":"API Error: 500 Internal server error"}]},\
+    "isApiErrorMessage":true,"uuid":"a4","timestamp":"\(iso(date))","cwd":"/Users/k/Documents/CODE/teebe","sessionId":"s1"}
     """
 }
 
@@ -104,6 +135,33 @@ struct AgentSessionEntryTests {
         #expect(entry.kind == .assistantText)
     }
 
+    @Test("a text or thinking block of a message that goes on to call a tool is mid-turn", arguments: [
+        "text", "thinking"
+    ])
+    func blockBeforeToolUse(block: String) throws {
+        let entry = try #require(AgentSessionEntry.parse(line: assistantBlockLine(block, stop: "tool_use", at: date)))
+        #expect(entry.kind == .assistantPartial)
+    }
+
+    @Test("a block written while its message still streams (null stop_reason) is mid-turn")
+    func streamingBlock() throws {
+        let entry = try #require(AgentSessionEntry.parse(
+            line: assistantBlockLine("text", stop: nil, at: date, sidechain: true)))
+        #expect(entry.kind == .assistantPartial)
+    }
+
+    @Test("a block of the turn's final message ends the turn", arguments: ["text", "thinking"])
+    func finalMessageBlock(block: String) throws {
+        let entry = try #require(AgentSessionEntry.parse(line: assistantBlockLine(block, stop: "end_turn", at: date)))
+        #expect(entry.kind == .assistantText)
+    }
+
+    @Test("a synthetic API-error message ends the turn")
+    func apiError() throws {
+        let entry = try #require(AgentSessionEntry.parse(line: apiErrorLine(at: date)))
+        #expect(entry.kind == .assistantText)
+    }
+
     @Test("meta / non-message lines parse to nil")
     func metaLinesAreNil() {
         for line in metaLines {
@@ -162,6 +220,12 @@ struct AgentStateDeriverTests {
     ])
     func working(kind: AgentSessionEntry.Kind) {
         #expect(AgentStateDeriver.derive(lastEntry: entry(kind, age: 30), now: now, thresholds: thresholds)
+            == .working)
+    }
+
+    @Test("a mid-message block means working")
+    func partialIsWorking() {
+        #expect(AgentStateDeriver.derive(lastEntry: entry(.assistantPartial, age: 5), now: now, thresholds: thresholds)
             == .working)
     }
 
@@ -303,6 +367,18 @@ struct AgentSessionScannerTests {
         let fx = try makeFixture(tailBytes: tail)
         let url = fx.dir.appendingPathComponent("s1.jsonl")
         try content.write(to: url, atomically: true, encoding: .utf8)
+        #expect(fx.scanner.state(forWorktreePath: worktreePath, now: now) == .working)
+        try? FileManager.default.removeItem(at: fx.root)
+    }
+
+    @Test("a message whose text block has landed but whose tool call has not is still working")
+    func midMessageIsWorking() throws {
+        let fx = try makeFixture()
+        try write(
+            [humanPromptLine(at: now.addingTimeInterval(-20)),
+             assistantBlockLine("thinking", stop: "tool_use", at: now.addingTimeInterval(-9)),
+             assistantBlockLine("text", stop: "tool_use", at: now.addingTimeInterval(-6))],
+            to: fx.dir.appendingPathComponent("s1.jsonl"))
         #expect(fx.scanner.state(forWorktreePath: worktreePath, now: now) == .working)
         try? FileManager.default.removeItem(at: fx.root)
     }
