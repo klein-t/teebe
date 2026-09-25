@@ -13,7 +13,8 @@ struct AgentStatusModelTests {
         spy: NotificationSpy = NotificationSpy(),
         git: FakeGitClient = FakeGitClient(),
         box: WatcherBox? = nil,
-        projectsRoot: String? = nil
+        projectsRoot: String? = nil,
+        extraWatchPaths: [String] = []
     ) -> SelectorModel {
         git.worktreesResult = [
             Worktree(path: "/repo", branch: "main", isPrimary: true),
@@ -24,6 +25,7 @@ struct AgentStatusModelTests {
             makeWatcher: box.map { b in { b.make() } },
             agentStatuses: states.provider,
             agentProjectsRootPath: projectsRoot,
+            agentExtraWatchPaths: extraWatchPaths,
             notify: spy.record
         ))
     }
@@ -114,6 +116,15 @@ struct AgentStatusModelTests {
         let selector = makeSelector(states: FakeAgentStates(), box: box, projectsRoot: "/fake/.claude/projects")
         await selector.selectRepo(repo)
         #expect(box.watching("/fake/.claude/projects")?.watchedPaths.contains("/fake/.claude/sessions") == true)
+    }
+
+    @Test("the agent watcher also covers other harnesses' session folders (Codex rollouts)")
+    func codexSessionsWatched() async {
+        let box = WatcherBox()
+        let selector = makeSelector(states: FakeAgentStates(), box: box, projectsRoot: "/fake/.claude/projects",
+                                    extraWatchPaths: ["/fake/.codex/sessions"])
+        await selector.selectRepo(repo)
+        #expect(box.watching("/fake/.claude/projects")?.watchedPaths.contains("/fake/.codex/sessions") == true)
     }
 
     @Test("without a projects root no agent watcher is started")

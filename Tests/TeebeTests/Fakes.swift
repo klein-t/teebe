@@ -243,6 +243,7 @@ func makeTestEnvironment(
     makeWatcher: (@MainActor () -> FileSystemWatcher)? = nil,
     agentStatuses: (@Sendable ([String], Date) -> [String: AgentActivityState])? = nil,
     agentProjectsRootPath: String? = nil,
+    agentExtraWatchPaths: [String] = [],
     notify: (@MainActor (String, String) -> Void)? = nil,
     agentPing: AgentPingListening? = nil
 ) -> AppEnvironment {
@@ -258,6 +259,7 @@ func makeTestEnvironment(
         makeWatcher: makeWatcher ?? { FakeWatcher() },
         agentStatuses: agentStatuses ?? { _, _ in [:] },
         agentProjectsRootPath: agentProjectsRootPath,
+        agentExtraWatchPaths: agentExtraWatchPaths,
         notify: notify ?? { _, _ in },
         makeAgentPingListener: { agentPing ?? FakeAgentPing() }
     )

@@ -13,13 +13,15 @@ struct AppEnvironment {
     /// Factory for a file-system watcher (overridable with a fake in tests).
     let makeWatcher: @MainActor () -> FileSystemWatcher
     /// Reads the agent activity states for all of a repo's worktree paths at
-    /// once (live: Claude Code session logs via `AgentSessionScanner`; tests
-    /// inject a script). Batched so the scanner can attribute a session logged
+    /// once (live: every harness adapter — Claude Code session logs, Codex
+    /// rollouts — combined; tests inject a script). Batched so the scanner can attribute a session logged
     /// under one worktree's project dir to the worktree it actually runs in.
     let agentStatuses: @Sendable (_ worktreePaths: [String], _ now: Date) -> [String: AgentActivityState]
     /// Where the session logs live, so a watcher can react to log writes.
     /// nil disables watching (and in tests, the watcher entirely).
     let agentProjectsRootPath: String?
+    /// Other harnesses' session folders (Codex rollouts), watched alongside.
+    let agentExtraWatchPaths: [String]
     /// Posts a user-facing notification (title, body).
     let notify: @MainActor (_ title: String, _ body: String) -> Void
     /// Factory for the darwin-notification listener the Claude Code hook pings
@@ -35,6 +37,7 @@ struct AppEnvironment {
         makeWatcher: @escaping @MainActor () -> FileSystemWatcher,
         agentStatuses: @escaping @Sendable ([String], Date) -> [String: AgentActivityState] = { _, _ in [:] },
         agentProjectsRootPath: String? = nil,
+        agentExtraWatchPaths: [String] = [],
         notify: @escaping @MainActor (String, String) -> Void = { _, _ in },
         makeAgentPingListener: @escaping @MainActor () -> AgentPingListening = { DarwinAgentPingListener() }
     ) {
@@ -46,6 +49,7 @@ struct AppEnvironment {
         self.makeWatcher = makeWatcher
         self.agentStatuses = agentStatuses
         self.agentProjectsRootPath = agentProjectsRootPath
+        self.agentExtraWatchPaths = agentExtraWatchPaths
         self.notify = notify
         self.makeAgentPingListener = makeAgentPingListener
     }
@@ -65,7 +69,13 @@ struct AppEnvironment {
         let projectsRoot = ProcessInfo.processInfo.environment["TEEBE_CLAUDE_PROJECTS_DIR"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? AgentSessionScanner.defaultProjectsRoot
-        let scanner = AgentSessionScanner(projectsRoot: projectsRoot)
+        let codexSessions = ProcessInfo.processInfo.environment["TEEBE_CODEX_SESSIONS_DIR"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? CodexRolloutScanner.defaultSessionsRoot
+        let adapters = CombinedAgentActivity([
+            AgentSessionScanner(projectsRoot: projectsRoot),
+            CodexRolloutScanner(sessionsRoot: codexSessions)
+        ])
         return AppEnvironment(
             git: ProcessGitClient(),
             opener: WorkspaceFileOpener(),
@@ -73,8 +83,9 @@ struct AppEnvironment {
             store: AppStateStore(),
             activityMonitor: WorktreeActivityMonitor(),
             makeWatcher: { FSEventsWatcher() },
-            agentStatuses: { paths, now in scanner.states(forWorktreePaths: paths, now: now) },
+            agentStatuses: { paths, now in adapters.states(forWorktreePaths: paths, now: now) },
             agentProjectsRootPath: projectsRoot.path,
+            agentExtraWatchPaths: [codexSessions.path],
             notify: AgentNotifier.post
         )
     }

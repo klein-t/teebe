@@ -373,8 +373,11 @@ final class SelectorModel {
         // permission prompt flips it to waiting without writing any session log.
         let registry = URL(fileURLWithPath: root).deletingLastPathComponent()
             .appendingPathComponent("sessions", isDirectory: true).path
+        // Other harnesses' rollouts (Codex) change on the same cadence. FSEvents
+        // is recursive, so a resumed thread writing to an older date folder is
+        // seen too; only the paths Teebe reads cost anything.
         let watcher = environment.makeWatcher()
-        watcher.start(paths: [root, registry], debounce: 1.0) { [weak self] _ in
+        watcher.start(paths: [root, registry] + environment.agentExtraWatchPaths, debounce: 1.0) { [weak self] _ in
             Task { @MainActor in await self?.handleAgentWatchEvent() }
         }
         agentWatcher = watcher
