@@ -23,8 +23,8 @@ struct ComparisonBranchSheet: View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Also Check Merges Against").font(.system(size: 15, weight: .semibold))
-                Text("Worktrees are already checked against the default branch and dev, develop, main and master. "
-                     + "Pick one more branch, or None.")
+                Text("Worktrees are checked against up to four branches: the default branch, the one picked here, "
+                     + "then dev, develop, main and master when they exist. Pick one more branch, or None.")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

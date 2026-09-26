@@ -18,8 +18,8 @@ final class SelectorModel {
         /// than a placeholder for "unknown".
         var hasStatus: Bool = false
         var isLive: Bool = false
-        /// What the AI agent working in this worktree is doing (from its
-        /// Claude Code session log).
+        /// What the coding agents working in this worktree are doing, from their
+        /// own records (session logs, rollouts, session registry).
         var agentState: AgentActivityState = .idle
         /// The branch against its same-named remote branch.
         var remote: RemoteSync = .notOnRemote

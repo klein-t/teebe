@@ -11,8 +11,9 @@ enum WorktreePreferences {
     static let fetchTitle = "Fetch automatically"
     static let fetchHelp = "Check remotes in the background. Your files stay unchanged; Refresh still works when off."
     static let extraTargetTitle = "Also check merges against"
-    static let extraTargetHelp = "Merges are checked automatically against the default branch and dev, develop, main "
-        + "and master when they exist. Choose one more branch for this repository, such as a release branch."
+    static let extraTargetHelp = "Merges are checked against up to four branches: the default branch, the one chosen "
+        + "here, then dev, develop, main and master when they exist. "
+        + "Choose one for this repository, such as a release branch."
 }
 
 /// Root view model: owns the added repositories, persistence, and the selector.
