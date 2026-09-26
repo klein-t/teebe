@@ -3,10 +3,12 @@ import Testing
 @testable import TeebeCore
 
 /// Forwards to real git, running `afterRemove` right after a worktree is removed:
-/// the moment between folder removal and branch deletion.
+/// the moment between folder removal and branch deletion. `beforeRun` sees every
+/// other git command first, so a test can act in the middle of the final checks.
 private struct RemovalHookGit: GitClient {
     let base = ProcessGitClient()
     let afterRemove: @Sendable () -> Void
+    var beforeRun: @Sendable ([String]) -> Void = { _ in }
     func worktrees(repoPath: String) async throws -> [Worktree] { try await base.worktrees(repoPath: repoPath) }
     func branches(repoPath: String) async throws -> [Branch] { try await base.branches(repoPath: repoPath) }
     func status(worktreePath: String) async throws -> StatusResult { try await base.status(worktreePath: worktreePath) }
@@ -26,8 +28,18 @@ private struct RemovalHookGit: GitClient {
     func pruneWorktrees(repoPath: String) async throws {}
     func fetchOrigin(repoPath: String) async throws {}
     func run(_ arguments: [String], in directory: String) async throws -> GitInvocationResult {
-        try await base.run(arguments, in: directory)
+        beforeRun(arguments)
+        return try await base.run(arguments, in: directory)
     }
+}
+
+/// A flag set from a synchronous hook.
+private final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    func set() { lock.lock(); value = true; lock.unlock() }
+    /// True the first time it is called after `set()`, false otherwise.
+    func takeOnce() -> Bool { lock.lock(); defer { lock.unlock() }; let was = value; value = false; return was }
 }
 
 /// Synchronous git for use inside a non-async hook; returns trimmed stdout.
@@ -194,5 +206,32 @@ struct MergeTargetsTests {
                                                includingIgnored: false, deleteBranch: true)
         #expect(outcome == .kept)
         #expect(!fixture.git(["branch", "--list", "feature"]).isEmpty)
+    }
+
+    @Test("a branch that moves while its merge is being re-checked is kept, not deleted")
+    func branchMovedDuringFinalCheck() async throws {
+        let setup = try repo()
+        let fixture = setup.fixture
+        let dev = setup.dev
+        defer { fixture.cleanup() }
+        fixture.git(["merge", "-q", "--no-ff", "feature", "-m", "merge feature"], in: dev)
+        let repoPath = fixture.repoPath
+        let removed = Flag()
+        // The folder is gone and the branch tip was just confirmed; while the merge is
+        // re-checked, someone points the branch at new, unmerged work.
+        let git = RemovalHookGit(afterRemove: { removed.set() }, beforeRun: { arguments in
+            guard arguments.first == "merge-base", removed.takeOnce() else { return }
+            let stray = shell(["commit-tree", "-m", "stray", "-p", "feature", "feature^{tree}"], in: repoPath)
+            _ = shell(["update-ref", "refs/heads/feature", stray], in: repoPath)
+        })
+        let service = WorktreeCleanupService(git: git)
+        let snapshot = try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
+        let reviewed = try entry(snapshot, "feature")
+        let outcome = try await service.remove(repoPath: fixture.repoPath, entry: reviewed,
+                                               includingIgnored: false, deleteBranch: true)
+        #expect(outcome == .kept)
+        let tip = fixture.git(["rev-parse", "--verify", "refs/heads/feature"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(!tip.isEmpty)
+        #expect(tip != reviewed.worktree.head)
     }
 }

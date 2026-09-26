@@ -242,17 +242,23 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
     /// Deletes the local branch only while its tip is the commit that was checked
     /// and is still merged into a target that has not moved. Remote branches are
     /// never touched. Any doubt keeps the branch: the folder is already gone, so
-    /// failing here loses nothing.
+    /// failing here loses nothing. The delete itself names the checked commit, so
+    /// Git refuses it if the branch moved at any point after the check.
     private func deleteMergedBranch(
         _ branch: String, head: String, targets: [CleanupBranch], repoPath: String
     ) async -> BranchDeletion {
-        guard let catalog = try? await self.targets(in: repoPath),
-              catalog.branch("refs/heads/" + branch)?.sha == head else { return .kept }
+        let ref = "refs/heads/" + branch
+        guard let worktrees = try? await git.worktrees(repoPath: repoPath),
+              !worktrees.contains(where: { $0.branch == branch }),
+              let catalog = try? await self.targets(in: repoPath),
+              catalog.branch(ref)?.sha == head else { return .kept }
         let unchanged = targets.filter { catalog.branch($0.ref)?.sha == $0.sha }
         guard let confirmed = try? await mergedTargets(of: head, among: unchanged, in: repoPath).targets,
               !confirmed.isEmpty,
-              let result = try? await git.run(["branch", "-D", branch], in: repoPath),
+              let result = try? await git.run(["update-ref", "--no-deref", "-d", ref, head], in: repoPath),
               result.succeeded else { return .kept }
+        // What `git branch -D` also drops: the branch's upstream and other settings.
+        _ = try? await git.run(["config", "--remove-section", "branch." + branch], in: repoPath)
         return .deleted
     }
 
