@@ -102,7 +102,7 @@ struct RefreshChurnTests {
         let root = "/fake/.claude/projects"
         let selector = await makeSelector(states: states, projectsRoot: root)
         let before = states.count
-        await selector.handleAgentWatchEvent(["\(root)/-Users-k-elsewhere/s.jsonl"])
+        await selector.handleAgentWatchEvent(["\(root)/-Users-dev-elsewhere/s.jsonl"])
         #expect(states.count == before)
         await selector.handleAgentWatchEvent(["\(root)/-repo-wt/s.jsonl"])
         #expect(states.count == before + 1)
