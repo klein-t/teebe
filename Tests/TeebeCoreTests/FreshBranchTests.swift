@@ -87,4 +87,102 @@ struct FreshBranchTests {
         #expect(!merged.hasNoCommits)
         #expect(merged.mergeStatus == .merged)
     }
+
+    /// A bare clone with the main branch checked out in its own worktree, the usual
+    /// layout for worktree-first workflows. Bare repositories log no ref updates by
+    /// default, so `worktree add -b` leaves no record of where a branch started.
+    private func bareLayout(_ fixture: GitFixture) -> (bare: URL, main: URL) {
+        fixture.commitFile("a.txt", "base")
+        let bare = fixture.root.appendingPathComponent("bare.git", isDirectory: true)
+        fixture.git(["clone", "-q", "--bare", fixture.repoPath, bare.path])
+        let main = fixture.root.appendingPathComponent("main", isDirectory: true)
+        fixture.git(["worktree", "add", "-q", main.path, "main"], in: bare)
+        return (bare, main)
+    }
+
+    private func moveMain(_ fixture: GitFixture, in main: URL, file: String = "later.txt") {
+        fixture.writeFile(file, "main moved on", in: main)
+        fixture.stage(in: main)
+        fixture.git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "main moved"], in: main)
+    }
+
+    private func scan(bare: URL) async throws -> [CleanupEntry] {
+        try await WorktreeCleanupService(git: ProcessGitClient()).scan(repoPath: bare.path, extraTarget: nil).entries
+    }
+
+    @Test("in a bare clone, a just-created branch stays fresh after main moves on")
+    func bareCloneFreshBranch() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        let (bare, main) = bareLayout(fixture)
+        let fresh = fixture.root.appendingPathComponent("fresh", isDirectory: true)
+        fixture.git(["worktree", "add", "-q", "-b", "fresh", fresh.path, "main"], in: bare)
+        moveMain(fixture, in: main)
+        let entry = try #require(try await scan(bare: bare).first { $0.worktree.branch == "fresh" })
+        #expect(entry.hasNoCommits)
+        #expect(entry.mergeStatus == .notConfirmed)
+        #expect(!entry.canRemove(includingIgnored: true))
+    }
+
+    @Test("in a bare clone, a branch committed in its worktree and fast-forwarded into main is merged")
+    func bareCloneCommittedBranch() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        let (bare, main) = bareLayout(fixture)
+        let work = fixture.root.appendingPathComponent("work", isDirectory: true)
+        fixture.git(["worktree", "add", "-q", "-b", "work", work.path, "main"], in: bare)
+        fixture.writeFile("w.txt", "work", in: work)
+        fixture.stage(in: work)
+        fixture.git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "work"], in: work)
+        fixture.git(["merge", "-q", "--ff-only", "work"], in: main)
+        let atTip = try #require(try await scan(bare: bare).first { $0.worktree.branch == "work" })
+        #expect(!atTip.hasNoCommits)
+        #expect(atTip.mergeStatus == .merged)
+        moveMain(fixture, in: main)
+        let behind = try #require(try await scan(bare: bare).first { $0.worktree.branch == "work" })
+        #expect(!behind.hasNoCommits)
+        #expect(behind.mergeStatus == .merged)
+        #expect(behind.canRemove(includingIgnored: false))
+    }
+
+    @Test("with no reflog at all, a fast-forward can't be told from a fresh branch, but a merge commit can")
+    func noReflogAtAll() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let fastForward = fixture.addWorktree(name: "ff", branch: "ff")
+        fixture.commitAndFastForward(branch: "ff", in: fastForward, file: "ff.txt")
+        let merged = fixture.addWorktree(name: "merged", branch: "merged")
+        fixture.writeFile("m.txt", "merged work", in: merged)
+        fixture.stage(in: merged)
+        fixture.commit("merged work", in: merged)
+        fixture.git(["merge", "-q", "--no-ff", "merged", "-m", "merge"])
+        fixture.commitFile("c.txt", "main moved on")
+        let gitDir = fixture.repoURL.appendingPathComponent(".git")
+        for log in ["logs/refs/heads/ff", "logs/refs/heads/merged", "worktrees/ff/logs", "worktrees/merged/logs"] {
+            try FileManager.default.removeItem(at: gitDir.appendingPathComponent(log))
+        }
+        let entries = try await scan(fixture).entries
+        let ffEntry = try #require(entries.first { $0.worktree.branch == "ff" })
+        let mergedEntry = try #require(entries.first { $0.worktree.branch == "merged" })
+        // Its tip sits on main's own line: it may have been cut there, so no ✓.
+        #expect(ffEntry.hasNoCommits)
+        #expect(ffEntry.mergeStatus == .notConfirmed)
+        // Its tip only reached main through a merge: that is merged work.
+        #expect(!mergedEntry.hasNoCommits)
+        #expect(mergedEntry.mergeStatus == .merged)
+    }
+
+    @Test("a detached worktree with no commits of its own is not merged after main moves on")
+    func detachedFresh() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let detached = fixture.root.appendingPathComponent("detached", isDirectory: true)
+        fixture.git(["worktree", "add", "-q", "--detach", detached.path, "HEAD"])
+        fixture.commitFile("b.txt", "main moved on")
+        let entry = try #require(try await scan(fixture).entries.first { $0.worktree.isDetached })
+        #expect(entry.hasNoCommits)
+        #expect(entry.mergeStatus == .notConfirmed)
+    }
 }

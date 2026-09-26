@@ -299,8 +299,8 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             entry.mergedTargets = merge.targets
             entry.hasEquivalentContent = merge.byContent
             entry.mergeStatus = merge.targets.isEmpty ? .notConfirmed : .merged
-            if !merge.targets.isEmpty, !merge.byContent, !entry.isTarget, let branch = worktree.branch,
-               await hasNoCommits(branch: branch, head: entry.worktree.head, targets: targets, in: worktree.path) {
+            if !merge.targets.isEmpty, !merge.byContent, !entry.isTarget,
+               await hasNoCommits(branch: worktree.branch, head: entry.worktree.head, targets: targets, in: worktree.path) {
                 entry.hasNoCommits = true
                 entry.mergedTargets = []
                 entry.mergeStatus = .notConfirmed
@@ -336,32 +336,65 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         return ([], false)
     }
 
-    /// Whether `branch` never got a commit of its own. Its reflog says where it was
-    /// created: when the oldest entry is `branch: Created from <start>`, the tip is
-    /// still that commit, and the start is a target, HEAD or a commit id, nothing
-    /// was committed on it (a branch cut from another feature branch carries that
-    /// branch's commits, so it doesn't count). Without such a reflog (expired,
-    /// renamed, created by plumbing) only a tip sitting exactly on a target's tip
-    /// counts: there is nothing there that could be its own.
-    private func hasNoCommits(branch: String, head: String, targets: [CleanupBranch], in path: String) async -> Bool {
-        let fallback = targets.contains { $0.sha == head }
-        guard let result = try? await git.run(
-            ["reflog", "show", "--format=%H%x00%gs", "refs/heads/" + branch, "--"], in: path),
-            result.succeeded,
-            let oldest = result.stdoutString.split(separator: "\n").last?
-                .split(separator: "\u{0}", maxSplits: 1, omittingEmptySubsequences: false),
-            oldest.count == 2
-        else { return fallback }
-        let prefix = "branch: Created from "
-        guard oldest[1].hasPrefix(prefix) else { return fallback }
-        guard String(oldest[0]) == head else { return false }
-        var start = String(oldest[1].dropFirst(prefix.count))
-        for refPrefix in ["refs/heads/", "refs/remotes/"] where start.hasPrefix(refPrefix) {
-            start = String(start.dropFirst(refPrefix.count))
+    /// Whether the checkout never got a commit of its own: its tip is still where it
+    /// was created from.
+    ///
+    /// A branch's reflog says where it was created: when the oldest entry is
+    /// `branch: Created from <start>`, the tip is still that commit, and the start is
+    /// a target, HEAD or a commit id, nothing was committed on it (a branch cut from
+    /// another feature branch carries that branch's commits, so it doesn't count).
+    ///
+    /// Without that record (a bare repository logs no ref updates by default, and
+    /// reflogs expire; a detached checkout has no branch at all), what can be known:
+    /// - a reflog entry, the branch's or the worktree's HEAD's, that committed the tip
+    ///   means the tip is its own work;
+    /// - otherwise a tip exactly on a target's tip, or on a target's first-parent
+    ///   line, may be where it was cut, and counts as fresh. A branch fast-forwarded
+    ///   into a target with every reflog gone looks the same and can't be told apart,
+    ///   so it stays unconfirmed rather than risk a ✓ on a branch just started;
+    /// - a tip that reached a target only through a merge commit is merged work.
+    private func hasNoCommits(branch: String?, head: String, targets: [CleanupBranch], in path: String) async -> Bool {
+        let branchLog = await reflog(branch.map { "refs/heads/" + $0 }, in: path)
+        if let oldest = branchLog.last, oldest.subject.hasPrefix(Self.createdPrefix) {
+            guard oldest.sha == head else { return false }
+            var start = String(oldest.subject.dropFirst(Self.createdPrefix.count))
+            for refPrefix in ["refs/heads/", "refs/remotes/"] where start.hasPrefix(refPrefix) {
+                start = String(start.dropFirst(refPrefix.count))
+            }
+            let isCommitID = start.count >= 7 && start.allSatisfy(\.isHexDigit)
+            let targetNames = Set(targets.flatMap { [$0.name, $0.shortName] } + CleanupTargets.integrationNames)
+            return start == "HEAD" || isCommitID || targetNames.contains(start)
         }
-        let isCommitID = start.count >= 7 && start.allSatisfy(\.isHexDigit)
-        let targetNames = Set(targets.flatMap { [$0.name, $0.shortName] } + CleanupTargets.integrationNames)
-        return start == "HEAD" || isCommitID || targetNames.contains(start)
+        let logs = branchLog + (await reflog("HEAD", in: path))
+        if logs.contains(where: { $0.sha == head && $0.subject.hasPrefix("commit") }) { return false }
+        if targets.contains(where: { $0.sha == head }) { return true }
+        for target in targets where await isOnFirstParentLine(head, of: target, in: path) { return true }
+        return false
+    }
+
+    private static let createdPrefix = "branch: Created from "
+
+    /// A ref's reflog, newest first; empty when it has none or Git can't read it.
+    private func reflog(_ ref: String?, in path: String) async -> [(sha: String, subject: String)] {
+        guard let ref, let result = try? await git.run(["reflog", "show", "--format=%H%x00%gs", ref, "--"], in: path),
+              result.succeeded else { return [] }
+        return result.stdoutString.split(separator: "\n").compactMap { line in
+            let fields = line.split(separator: "\u{0}", maxSplits: 1, omittingEmptySubsequences: false)
+            return fields.count == 2 ? (String(fields[0]), String(fields[1])) : nil
+        }
+    }
+
+    /// Whether `commit`, an ancestor of the target, is on the target's own
+    /// first-parent line rather than reached through a merge commit. Walking first
+    /// parents down from the target stops at the first commit `commit` contains;
+    /// the last one walked has `commit` itself as its first parent exactly when it
+    /// is on the line.
+    private func isOnFirstParentLine(_ commit: String, of target: CleanupBranch, in path: String) async -> Bool {
+        guard let result = try? await git.run(["rev-list", "--first-parent", "--parents", target.sha, "^" + commit], in: path),
+              result.succeeded,
+              let last = result.stdoutString.split(separator: "\n").last else { return false }
+        let fields = last.split(separator: " ")
+        return fields.count > 1 && fields[1] == commit
     }
 
     /// The checkout is a merge target's own branch: local `dev`, or the local
