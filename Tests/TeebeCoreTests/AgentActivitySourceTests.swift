@@ -19,6 +19,17 @@ struct AgentActivitySourceTests {
         #expect(states == ["/a": .needsAttention, "/b": .needsAttention, "/c": .working, "/d": .idle])
     }
 
+    @Test("an agent working is still known when another one there waits")
+    func workingIsNotMasked() {
+        let combined = CombinedAgentActivity([
+            Scripted(states: ["/a": .working, "/b": .needsAttention]),
+            Scripted(states: ["/a": .needsAttention, "/c": .idle, "/elsewhere": .working])
+        ])
+        let paths = ["/a", "/b", "/c"]
+        #expect(combined.states(forWorktreePaths: paths, now: Date())["/a"] == .needsAttention)
+        #expect(combined.workingPaths(forWorktreePaths: paths, now: Date()) == ["/a"])
+    }
+
     @Test("the deepest containing worktree owns a path; firmlinks and file URLs are normalised")
     func deepest() {
         let paths = ["/r", "/r/.claude/worktrees/x", "/private/tmp/w"]

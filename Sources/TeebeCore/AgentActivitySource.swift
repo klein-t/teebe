@@ -34,6 +34,16 @@ public struct CombinedAgentActivity: AgentActivitySource {
         return result
     }
 
+    /// The worktrees where any one adapter reports an agent working. `states`
+    /// shows waiting over working, so this is how a working agent stays known
+    /// when another agent in the same worktree waits.
+    public func workingPaths(forWorktreePaths paths: [String], now: Date) -> Set<String> {
+        let known = Set(paths)
+        return Set(sources.flatMap { source in
+            source.states(forWorktreePaths: paths, now: now).filter { known.contains($0.key) && $0.value == .working }.keys
+        })
+    }
+
     private static func rank(_ state: AgentActivityState) -> Int {
         switch state {
         case .idle: return 0

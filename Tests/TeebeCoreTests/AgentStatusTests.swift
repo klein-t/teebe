@@ -851,6 +851,18 @@ struct AgentScannerRegistryTests {
         try? FileManager.default.removeItem(at: fx.root)
     }
 
+    @Test("a live session's working directory marks its worktree as occupied, whatever its log says")
+    func liveSessionOccupies() throws {
+        let fx = try makeFixture()
+        try register(fx, status: "idle", changedAt: now.addingTimeInterval(-7_200))
+        #expect(fx.scanner.liveSessionWorktrees(among: [worktree, "/elsewhere"]) == [worktree])
+        let dead = try makeFixture(alive: [])
+        try register(dead, status: "idle", changedAt: now.addingTimeInterval(-7_200))
+        #expect(dead.scanner.liveSessionWorktrees(among: [worktree]).isEmpty)
+        try? FileManager.default.removeItem(at: fx.root)
+        try? FileManager.default.removeItem(at: dead.root)
+    }
+
     @Test("a registry entry whose process is gone is ignored — the log decides")
     func deadProcessIgnored() throws {
         let fx = try makeFixture(alive: [])

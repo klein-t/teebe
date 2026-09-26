@@ -69,4 +69,43 @@ struct GenericActivityTests {
         Thread.sleep(forTimeInterval: 0.3)
         #expect(probe.activeWorktrees(among: [worktree]).isEmpty)
     }
+
+    @Test("for removal, any process with its cwd in a worktree occupies it, idle shells and agent UIs included")
+    func occupiedRule() {
+        func sample(_ pid: Int32, _ name: String, cwd: String, parent: Int32 = 1) -> ProcessSample {
+            ProcessSample(pid: pid, parentPID: parent, name: name, parentName: "launchd", cwd: cwd, cpuSeconds: 0)
+        }
+        let samples = [
+            sample(10, "zsh", cwd: "/work/a/src"),        // an idle prompt
+            sample(11, "claude", cwd: "/work/b"),          // an agent's UI
+            sample(12, "Code Helper", cwd: "/work/c"),     // an editor
+            sample(13, "git", cwd: "/work/d", parent: 999), // Teebe's own git
+            sample(999, "Teebe", cwd: "/work/d"),           // Teebe itself
+            sample(14, "zsh", cwd: "/elsewhere")
+        ]
+        let occupied = ProcessActivityProbe.occupied(samples: samples, among: ["/work/a", "/work/b", "/work/c", "/work/d"],
+                                                     selfPID: 999)
+        #expect(occupied == ["/work/a", "/work/b", "/work/c"])
+    }
+
+    @Test("an idle real process whose cwd is a worktree occupies it until it exits")
+    func realIdleProcessOccupies() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("teebe-tests/\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let worktree = PathUtil.standardized(dir.path)
+        let probe = ProcessActivityProbe(selfPID: -1)
+        #expect(probe.occupiedWorktrees(among: [worktree]).isEmpty)
+        let idle = Process()
+        idle.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        idle.arguments = ["30"]
+        idle.currentDirectoryURL = dir
+        try idle.run()
+        Thread.sleep(forTimeInterval: 0.3)
+        #expect(probe.occupiedWorktrees(among: [worktree]) == [worktree])
+        idle.terminate()
+        idle.waitUntilExit()
+        #expect(probe.occupiedWorktrees(among: [worktree]).isEmpty)
+    }
 }

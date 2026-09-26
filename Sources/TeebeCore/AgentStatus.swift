@@ -424,6 +424,15 @@ public struct AgentSessionScanner: Sendable {
         return result
     }
 
+    /// The worktrees (of `paths`) a live Claude Code session runs in, by the
+    /// registry's working directory: the session is open there whatever its log
+    /// says, so the folder is in use.
+    public func liveSessionWorktrees(among paths: [String]) -> Set<String> {
+        Set(liveSessions().values.compactMap { session in
+            session.cwd.flatMap { WorktreeAttribution.deepest(containing: $0, among: paths) }
+        })
+    }
+
     public static func processIsAlive(_ pid: Int32) -> Bool {
         kill(pid, 0) == 0 || errno == EPERM
     }

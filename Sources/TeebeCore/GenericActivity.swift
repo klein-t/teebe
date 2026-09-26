@@ -120,6 +120,19 @@ public final class ProcessActivityProbe: @unchecked Sendable {
         return active
     }
 
+    /// The worktrees a process is still in, read for removal rather than for the
+    /// orb: any process whose cwd is inside counts, busy or idle, whatever it is (a
+    /// shell at its prompt, an agent's UI, an editor). Only Teebe and the Git
+    /// commands it runs itself are left out.
+    public func occupiedWorktrees(among worktrees: [String]) -> Set<String> {
+        Self.occupied(samples: Self.samples(among: worktrees), among: worktrees, selfPID: selfPID)
+    }
+
+    static func occupied(samples: [ProcessSample], among worktrees: [String], selfPID: Int32) -> Set<String> {
+        Set(samples.filter { $0.pid != selfPID && $0.parentPID != selfPID }
+            .compactMap { WorktreeAttribution.deepest(containing: $0.cwd, among: worktrees) })
+    }
+
     /// The pure rule, for tests. A process new since the previous sample counts
     /// all its CPU as used within `elapsed`.
     static func active(samples: [ProcessSample], previous: [Int32: Double], elapsed: TimeInterval,
