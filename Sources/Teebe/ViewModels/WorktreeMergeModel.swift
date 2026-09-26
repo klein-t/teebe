@@ -28,6 +28,8 @@ final class WorktreeMergeModel {
     /// How long a scan stays reusable for an unchanged revision.
     static let reuseWindow: TimeInterval = 30
     private let service: WorktreeCleanupChecking
+    /// The current full refresh. Only a refresh replaces it: a row recheck has its
+    /// own request, so it can never discard a refresh or leave `isChecking` on.
     private var generation = UUID()
     private struct Key: Hashable { let path: String; let extraTarget: String? }
     private struct Cached { let snapshot: CleanupSnapshot; let revision: Int? }
@@ -35,8 +37,16 @@ final class WorktreeMergeModel {
     /// What the rows currently show, so a single-row recheck knows what to scan.
     private var currentRepo: Repository?
     private var currentExtraTarget: String?
-    /// Checkouts whose HEAD moved and are being rechecked in place.
-    private var recheckPaths: Set<String> = []
+    /// Orders requests and scans: a result answers a request only when its scan
+    /// began after the request was made.
+    private var clock = 0
+    /// Checkouts whose HEAD moved and are being rechecked in place, with when.
+    private var recheckRequests: [String: Int] = [:]
+    /// When the scan behind the last full result shown began.
+    private var publishedScan = 0
+    /// Full-refresh scans running now, and the rechecks waiting for them to land.
+    private var refreshScans = 0
+    private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(service: WorktreeCleanupChecking) { self.service = service }
 
@@ -48,6 +58,7 @@ final class WorktreeMergeModel {
             snapshot = nil
             cache.removeAll()
             currentRepo = nil
+            recheckRequests.removeAll()
             return
         }
         let sameRepository = currentRepo?.path == repo.path
@@ -76,12 +87,13 @@ final class WorktreeMergeModel {
         }
         isChecking = true
         defer { if generation == token { isChecking = false } }
+        let started = tick()
+        refreshScans += 1
+        defer { endRefreshScan() }
         do {
             let result = try await service.scan(repoPath: repo.path, extraTarget: extraTarget)
             guard generation == token, !Task.isCancelled else { return }
-            snapshot = result
-            recheckPaths.removeAll()
-            store(result, key: key, revision: revision)
+            publish(result, scannedAt: started, key: key, revision: revision)
         } catch {
             guard generation == token, !Task.isCancelled else { return }
             snapshot = nil
@@ -92,26 +104,58 @@ final class WorktreeMergeModel {
     /// A commit in one checkout moves only that checkout's ancestry. Recheck that
     /// row in place: every other row keeps the result — and the group — it already
     /// has, instead of the whole list being invalidated and regrouped mid-look.
+    /// The scanner checks a whole repository at a time, so a recheck never races a
+    /// refresh: it waits for one already scanning, and a refresh that began after it
+    /// was asked for answers it. When a merge target moved, every row's result is
+    /// stale, so the whole new result is shown.
     func recheck(path: String) async {
-        guard let repo = currentRepo, let previous = snapshot else { return }
-        let extraTarget = currentExtraTarget
-        let key = Key(path: repo.path, extraTarget: extraTarget)
-        let token = UUID()
-        generation = token
-        recheckPaths.insert(path)
+        guard currentRepo != nil, snapshot != nil else { return }
+        let request = tick()
+        recheckRequests[path] = request
+        defer { if recheckRequests[path] == request { recheckRequests[path] = nil } }
         try? await Task.sleep(for: scanDebounce)
-        guard !Task.isCancelled, generation == token else { return }
-        defer { if generation == token { recheckPaths.remove(path) } }
+        while refreshScans > 0 { await withCheckedContinuation { refreshWaiters.append($0) } }
+        guard !Task.isCancelled, recheckRequests[path] == request, let repo = currentRepo else { return }
+        let extraTarget = currentExtraTarget
+        let started = tick()
         guard let result = try? await service.scan(repoPath: repo.path, extraTarget: extraTarget),
-              generation == token, !Task.isCancelled,
-              let fresh = result.entries.first(where: { $0.id == path }) else { return }
-        var entries = previous.entries
-        guard let index = entries.firstIndex(where: { $0.id == path }) else { return }
+              !Task.isCancelled, recheckRequests[path] == request, publishedScan < started,
+              currentRepo?.path == repo.path, currentExtraTarget == extraTarget,
+              let current = snapshot else { return }
+        let key = Key(path: repo.path, extraTarget: extraTarget)
+        guard result.mergeTargets == current.mergeTargets else {
+            publish(result, scannedAt: started, key: key, revision: cache[key]?.revision)
+            return
+        }
+        guard let fresh = result.entries.first(where: { $0.id == path }),
+              let index = current.entries.firstIndex(where: { $0.id == path }) else { return }
+        var entries = current.entries
         entries[index] = fresh
-        let merged = CleanupSnapshot(targets: previous.targets, mergeTargets: previous.mergeTargets,
-                                     entries: entries, checkedAt: previous.checkedAt)
+        let merged = CleanupSnapshot(targets: result.targets, mergeTargets: current.mergeTargets,
+                                     entries: entries, checkedAt: current.checkedAt)
         snapshot = merged
         store(merged, key: key, revision: cache[key]?.revision)
+    }
+
+    private func tick() -> Int {
+        clock += 1
+        return clock
+    }
+
+    /// Show a whole scan's result. Rechecks asked for before it began are answered.
+    private func publish(_ result: CleanupSnapshot, scannedAt started: Int, key: Key, revision: Int?) {
+        snapshot = result
+        publishedScan = max(publishedScan, started)
+        recheckRequests = recheckRequests.filter { $0.value > started }
+        store(result, key: key, revision: revision)
+    }
+
+    private func endRefreshScan() {
+        refreshScans -= 1
+        guard refreshScans == 0 else { return }
+        let waiters = refreshWaiters
+        refreshWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
     }
 
     private func store(_ snapshot: CleanupSnapshot, key: Key, revision: Int?) {
@@ -124,7 +168,7 @@ final class WorktreeMergeModel {
     /// Active-file edits affect only this row, not the merge results for every worktree.
     func entry(for path: String, localStatus: StatusResult? = nil, localChangeCount: Int = 0) -> WorktreeMergeEntry? {
         guard var entry = snapshot?.entries.first(where: { $0.id == path }) else { return nil }
-        var isRechecking = recheckPaths.contains(path)
+        var isRechecking = recheckRequests[path] != nil
         var count = localChangeCount
         if let localStatus, !entry.isBroken {
             let changes = localStatus.changes.filter { $0.worktreeStatus != .ignored }

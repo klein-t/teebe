@@ -25,6 +25,41 @@ private actor MergeScanStub: WorktreeCleanupChecking {
     }
 }
 
+/// Two worktrees. `/repo/other` is merged only while `dev` is where it started,
+/// so a moved target shows up in every row. Each scan is stamped with its call
+/// number (as `problem`), and any call can be held open.
+private actor ScriptedScan: WorktreeCleanupChecking {
+    private(set) var calls = 0
+    private var devSHA = "abc"
+    private var dirtyFeature = false
+    private var gates: [Int: Gate] = [:]
+    func moveDev(to sha: String) { devSHA = sha }
+    func setFeatureDirty(_ dirty: Bool) { dirtyFeature = dirty }
+    func hold(call: Int, _ gate: Gate) { gates[call] = gate }
+    func scan(repoPath: String, extraTarget: String?) async throws -> CleanupSnapshot {
+        calls += 1
+        let call = calls
+        // A real scan reads the refs first, then inspects the checkouts.
+        let dev = devSHA
+        let dirty = dirtyFeature
+        if let gate = gates[call] { await gate.wait() }
+        let targets = CleanupTargets.parse("refs/heads/dev\u{0}\(dev)\u{0}\u{0}\n")
+        var feature = CleanupEntry(worktree: Worktree(path: repoPath + "/feature", branch: "feature"))
+        feature.mergeStatus = .merged
+        feature.hasLocalChanges = dirty
+        feature.problem = "scan \(call)"
+        var other = CleanupEntry(worktree: Worktree(path: repoPath + "/other", branch: "other"))
+        other.mergeStatus = dev == "abc" ? .merged : .notConfirmed
+        other.problem = "scan \(call)"
+        return CleanupSnapshot(targets: targets, mergeTargets: targets.mergeTargets(extra: extraTarget),
+                               entries: [feature, other])
+    }
+    func remove(repoPath: String, entry: CleanupEntry, includingIgnored: Bool, deleteBranch: Bool) -> BranchDeletion {
+        Issue.record("Row indicators must never remove a worktree")
+        return .notRequested
+    }
+}
+
 @MainActor
 @Suite("Worktree merge indicators")
 struct WorktreeMergeModelTests {
@@ -212,6 +247,103 @@ struct WorktreeMergeModelTests {
         for run in runs { await run.value }
         #expect(await service.calls == 1)
         #expect(model.snapshot != nil)
+        #expect(!model.isChecking)
+    }
+
+    @Test("a row recheck during a full refresh neither discards it nor leaves it checking")
+    func recheckDuringRefresh() async {
+        let service = ScriptedScan()
+        let model = makeModel(service)
+        let repo = Repository(path: "/repo")
+        await model.refresh(repo: repo, extraTarget: nil, enabled: true, revision: 1)
+        let gate = Gate()
+        await service.hold(call: 2, gate)
+        await service.moveDev(to: "moved")
+        let refresh = Task { await model.refresh(repo: repo, extraTarget: nil, enabled: true, revision: 2) }
+        while await service.calls < 2 { await Task.yield() }
+        // The user commits while the refresh is scanning.
+        let recheck = Task { await model.recheck(path: "/repo/feature") }
+        for _ in 0..<20 { await Task.yield() }
+        #expect(model.entry(for: "/repo/feature")?.isRechecking == true)
+        await gate.open()
+        await refresh.value
+        await recheck.value
+        #expect(!model.isChecking)
+        // The refresh's result landed: the moved target and the row it changed.
+        #expect(model.snapshot?.mergeTargets.first?.sha == "moved")
+        #expect(model.entry(for: "/repo/other")?.entry.mergeStatus == .notConfirmed)
+        // The commit came after the refresh began scanning, so the row is checked
+        // once more, after it, and nothing is left marked as rechecking.
+        #expect(await service.calls == 3)
+        #expect(model.entry(for: "/repo/feature")?.entry.problem == "scan 3")
+        #expect(model.entry(for: "/repo/feature")?.isRechecking == false)
+    }
+
+    @Test("a recheck asked for before a refresh scans is answered by that refresh, not a second scan")
+    func recheckCoveredByRefresh() async {
+        let service = ScriptedScan()
+        let model = makeModel(service)
+        let repo = Repository(path: "/repo")
+        await model.refresh(repo: repo, extraTarget: nil, enabled: true, revision: 1)
+        model.scanDebounce = .milliseconds(150)
+        let gate = Gate()
+        await service.hold(call: 2, gate)
+        await service.moveDev(to: "moved")
+        let refresh = Task { await model.refresh(repo: repo, extraTarget: nil, enabled: true, revision: 2) }
+        let recheck = Task { await model.recheck(path: "/repo/feature") }
+        while await service.calls < 2 { await Task.yield() }
+        await gate.open()
+        await refresh.value
+        await recheck.value
+        #expect(await service.calls == 2)
+        // The refresh's whole result landed, not just the rechecked row.
+        #expect(model.entry(for: "/repo/other")?.entry.mergeStatus == .notConfirmed)
+        #expect(model.entry(for: "/repo/feature")?.isRechecking == false)
+        #expect(!model.isChecking)
+    }
+
+    @Test("a recheck that finds a merge target moved shows the whole result")
+    func recheckWithMovedTarget() async {
+        let service = ScriptedScan()
+        let model = makeModel(service)
+        await model.refresh(repo: Repository(path: "/repo"), extraTarget: nil, enabled: true, revision: 1)
+        #expect(model.entry(for: "/repo/other")?.entry.mergeStatus == .merged)
+        // A commit on dev in its own worktree: the row rechecked is not the only one
+        // whose result the move changed.
+        await service.moveDev(to: "moved")
+        await model.recheck(path: "/repo/feature")
+        #expect(model.snapshot?.mergeTargets.first?.sha == "moved")
+        #expect(model.snapshot?.targets.branch("refs/heads/dev")?.sha == "moved")
+        #expect(model.entry(for: "/repo/other")?.entry.mergeStatus == .notConfirmed)
+    }
+
+    @Test("a recheck with the targets unchanged replaces only its own row")
+    func recheckKeepsOtherRows() async {
+        let service = ScriptedScan()
+        let model = makeModel(service)
+        await model.refresh(repo: Repository(path: "/repo"), extraTarget: nil, enabled: true, revision: 1)
+        await model.recheck(path: "/repo/feature")
+        #expect(model.entry(for: "/repo/feature")?.entry.problem == "scan 2")
+        #expect(model.entry(for: "/repo/other")?.entry.problem == "scan 1")
+    }
+
+    @Test("a refresh that starts while a recheck is scanning wins, and nothing is left checking")
+    func refreshDuringRecheck() async {
+        let service = ScriptedScan()
+        let model = makeModel(service)
+        let repo = Repository(path: "/repo")
+        await model.refresh(repo: repo, extraTarget: nil, enabled: true, revision: 1)
+        let gate = Gate()
+        await service.hold(call: 2, gate)
+        let recheck = Task { await model.recheck(path: "/repo/feature") }
+        while await service.calls < 2 { await Task.yield() }
+        await model.refresh(repo: repo, extraTarget: nil, enabled: true, revision: 2)
+        #expect(model.entry(for: "/repo/feature")?.entry.problem == "scan 3")
+        await gate.open()
+        await recheck.value
+        // The recheck's scan is older than the refresh's, so it must not land.
+        #expect(model.entry(for: "/repo/feature")?.entry.problem == "scan 3")
+        #expect(model.entry(for: "/repo/feature")?.isRechecking == false)
         #expect(!model.isChecking)
     }
 
