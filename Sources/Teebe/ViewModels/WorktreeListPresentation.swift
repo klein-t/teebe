@@ -87,7 +87,7 @@ extension AppModel {
 
     private func mergeEntry(for worktree: Worktree, info: SelectorModel.WorktreeInfo) -> WorktreeMergeEntry? {
         let local = selector.worktree.statusPath == worktree.path ? selector.worktree.status : nil
-        return mergeStatus.entry(for: worktree.path, localStatus: local, localChangeCount: info.changeCount)
+        return mergeStatus.entry(for: worktree.path, localStatus: local, localChangeCount: info.hasStatus ? info.changeCount : nil)
     }
 
     func worktreeList(collapsed: Set<WorktreeGroup>) -> WorktreeListPresentation {

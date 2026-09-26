@@ -14,6 +14,9 @@ final class SelectorModel {
         var ahead: Int = 0
         var behind: Int = 0
         var changeCount: Int = 0
+        /// The last `git status` read succeeded, so `changeCount` is a fact rather
+        /// than a placeholder for "unknown".
+        var hasStatus: Bool = false
         var isLive: Bool = false
         /// What the AI agent working in this worktree is doing (from its
         /// Claude Code session log).
@@ -324,6 +327,7 @@ final class SelectorModel {
                 ahead: remote.ahead,
                 behind: remote.behind,
                 changeCount: status?.changes.count ?? 0,
+                hasStatus: status != nil,
                 isLive: environment.activityMonitor.isBusy(worktreePath: worktree.path, within: liveWindow, now: now),
                 agentState: agent,
                 remote: remote
@@ -528,8 +532,10 @@ final class SelectorModel {
             countRefreshPending.removeAll()
             for path in batch {
                 guard let status = try? await statusService.status(worktreePath: path),
-                      var info = worktreeInfo[path], info.changeCount != status.changes.count else { continue }
+                      var info = worktreeInfo[path] else { continue }
                 info.changeCount = status.changes.count
+                info.hasStatus = true
+                guard info != worktreeInfo[path] else { continue }
                 worktreeInfo[path] = info
             }
         }

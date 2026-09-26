@@ -165,11 +165,14 @@ final class WorktreeMergeModel {
         }
     }
 
-    /// Active-file edits affect only this row, not the merge results for every worktree.
-    func entry(for path: String, localStatus: StatusResult? = nil, localChangeCount: Int = 0) -> WorktreeMergeEntry? {
+    /// The live status read overlays the scan's local-change fact, for every row:
+    /// the open worktree through its full status (`localStatus`, which also shows a
+    /// commit made since the scan), any other through its last successful count.
+    /// A nil count means the read failed, so the scan's answer stands.
+    func entry(for path: String, localStatus: StatusResult? = nil, localChangeCount: Int? = nil) -> WorktreeMergeEntry? {
         guard var entry = snapshot?.entries.first(where: { $0.id == path }) else { return nil }
         var isRechecking = recheckRequests[path] != nil
-        var count = localChangeCount
+        var count = localChangeCount ?? 0
         if let localStatus, !entry.isBroken {
             let changes = localStatus.changes.filter { $0.worktreeStatus != .ignored }
             entry.hasLocalChanges = !changes.isEmpty
@@ -177,6 +180,8 @@ final class WorktreeMergeModel {
             // A commit here does not make the previous merge result meaningless —
             // it makes it stale. Keep it, and say the row is being rechecked.
             if let head = localStatus.oid, !head.isEmpty, head != entry.worktree.head { isRechecking = true }
+        } else if let localChangeCount, !entry.isBroken {
+            entry.hasLocalChanges = localChangeCount > 0
         }
         return WorktreeMergeEntry(entry: entry, isRechecking: isRechecking, localChangeCount: count)
     }

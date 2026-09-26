@@ -347,6 +347,42 @@ struct WorktreeMergeModelTests {
         #expect(!model.isChecking)
     }
 
+    @Test("any row's status read overlays its scan: clean clears changes, unknown keeps them")
+    func statusOverlayForEveryRow() async {
+        let service = ScriptedScan()
+        await service.setFeatureDirty(true)
+        let model = makeModel(service)
+        await model.refresh(repo: Repository(path: "/repo"), extraTarget: nil, enabled: true)
+        #expect(model.entry(for: "/repo/feature", localChangeCount: nil)?.entry.hasLocalChanges == true)
+        let clean = model.entry(for: "/repo/feature", localChangeCount: 0)
+        #expect(clean?.entry.hasLocalChanges == false)
+        #expect(group(clean) == .merged)
+        #expect(model.entry(for: "/repo/other", localChangeCount: 2)?.entry.hasLocalChanges == true)
+    }
+
+    @Test("discarding changes in a worktree that is not open clears its uncommitted state")
+    func discardInUnselectedWorktree() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true),
+                               Worktree(path: "/repo/feature", branch: "feature")]
+        git.statusResult = StatusParser.parse("? new.txt\u{0}")
+        let service = ScriptedScan()
+        await service.setFeatureDirty(true)
+        let app = AppModel(environment: makeTestEnvironment(git: git), mergeService: service)
+        app.mergeStatus.scanDebounce = .zero
+        _ = await app.addRepository(path: "/repo")
+        await app.mergeStatus.refresh(repo: app.selector.selectedRepo, extraTarget: nil, enabled: true)
+        let feature = Worktree(path: "/repo/feature", branch: "feature")
+        #expect(app.selector.selectedWorktree?.path == "/repo")
+        #expect(app.worktreeStatus(for: feature).group == .localChanges)
+
+        // Changes discarded from a terminal: the files change, status reads clean.
+        git.statusResult = StatusResult()
+        await app.selector.handleWorktreeFileEvents(["/repo/feature/new.txt"])
+        #expect(app.selector.info(for: feature).changeCount == 0)
+        #expect(app.worktreeStatus(for: feature).group == .merged)
+    }
+
     private func status(_ merge: WorktreeMergeEntry?) -> WorktreeStatus {
         WorktreeStatus(worktree: Worktree(path: "/repo/feature", branch: "feature"), merge: merge, info: .init(),
                        targetNames: ["dev"], isChecking: true)
