@@ -1,12 +1,12 @@
 import Foundation
 
-/// What an AI coding agent (a Claude Code session) is doing in a worktree,
-/// derived from the session logs under `~/.claude/projects`.
+/// What an AI coding agent is doing in a worktree, as a harness adapter
+/// (`AgentActivitySource`) reads it from that agent's own records: Claude Code
+/// session logs, Codex rollouts, and any harness added later.
 public enum AgentActivityState: String, Equatable, Sendable {
     /// A session is mid-turn: the model is thinking or running tools.
     case working
-    /// The turn ended (final assistant text) or the session stalled — the agent
-    /// is waiting on the user.
+    /// The turn ended or the session stalled: the agent is waiting on the user.
     case needsAttention
     /// No session, or the newest one has been silent long enough to ignore.
     case idle
@@ -397,7 +397,7 @@ public struct AgentSessionScanner: Sendable {
         // mtime can only be idle — skip without reading them — unless the
         // session is live: a parent waiting on a long background agent logs
         // nothing).
-        var files: [(launchPath: String, url: URL, mtime: Date)] = []
+        var files: [SessionFile] = []
         var seen = Set<URL>()
         for path in paths {
             let dir = projectsRoot.appendingPathComponent(
@@ -405,7 +405,7 @@ public struct AgentSessionScanner: Sendable {
             for file in sessionFiles(in: dir)
             where now.timeIntervalSince(file.mtime) < thresholds.idle || live[Self.sessionID(of: file.url)] != nil {
                 guard seen.insert(file.url.standardizedFileURL).inserted else { continue }
-                files.append((path, file.url, file.mtime))
+                files.append(SessionFile(launchPath: path, url: file.url, mtime: file.mtime))
             }
         }
         // Oldest first, so when two sessions land on the same worktree the newer
@@ -431,6 +431,13 @@ public struct AgentSessionScanner: Sendable {
         Set(liveSessions().values.compactMap { session in
             session.cwd.flatMap { WorktreeAttribution.deepest(containing: $0, among: paths) }
         })
+    }
+
+    /// A session log and the worktree whose project dir it was found under.
+    private struct SessionFile {
+        let launchPath: String
+        let url: URL
+        let mtime: Date
     }
 
     public static func processIsAlive(_ pid: Int32) -> Bool {
