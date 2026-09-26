@@ -171,7 +171,7 @@ public protocol WorktreeCleanupChecking: Sendable {
     /// merged entry, a target it was merged into that has not moved. With
     /// `deleteBranch` (merged entries only), then deletes the local branch (never a
     /// remote one) if it is still merged into an unchanged target. An unmerged
-    /// entry's branch always stays: it holds the commits.
+    /// entry's branch always stays: it holds the commits. So does a merge target's.
     @discardableResult
     func remove(repoPath: String, entry: CleanupEntry, includingIgnored: Bool, deleteBranch: Bool) async throws -> BranchDeletion
 }
@@ -231,8 +231,9 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
     public func remove(
         repoPath: String, entry: CleanupEntry, includingIgnored: Bool, deleteBranch: Bool
     ) async throws -> BranchDeletion {
-        guard !entry.isTarget else { throw CleanupError.unsafe }
-        let isMerged = !entry.mergedTargets.isEmpty
+        // A merge target's own checkout is only ever a folder removal: its branch is
+        // what the others are compared against.
+        let isMerged = !entry.mergedTargets.isEmpty && !entry.isTarget
         // Asked to delete the branch of work that wasn't merged when it was checked:
         // what was confirmed is not what is being removed.
         guard isMerged || !deleteBranch else { throw CleanupError.changed }
@@ -244,14 +245,16 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         guard let current = worktrees.first(where: { $0.path == entry.id }),
               current.head == entry.worktree.head, current.branch == entry.worktree.branch else { throw CleanupError.changed }
         let commonDirectory = try await commonDirectory(in: repoPath)
-        let checked = await inspect(current, targets: unchanged, commonDirectory: commonDirectory)
+        let checked = await inspect(current, targets: isMerged ? unchanged : [], commonDirectory: commonDirectory)
         guard checked.worktree.head == entry.worktree.head else { throw CleanupError.changed }
         // Consent covers the ignored files that were reviewed, not any that showed
         // up since. A new secrets file or nested repository voids the confirmation.
         guard !includingIgnored || checked.ignoredPaths == entry.ignoredPaths else { throw CleanupError.changed }
         let isRemovable = isMerged ? checked.canRemove(includingIgnored: includingIgnored)
             : checked.canRemoveFolder(includingIgnored: includingIgnored)
-        guard isRemovable, !Self.isTarget(current, among: catalog.mergeTargets(extra: nil)) else { throw CleanupError.unsafe }
+        guard isRemovable, !isMerged || !Self.isTarget(current, among: catalog.mergeTargets(extra: nil)) else {
+            throw CleanupError.unsafe
+        }
         try Task.checkCancellation()
         try await git.removeWorktree(repoPath: repoPath, worktreePath: current.path, force: false)
         guard deleteBranch, let branch = current.branch else { return .notRequested }

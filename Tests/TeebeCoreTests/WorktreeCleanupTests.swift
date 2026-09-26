@@ -330,4 +330,24 @@ struct WorktreeCleanupTests {
         }
         for folder in [hidden, moved, detached] { #expect(FileManager.default.fileExists(atPath: folder.path)) }
     }
+
+    @Test("a merge target's own checkout can have its folder removed, never its branch")
+    func targetCheckoutFolder() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        fixture.createBranch("dev")
+        let dev = fixture.root.appendingPathComponent("dev", isDirectory: true)
+        fixture.git(["worktree", "add", "-q", dev.path, "dev"])
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        let entry = try #require(try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
+            .entries.first { $0.worktree.branch == "dev" })
+        #expect(entry.isTarget)
+        await #expect(throws: CleanupError.changed) {
+            try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: true, deleteBranch: true)
+        }
+        try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: true, deleteBranch: false)
+        #expect(!FileManager.default.fileExists(atPath: dev.path))
+        #expect(!fixture.git(["rev-parse", "--verify", "dev"]).isEmpty)
+    }
 }
