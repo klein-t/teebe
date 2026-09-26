@@ -25,6 +25,11 @@ struct AppEnvironment {
     /// The worktrees (of those given) with a busy process in them right now —
     /// any harness's commands, builds and tests. nil disables the probe.
     let processActivity: (@Sendable (_ worktreePaths: [String], _ now: Date) -> Set<String>)?
+    /// Read fresh right before a removal: the worktrees (of one repo's paths)
+    /// something still has open — any process whose working directory is inside,
+    /// idle shells and agent UIs included, a live agent session registered there,
+    /// or an agent any one harness reports working there.
+    let worktreesInUse: @Sendable (_ worktreePaths: [String], _ now: Date) -> Set<String>
     /// Posts a user-facing notification (title, body).
     let notify: @MainActor (_ title: String, _ body: String) -> Void
     /// Factory for the darwin-notification listener the Claude Code hook pings
@@ -42,6 +47,7 @@ struct AppEnvironment {
         agentProjectsRootPath: String? = nil,
         agentExtraWatchPaths: [String] = [],
         processActivity: (@Sendable ([String], Date) -> Set<String>)? = nil,
+        worktreesInUse: @escaping @Sendable ([String], Date) -> Set<String> = { _, _ in [] },
         notify: @escaping @MainActor (String, String) -> Void = { _, _ in },
         makeAgentPingListener: @escaping @MainActor () -> AgentPingListening = { DarwinAgentPingListener() }
     ) {
@@ -55,6 +61,7 @@ struct AppEnvironment {
         self.agentProjectsRootPath = agentProjectsRootPath
         self.agentExtraWatchPaths = agentExtraWatchPaths
         self.processActivity = processActivity
+        self.worktreesInUse = worktreesInUse
         self.notify = notify
         self.makeAgentPingListener = makeAgentPingListener
     }
@@ -78,8 +85,9 @@ struct AppEnvironment {
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? CodexRolloutScanner.defaultSessionsRoot
         let processes = ProcessActivityProbe()
+        let claude = AgentSessionScanner(projectsRoot: projectsRoot)
         let adapters = CombinedAgentActivity([
-            AgentSessionScanner(projectsRoot: projectsRoot),
+            claude,
             CodexRolloutScanner(sessionsRoot: codexSessions)
         ])
         return AppEnvironment(
@@ -93,6 +101,11 @@ struct AppEnvironment {
             agentProjectsRootPath: projectsRoot.path,
             agentExtraWatchPaths: [codexSessions.path],
             processActivity: { paths, now in processes.activeWorktrees(among: paths, now: now) },
+            worktreesInUse: { paths, now in
+                processes.occupiedWorktrees(among: paths)
+                    .union(claude.liveSessionWorktrees(among: paths))
+                    .union(adapters.workingPaths(forWorktreePaths: paths, now: now))
+            },
             notify: AgentNotifier.post
         )
     }

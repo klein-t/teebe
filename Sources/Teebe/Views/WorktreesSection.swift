@@ -14,18 +14,20 @@ struct WorktreesSection: View {
     // view has no other reason to hand-roll one.
     @State var confirmation: RemovalConfirmation?
 
-    /// The removal being confirmed. The clean-up's folders are captured when the
-    /// header action is clicked, so the list can keep changing underneath.
+    /// The removal being confirmed. What runs is captured when the sheet opens (a
+    /// row's action, the clean-up's folders), so the list can keep changing
+    /// underneath; confirming re-checks it in full and refuses what changed.
     enum RemovalConfirmation: Identifiable {
-        case worktree(Worktree)
+        /// nil action: nothing current to act on yet (the row is being checked).
+        case worktree(Worktree, WorktreeStatus.TrashAction?)
         case prune
-        case cleanup([CleanupEntry])
+        case cleanup([CleanupEntry], skipped: [WorktreeCardFact])
 
         var id: String {
             switch self {
-            case .worktree(let worktree): "worktree:" + worktree.path
+            case .worktree(let worktree, _): "worktree:" + worktree.path
             case .prune: "prune"
-            case .cleanup(let entries): "cleanup:" + entries.map(\.id).joined(separator: "\n")
+            case .cleanup(let entries, _): "cleanup:" + entries.map(\.id).joined(separator: "\n")
             }
         }
     }
@@ -144,23 +146,26 @@ struct WorktreesSection: View {
     @ViewBuilder
     private func confirmationSheet(_ confirmation: RemovalConfirmation) -> some View {
         switch confirmation {
-        case .worktree(let worktree):
+        case let .worktree(worktree, action):
             let prompt = app.removalPrompt(for: worktree)
             WorktreeRemovalSheet(title: prompt.title, facts: prompt.facts, explanation: prompt.explanation,
                                  deleteBranch: prompt.offersBranchDeletion ? $app.deleteBranchOnRemove : nil,
-                                 canConfirm: prompt.canRemove && !app.groupActions.isWorking) {
-                remove(worktree, deleteBranch: prompt.offersBranchDeletion && app.deleteBranchOnRemove)
+                                 canConfirm: prompt.canRemove && action != nil && !app.groupActions.isWorking) {
+                // Never anything but the captured action, through the guarded path.
+                if let action {
+                    app.groupActions.perform(action, deleteBranch: prompt.offersBranchDeletion && app.deleteBranchOnRemove)
+                }
             }
         case .prune:
-            let missing = selector.worktrees.filter { app.worktreeStatus(for: $0).mark == .missing }.count
+            let missing = selector.worktrees.filter { app.worktreeStatus(for: $0).group == .broken }.count
             let prompt = WorktreeRemovalPrompt.prune(missingCount: missing)
             WorktreeRemovalSheet(title: prompt.title, facts: prompt.facts, explanation: prompt.explanation,
                                  actionTitle: "Forget", canConfirm: !app.groupActions.isWorking) {
                 app.groupActions.prune()
             }
-        case .cleanup(let entries):
+        case let .cleanup(entries, skipped):
             WorktreeRemovalSheet(title: app.groupActions.confirmationTitle(entries),
-                                 facts: app.groupActions.confirmationFacts(entries),
+                                 facts: app.groupActions.confirmationFacts(entries) + skipped,
                                  explanation: app.groupActions.confirmationMessage(entries, deleteBranch: app.deleteBranchOnRemove),
                                  deleteBranch: $app.deleteBranchOnRemove,
                                  deleteBranchTitle: entries.count == 1 ? "Also delete the branch" : "Also delete the branches",
@@ -170,15 +175,10 @@ struct WorktreesSection: View {
         }
     }
 
-    /// A merged row that is safe to remove goes through the checked clean-up path
-    /// (which can also delete its branch); anything else is a plain, non-forced
-    /// `git worktree remove`, which also forgets a single missing worktree.
-    private func remove(_ worktree: Worktree, deleteBranch: Bool) {
-        if case .remove(let entry)? = app.worktreeStatus(for: worktree).trashAction {
-            app.groupActions.perform(.remove(entry), deleteBranch: deleteBranch)
-        } else {
-            app.removeWorktree(worktree)
-        }
+    /// Confirm removing a row: a missing one is forgotten with every other
+    /// missing record (its `.git` link may be gone, so only pruning works).
+    private func confirmRemoval(_ worktree: Worktree, action: WorktreeStatus.TrashAction?) {
+        confirmation = action == .prune ? .prune : .worktree(worktree, action)
     }
 
     private struct MergeRefreshKey: Equatable {
@@ -249,14 +249,16 @@ struct WorktreesSection: View {
         case .merged:
             let eligible = app.groupActions.eligibleEntries(for: group.worktrees)
             if !eligible.isEmpty {
-                Button("Clean up…") { confirmation = .cleanup(eligible) }
+                Button("Clean up…") {
+                    confirmation = .cleanup(eligible, skipped: app.groupActions.skippedFacts(for: group.worktrees))
+                }
                     .buttonStyle(IconButtonStyle(size: CGSize(width: 22, height: 18))).font(.system(size: 11))
                     .foregroundStyle(Palette.accent)
                     .disabled(app.groupActions.isWorking)
                     .hoverHelp("Remove the worktree folders that are safe to delete.")
             }
         case .broken:
-            Button("Prune") { app.groupActions.prune() }
+            Button("Forget…") { confirmation = .prune }
                 .buttonStyle(IconButtonStyle(size: CGSize(width: 22, height: 18))).font(.system(size: 11))
                 .foregroundStyle(Palette.accent)
                 .disabled(app.groupActions.isWorking)
@@ -339,10 +341,7 @@ struct WorktreesSection: View {
             if let action = status.trashAction {
                 WorktreeTrashButton(isSelected: isActive,
                                     label: action == .prune ? "Forget missing worktrees" : "Remove worktree") {
-                    switch action {
-                    case .remove: confirmation = .worktree(worktree)
-                    case .prune: confirmation = .prune
-                    }
+                    confirmRemoval(worktree, action: action)
                 }
                 .padding(.leading, 4)
             }
@@ -371,7 +370,9 @@ struct WorktreesSection: View {
             Button("Open in Finder") { app.revealPath(worktree.path) }
             Button("Open in Terminal") { app.openTerminal(at: worktree.path) }
             if !worktree.isPrimary {
-                Button("Remove Worktree…", role: .destructive) { confirmation = .worktree(worktree) }
+                Button("Remove Worktree…", role: .destructive) {
+                    confirmRemoval(worktree, action: app.removalAction(for: worktree))
+                }
                     .disabled(worktree.isLocked)
             }
         }

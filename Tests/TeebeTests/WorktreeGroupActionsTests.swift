@@ -32,6 +32,17 @@ private actor RemovalStub: WorktreeCleanupChecking {
     }
 }
 
+/// A value a test changes while the app reads it from another thread.
+private final class Box<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Value
+    init(_ value: Value) { stored = value }
+    var value: Value {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+}
+
 /// Counts how often the repository's worktrees were re-discovered.
 private final class DiscoveryCounter: @unchecked Sendable {
     private let lock = NSLock()
@@ -59,8 +70,12 @@ struct WorktreeGroupActionsTests {
 
     /// Bring an app up on `repo` with `stub`'s scan as the merge result the rows show.
     private func app(_ git: FakeGitClient, stub: RemovalStub,
-                     monitor: WorktreeActivityMonitor = WorktreeActivityMonitor()) async -> AppModel {
-        let app = AppModel(environment: makeTestEnvironment(git: git, monitor: monitor), mergeService: stub)
+                     monitor: WorktreeActivityMonitor = WorktreeActivityMonitor(),
+                     agents: Box<[String: AgentActivityState]> = Box([:]),
+                     inUse: Box<Set<String>> = Box([])) async -> AppModel {
+        let env = makeTestEnvironment(git: git, monitor: monitor, agentStatuses: { _, _ in agents.value },
+                                      worktreesInUse: { _, _ in inUse.value })
+        let app = AppModel(environment: env, mergeService: stub)
         app.mergeStatus.scanDebounce = .zero
         _ = await app.addRepository(path: repo.path)
         await app.mergeStatus.refresh(repo: repo, extraTarget: nil, enabled: true, revision: nil)
@@ -153,11 +168,141 @@ struct WorktreeGroupActionsTests {
         let app = await app(git, stub: stub, monitor: monitor)
         let actions = WorktreeGroupActions(app: app, service: stub)
 
-        monitor.recordActivity(worktreePath: "/busy", at: Date())
+        // Written to a minute ago: still inside the window the working orb uses.
+        monitor.recordActivity(worktreePath: "/busy", at: Date().addingTimeInterval(-60))
         await actions.remove(entries, deleteBranch: true)?.value
 
         #expect(await stub.removed.isEmpty)
-        #expect(app.errorMessage == "Couldn't remove busy: it is in use.")
+        #expect(app.errorMessage == "Couldn't remove busy: files are changing or a command is running in it.")
+    }
+
+    @Test("an agent working or waiting, or anything open in the folder, stops a removal at the moment it runs")
+    func freshActivityRefuses() async {
+        let git = FakeGitClient()
+        let feature = Worktree(path: "/feature", branch: "feature")
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true), feature]
+        let entry = merged("/feature", branch: "feature")
+        let stub = RemovalStub(snapshot: snapshot([entry]))
+        let agents = Box<[String: AgentActivityState]>([:])
+        let inUse = Box<Set<String>>([])
+        let app = await app(git, stub: stub, agents: agents, inUse: inUse)
+        let actions = WorktreeGroupActions(app: app, service: stub)
+        // Eligible when the sheet opened; what runs is the captured action.
+        let action = app.removalAction(for: feature)
+        #expect(action == .remove(entry))
+        let steps: [(state: [String: AgentActivityState], inUse: Set<String>)] = [
+            (["/feature": .needsAttention], []), (["/feature": .working], []), ([:], ["/feature"])
+        ]
+        let reasons = ["an agent is waiting for you in it.", "an agent is working in it.",
+                       "it is open in a terminal, editor or agent."]
+        for (step, reason) in zip(steps, reasons) {
+            agents.value = step.state
+            inUse.value = step.inUse
+            await actions.perform(.remove(entry), deleteBranch: true)?.value
+            #expect(app.errorMessage == "Couldn't remove feature: " + reason)
+        }
+        #expect(await stub.removed.isEmpty)
+        agents.value = [:]
+        inUse.value = []
+        await actions.perform(.remove(entry), deleteBranch: false)?.value
+        #expect(await stub.removed == ["/feature"])
+    }
+
+    @Test("rows an agent is in, or a result being rechecked, stay out of the clean-up and the sheet says why")
+    func skippedRows() async {
+        let git = FakeGitClient()
+        let rows = ["free", "waiting", "working", "live", "moved", "browsed"].map {
+            Worktree(path: "/" + $0, branch: $0, head: $0 == "moved" ? "def" : "abc")
+        }
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)] + rows
+        let stub = RemovalStub(snapshot: snapshot(rows.map { merged($0.path, branch: $0.branch ?? "") }))
+        let monitor = WorktreeActivityMonitor()
+        monitor.recordActivity(worktreePath: "/live", at: Date())
+        let agents = Box<[String: AgentActivityState]>(["/waiting": .needsAttention, "/working": .working])
+        let app = await app(git, stub: stub, monitor: monitor, agents: agents)
+        await app.selector.refreshWorktreeInfo()
+        await app.selector.selectWorktree(rows[5])
+        let actions = WorktreeGroupActions(app: app, service: stub)
+
+        #expect(actions.eligibleEntries(for: rows).map(\.id) == ["/free"])
+        #expect(actions.skippedFacts(for: rows).map(\.text) == [
+            "“waiting” is skipped: an agent is waiting for you here",
+            "“working” is skipped: an agent is working here",
+            "“live” is skipped: files are changing or a command is running here",
+            "“moved” is skipped: it is still being checked",
+            "“browsed” is skipped: it’s the worktree you’re viewing"
+        ])
+    }
+
+    @Test("what the list and the sheets read runs no git, no probe and no save: it is drawn on every layout pass")
+    func viewReadsArePure() async throws {
+        let git = FakeGitClient()
+        let rows = [Worktree(path: "/free", branch: "free", head: "abc"), Worktree(path: "/moved", branch: "moved", head: "def")]
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)] + rows
+        let discoveries = DiscoveryCounter()
+        git.beforeWorktrees = { discoveries.bump() }
+        let probes = DiscoveryCounter()
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tb-test-\(UUID().uuidString)").appendingPathComponent("state.json")
+        let env = makeTestEnvironment(git: git, store: AppStateStore(url: storeURL),
+                                      agentStatuses: { _, _ in probes.bump(); return ["/free": .needsAttention] },
+                                      worktreesInUse: { _, _ in probes.bump(); return ["/free"] })
+        let stub = RemovalStub(snapshot: snapshot(rows.map { merged($0.path, branch: $0.branch ?? "") }))
+        let app = AppModel(environment: env, mergeService: stub)
+        app.mergeStatus.scanDebounce = .zero
+        _ = await app.addRepository(path: repo.path)
+        await app.mergeStatus.refresh(repo: repo, extraTarget: nil, enabled: true, revision: nil)
+        await app.selector.refreshWorktreeInfo()
+        let actions = WorktreeGroupActions(app: app, service: stub)
+        let saved = try? Data(contentsOf: storeURL)
+        let (statusReads, found, probed) = (git.statusCallCount, discoveries.count, probes.count)
+        await stub.resetScans()
+
+        for _ in 0..<3 {
+            _ = app.worktreeList(collapsed: [])
+            for row in app.selector.worktrees {
+                _ = app.worktreeStatus(for: row)
+                _ = app.removalPrompt(for: row)
+                _ = app.removalAction(for: row)
+            }
+            _ = actions.eligibleEntries(for: rows)
+            _ = actions.skippedFacts(for: rows)
+        }
+        await Task.yield()
+
+        #expect(git.statusCallCount == statusReads)
+        #expect(discoveries.count == found)
+        #expect(probes.count == probed)
+        #expect(await stub.scans == 0)
+        #expect((try? Data(contentsOf: storeURL)) == saved)
+    }
+
+    @Test("a removal asked for while another runs is refused out loud")
+    func busyRefusal() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true), Worktree(path: "/a", branch: "a")]
+        let entry = merged("/a", branch: "a")
+        let stub = RemovalStub(snapshot: snapshot([entry]))
+        let app = await app(git, stub: stub)
+        let actions = WorktreeGroupActions(app: app, service: stub)
+        let first = actions.remove([entry], deleteBranch: false)
+        #expect(actions.perform(.remove(entry), deleteBranch: false) == nil)
+        #expect(app.errorMessage == "Couldn't remove a: another removal is still running.")
+        await first?.value
+    }
+
+    @Test("a missing row is forgotten by pruning, and a row being rechecked has nothing to confirm yet")
+    func removalActions() async {
+        let git = FakeGitClient()
+        let gone = Worktree(path: "/gone", branch: "gone", head: "abc")
+        let moved = Worktree(path: "/moved", branch: "moved", head: "def")
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true), gone, moved]
+        var broken = merged("/gone", branch: "gone")
+        broken.isBroken = true
+        let stub = RemovalStub(snapshot: snapshot([broken, merged("/moved", branch: "moved")]))
+        let app = await app(git, stub: stub)
+        #expect(app.removalAction(for: gone) == .prune)
+        #expect(app.removalAction(for: moved) == nil)
     }
 
     @Test("prune asks git to forget the missing folders, then rescans")

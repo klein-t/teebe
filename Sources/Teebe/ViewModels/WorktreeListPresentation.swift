@@ -21,7 +21,9 @@ enum WorktreeGroup: String, CaseIterable, Identifiable {
         let targetList = targets.isEmpty ? "a merge target" : WorktreeWording.list(targets, joiner: "or")
         switch self {
         case .localChanges: return "Edited or new files in the folder that are not committed yet."
-        case .notMerged: return "Committed work not found in \(targetList) yet, or Git couldn't check."
+        case .notMerged:
+            return "Committed work not found in \(targetList) yet, merged but kept for a reason the row's card gives, "
+                + "or Git couldn't check."
         case .merged: return "Merged into \(targetList) with nothing uncommitted. Removing the folder loses no work."
         case .broken: return "Git still lists these worktrees, but their folder or .git link is missing."
         }
@@ -79,9 +81,8 @@ extension AppModel {
 
     /// What the removal sheet says for this row, from the same inputs as its mark.
     func removalPrompt(for worktree: Worktree) -> WorktreeRemovalPrompt {
-        let info = selector.info(for: worktree)
-        return WorktreeRemovalPrompt(worktree: worktree, status: worktreeStatus(for: worktree),
-                                     merge: mergeEntry(for: worktree, info: info), isAgentActive: info.agentState != .idle)
+        WorktreeRemovalPrompt(worktree: worktree, status: worktreeStatus(for: worktree),
+                              merge: mergeEntry(for: worktree, info: selector.info(for: worktree)))
     }
 
     private func mergeEntry(for worktree: Worktree, info: SelectorModel.WorktreeInfo) -> WorktreeMergeEntry? {
@@ -95,5 +96,16 @@ extension AppModel {
         return WorktreeListPresentation(worktrees: selector.worktrees, statuses: statuses,
                                        grouped: groupWorktreesByMergeStatus, collapsed: collapsed,
                                        hasRepository: selector.selectedRepo != nil)
+    }
+
+    /// What confirming "Remove Worktree…" on this row will do, captured when the
+    /// sheet opens and re-checked in full when it runs: forget a missing row
+    /// (its `.git` link can be gone, so only prune works), otherwise remove the
+    /// folder as it was last checked. nil while there is no current result to
+    /// act on.
+    func removalAction(for worktree: Worktree) -> WorktreeStatus.TrashAction? {
+        guard let merge = mergeEntry(for: worktree, info: selector.info(for: worktree)) else { return nil }
+        if merge.entry.isBroken { return .prune }
+        return worktreeStatus(for: worktree).isRechecking ? nil : .remove(merge.entry)
     }
 }

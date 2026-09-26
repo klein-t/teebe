@@ -64,8 +64,7 @@ struct WorktreeStatusTests {
         // Its first untracked file makes it uncommitted work, like any other row.
         #expect(status(entry { $0.hasNoCommits = true }, count: 1).mark == .uncommitted)
         let prompt = WorktreeRemovalPrompt(worktree: feature, status: fresh,
-                                           merge: WorktreeMergeEntry(entry: entry { $0.hasNoCommits = true }),
-                                           isAgentActive: false)
+                                           merge: WorktreeMergeEntry(entry: entry { $0.hasNoCommits = true }))
         #expect(prompt.facts.first == WorktreeCardFact(icon: .merge, text: "No commits yet", tone: .muted))
         #expect(!prompt.offersBranchDeletion)
     }
@@ -96,7 +95,7 @@ struct WorktreeStatusTests {
         #expect(!status(merged, info: .init(agentState: .working)).showsTrash)
         let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
         let lockedEntry = entry(locked, merged: [dev]) { $0.problem = "Locked worktree" }
-        #expect(status(lockedEntry).mark == .merged)
+        #expect(status(lockedEntry).mark == .notMerged)
         #expect(!status(lockedEntry).showsTrash)
         let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
         #expect(!status(entry(primary, merged: [dev])).showsTrash)
@@ -128,7 +127,7 @@ struct WorktreeStatusTests {
         let target = entry(devTree, merged: [dev]) { $0.isTarget = true }
         #expect(status(target, count: 1).rowMark(grouped: true) == .uncommitted)
         let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
-        #expect(status(entry(primary, merged: [dev])).rowMark(grouped: true) == .merged)
+        #expect(status(entry(primary, merged: [dev])).rowMark(grouped: true) == .notMerged)
     }
 
     @Test("the hover card opens from the mark, so a row without a visible mark has none")
@@ -212,18 +211,49 @@ struct WorktreeStatusTests {
         #expect(facts(status(nil))[1] == "Couldn’t check merge status")
     }
 
+    @Test("a result known to be stale shows checking, never Safe to delete, and the row keeps its group")
+    func staleResult() {
+        let merged = entry(merged: [dev])
+        let rechecking = WorktreeStatus(worktree: feature, merge: WorktreeMergeEntry(entry: merged, isRechecking: true),
+                                        info: .init(), targetNames: ["main", "dev"], isChecking: false)
+        // A commit in a row that isn't open: the list already has the new HEAD.
+        let headMoved = status(merged, worktree: Worktree(path: "/feature", branch: "feature", head: "def"))
+        for stale in [rechecking, headMoved] {
+            #expect(stale.mark == .notMerged)
+            #expect(stale.group == .merged)
+            #expect(!stale.showsTrash)
+            #expect(stale.card.title == "Checking…")
+            #expect(stale.card.subtitle == "Looking for this branch in main or dev.")
+            #expect(facts(stale)[1] == "Checking merge status…")
+            // Inside the group the ring stays, so the row says why it has no trash.
+            #expect(stale.rowMark(grouped: true) == .notMerged)
+            #expect(stale.hasHoverCard(grouped: true))
+        }
+        // Uncommitted work and agents still outrank it; the merge fact still says checking.
+        let dirty = WorktreeStatus(worktree: feature, merge: WorktreeMergeEntry(entry: merged, isRechecking: true, localChangeCount: 1),
+                                   info: .init(), targetNames: ["dev"], isChecking: false)
+        #expect(dirty.mark == .uncommitted)
+        #expect(facts(dirty)[1] == "Checking merge status…")
+    }
+
     @Test("merged but protected keeps its title and says why in the sentence, not as extra facts")
     func mergedButProtected() {
         let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
-        let card = status(entry(locked, merged: [dev]) { $0.problem = "Locked worktree" }).card
+        let lockedStatus = status(entry(locked, merged: [dev]) { $0.problem = "Locked worktree" })
+        // Not "Safe to delete": the ring and the Not merged group, and the card says why.
+        #expect(lockedStatus.mark == .notMerged)
+        #expect(lockedStatus.group == .notMerged)
+        let card = lockedStatus.card
         #expect(card.title == "Merged")
         #expect(card.subtitle == "Locked, so Teebe won’t remove it.")
         #expect(card.facts.map(\.text) == ["No uncommitted changes", "Merged into dev", "Not on remote"])
         let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
         #expect(status(entry(primary, merged: [dev])).card.subtitle == "The main checkout, so Teebe won’t remove it.")
         let detached = Worktree(path: "/d", head: "abc", isDetached: true)
-        #expect(status(entry(detached, merged: [dev]) { $0.problem = "Detached HEAD" }).card.subtitle
-                == "Detached HEAD, so Teebe won’t remove it.")
+        let detachedStatus = status(entry(detached, merged: [dev]) { $0.problem = "Detached HEAD" })
+        #expect(detachedStatus.card.subtitle == "Detached HEAD, so Teebe won’t remove it.")
+        #expect(detachedStatus.group == .notMerged)
+        #expect(detachedStatus.mark == .notMerged)
         // Merged commits, but Git could be hiding local work: no ✓, and the sentence says why.
         let skipped = status(entry(merged: [dev]) { $0.hasUncheckedFiles = true })
         #expect(skipped.card.title == "Merged")
@@ -239,8 +269,7 @@ struct WorktreeStatusTests {
     @Test("the removal prompt offers branch deletion only when the work is already merged")
     func removalPrompt() {
         let merged = entry(merged: [dev])
-        let safe = WorktreeRemovalPrompt(worktree: feature, status: status(merged),
-                                         merge: WorktreeMergeEntry(entry: merged), isAgentActive: false)
+        let safe = WorktreeRemovalPrompt(worktree: feature, status: status(merged), merge: WorktreeMergeEntry(entry: merged))
         #expect(safe.title == "Remove “feature”?")
         #expect(safe.facts.map { $0.text } == ["Merged into dev", "Nothing uncommitted"])
         // One merge glyph everywhere; green only when the fact says merged.
@@ -250,17 +279,17 @@ struct WorktreeStatusTests {
 
         let cluttered = entry(merged: [dev]) { $0.hasIgnoredFiles = true; $0.ignoredPaths = [".DS_Store", ".cache/"] }
         let withIgnored = WorktreeRemovalPrompt(worktree: feature, status: status(cluttered),
-                                                merge: WorktreeMergeEntry(entry: cluttered), isAgentActive: false)
+                                                merge: WorktreeMergeEntry(entry: cluttered))
         #expect(withIgnored.facts.last == WorktreeCardFact(icon: .ignoredFiles,
                                                            text: "Ignored files will be deleted too (.DS_Store)", tone: .muted))
 
         let unmerged = entry()
-        let risky = WorktreeRemovalPrompt(worktree: feature, status: status(unmerged, count: 2),
-                                          merge: WorktreeMergeEntry(entry: unmerged, localChangeCount: 2), isAgentActive: true)
+        let risky = WorktreeRemovalPrompt(worktree: feature, status: status(unmerged, count: 2, info: .init(agentState: .working)),
+                                          merge: WorktreeMergeEntry(entry: unmerged, localChangeCount: 2))
         // Removal is never forced: Git refuses a folder with uncommitted work, so
         // nothing is "lost" and Remove is not offered until it is committed or discarded.
         #expect(risky.facts.map { $0.text } == ["Not merged yet", "2 uncommitted changes: commit or discard them first",
-                                            "An agent is active in this worktree"])
+                                            "An agent is working here"])
         #expect(risky.facts[1].tone == .warn)
         #expect(risky.facts[0] == WorktreeCardFact(icon: .merge, text: "Not merged yet", tone: .muted))
         #expect(risky.explanation == "Git only removes a worktree with nothing uncommitted. The branch is kept.")
@@ -269,27 +298,66 @@ struct WorktreeStatusTests {
         #expect(safe.canRemove)
 
         let unmergedClean = WorktreeRemovalPrompt(worktree: feature, status: status(unmerged),
-                                                  merge: WorktreeMergeEntry(entry: unmerged), isAgentActive: false)
+                                                  merge: WorktreeMergeEntry(entry: unmerged))
         #expect(unmergedClean.facts.map { $0.text } == ["Not merged yet", "Nothing uncommitted"])
         #expect(unmergedClean.explanation == "The worktree folder is deleted. The branch is kept.")
         #expect(unmergedClean.canRemove)
 
         let submodule = entry(merged: [dev]) { $0.hasSubmodules = true }
         let nested = WorktreeRemovalPrompt(worktree: feature, status: status(submodule),
-                                           merge: WorktreeMergeEntry(entry: submodule), isAgentActive: false)
+                                           merge: WorktreeMergeEntry(entry: submodule))
         #expect(nested.facts.map { $0.text } == ["Merged into dev", "Nothing uncommitted",
                                              "Contains a submodule: Git won’t remove it"])
         #expect(nested.explanation
                 == "Git won’t remove a worktree that contains a submodule without forcing it, and Teebe never forces.")
         #expect(!nested.canRemove)
         #expect(!nested.offersBranchDeletion)
+    }
 
-        let gone = entry { $0.isBroken = true; $0.problem = "Broken worktree: its folder is missing." }
-        let forget = WorktreeRemovalPrompt(worktree: feature, status: status(gone),
-                                           merge: WorktreeMergeEntry(entry: gone), isAgentActive: false)
-        #expect(forget.title == "Forget “feature”?")
-        #expect(forget.canRemove)
-        #expect(!forget.offersBranchDeletion)
+    @Test("the removal prompt won't remove while anything is working there, and says what")
+    func removalPromptActivity() {
+        let merged = entry(merged: [dev])
+        func prompt(_ info: SelectorModel.WorktreeInfo) -> WorktreeRemovalPrompt {
+            WorktreeRemovalPrompt(worktree: feature, status: status(merged, info: info), merge: WorktreeMergeEntry(entry: merged))
+        }
+        let explanation = "Teebe won’t remove a worktree while something is working in it. Try again when it’s done."
+        for (info, text) in [(SelectorModel.WorktreeInfo(agentState: .working), "An agent is working here"),
+                             (SelectorModel.WorktreeInfo(agentState: .needsAttention), "An agent is waiting for you here"),
+                             (SelectorModel.WorktreeInfo(isLive: true), "Files are changing or a command is running here")] {
+            let active = prompt(info)
+            #expect(active.facts.last == WorktreeCardFact(icon: .warning, text: text, tone: .warn))
+            #expect(!active.canRemove)
+            #expect(!active.offersBranchDeletion)
+            #expect(active.explanation == explanation)
+        }
+    }
+
+    @Test("the removal prompt won't remove what Git protects or hides, or a row still being checked")
+    func removalPromptBlockers() {
+        let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
+        let lockedEntry = entry(locked) { $0.problem = "Locked worktree" }
+        let lockedPrompt = WorktreeRemovalPrompt(worktree: locked, status: status(lockedEntry),
+                                                 merge: WorktreeMergeEntry(entry: lockedEntry))
+        #expect(lockedPrompt.facts.last == WorktreeCardFact(icon: .warning, text: "Locked, so Teebe won’t remove it", tone: .warn))
+        #expect(!lockedPrompt.canRemove)
+        #expect(lockedPrompt.explanation == "Teebe only removes a worktree Git can fully check and nothing protects.")
+        let hidden = entry { $0.hasUncheckedFiles = true }
+        let hiddenPrompt = WorktreeRemovalPrompt(worktree: feature, status: status(hidden), merge: WorktreeMergeEntry(entry: hidden))
+        #expect(hiddenPrompt.facts.last?.text == "Some files are marked unchanged in Git, so Teebe won’t remove it")
+        #expect(!hiddenPrompt.canRemove)
+
+        let checking = WorktreeRemovalPrompt(worktree: feature, status: status(nil, isChecking: true), merge: nil)
+        #expect(checking.facts.first == WorktreeCardFact(icon: .merge, text: "Checking if merged…", tone: .muted))
+        #expect(!checking.canRemove)
+        #expect(checking.explanation == "Teebe is still checking this worktree. Try again in a moment.")
+        let merged = entry(merged: [dev])
+        let rechecking = WorktreeMergeEntry(entry: merged, isRechecking: true)
+        let stale = WorktreeRemovalPrompt(
+            worktree: feature,
+            status: WorktreeStatus(worktree: feature, merge: rechecking, info: .init(), targetNames: ["dev"], isChecking: false),
+            merge: rechecking)
+        #expect(!stale.canRemove)
+        #expect(!stale.offersBranchDeletion)
     }
 
     @Test("the missing-row trash prunes every missing record, and its prompt says so")
@@ -297,8 +365,8 @@ struct WorktreeStatusTests {
         let one = WorktreeRemovalPrompt.prune(missingCount: 1)
         #expect(one.title == "Forget missing worktrees?")
         #expect(one.facts.map { $0.text } == ["1 missing worktree"])
-        #expect(one.explanation == "Clears Git’s leftover records of every missing worktree, not only this one. "
-                + "Nothing on disk changes and branches are kept.")
+        #expect(one.explanation == "Clears Git’s leftover records of every missing worktree, not only this one, "
+                + "including any on a drive that isn’t connected right now. Nothing on disk changes and branches are kept.")
         #expect(one.canRemove)
         #expect(!one.offersBranchDeletion)
         #expect(WorktreeRemovalPrompt.prune(missingCount: 3).facts.map { $0.text } == ["3 missing worktrees"])

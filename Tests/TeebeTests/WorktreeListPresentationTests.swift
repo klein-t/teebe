@@ -43,6 +43,21 @@ struct WorktreeListPresentationTests {
         #expect(unscanned.group == .notMerged)
     }
 
+    @Test("merged rows Teebe won't remove are not Safe to delete, grouped or not")
+    func protectedMergedRows() {
+        for worktree in [Worktree(path: "/locked", branch: "locked", isLocked: true),
+                         Worktree(path: "/detached", head: "abc", isDetached: true)] {
+            var entry = CleanupEntry(worktree: worktree)
+            entry.mergeStatus = .merged
+            entry.problem = worktree.isLocked ? "Locked worktree" : "Detached HEAD"
+            let rowStatus = status(entry)
+            #expect(rowStatus.group == .notMerged)
+            #expect(rowStatus.mark == .notMerged)
+            #expect(rowStatus.rowMark(grouped: false) == .notMerged)
+            #expect(!rowStatus.showsTrash)
+        }
+    }
+
     @Test("agent activity never moves a row between groups")
     func agentDoesNotRegroup() {
         var entry = CleanupEntry(worktree: Worktree(path: "/feature", branch: "feature"))
@@ -92,7 +107,8 @@ struct WorktreeListPresentationTests {
         #expect(WorktreeGroup.localChanges.explanation(targets: ["dev"])
             == "Edited or new files in the folder that are not committed yet.")
         #expect(WorktreeGroup.notMerged.explanation(targets: ["dev", "develop", "main"])
-            == "Committed work not found in dev, develop or main yet, or Git couldn't check.")
+            == "Committed work not found in dev, develop or main yet, merged but kept for a reason the row's card gives, "
+            + "or Git couldn't check.")
         #expect(WorktreeGroup.broken.explanation(targets: [])
             == "Git still lists these worktrees, but their folder or .git link is missing.")
         #expect(WorktreeGroup.notMerged.explanation(targets: []).contains("a merge target"))

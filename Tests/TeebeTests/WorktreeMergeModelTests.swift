@@ -187,7 +187,8 @@ struct WorktreeMergeModelTests {
         #expect(committed?.isRechecking == true)
         #expect(committed?.entry.mergeStatus == .merged)
         #expect(group(committed) == .merged)
-        #expect(mark(committed) == .merged)
+        // Known to be stale: the ring while it is rechecked, never a ✓ to act on.
+        #expect(mark(committed) == .notMerged)
 
         await model.recheck(path: "/repo/feature")
         #expect(await service.calls == 2)

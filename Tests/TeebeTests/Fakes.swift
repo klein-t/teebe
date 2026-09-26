@@ -245,6 +245,7 @@ func makeTestEnvironment(
     agentProjectsRootPath: String? = nil,
     agentExtraWatchPaths: [String] = [],
     processActivity: (@Sendable ([String], Date) -> Set<String>)? = nil,
+    worktreesInUse: @escaping @Sendable ([String], Date) -> Set<String> = { _, _ in [] },
     notify: (@MainActor (String, String) -> Void)? = nil,
     agentPing: AgentPingListening? = nil
 ) -> AppEnvironment {
@@ -262,6 +263,7 @@ func makeTestEnvironment(
         agentProjectsRootPath: agentProjectsRootPath,
         agentExtraWatchPaths: agentExtraWatchPaths,
         processActivity: processActivity,
+        worktreesInUse: worktreesInUse,
         notify: notify ?? { _, _ in },
         makeAgentPingListener: { agentPing ?? FakeAgentPing() }
     )

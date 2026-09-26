@@ -439,18 +439,6 @@ final class AppModel {
         persist()
     }
 
-    func removeWorktree(_ worktree: Worktree) {
-        guard let repo = selector.selectedRepo else { return }
-        Task {
-            do {
-                try await environment.worktreeService.removeWorktree(in: repo, worktree: worktree, force: false)
-                await selector.selectRepo(repo)
-            } catch {
-                errorMessage = "Couldn't remove worktree: \(WorktreeModel.describe(error))"
-            }
-        }
-    }
-
     func revealPath(_ path: String) {
         environment.opener.reveal(URL(fileURLWithPath: path))
     }

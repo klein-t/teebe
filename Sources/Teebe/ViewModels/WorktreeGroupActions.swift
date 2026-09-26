@@ -2,10 +2,11 @@ import Foundation
 import Observation
 import TeebeCore
 
-/// The work behind the group-header actions and the row trash: removing merged
-/// worktrees that are safe to remove (optionally deleting their local branches),
-/// and pruning registrations whose folders are gone. Both end in a rescan, so the
-/// list tells the truth again straight away.
+/// The work behind the group-header actions, the row trash and "Remove
+/// Worktree…": removing worktree folders (optionally deleting the local branches
+/// of merged ones), and pruning registrations whose folders are gone. Every
+/// removal runs through `perform` / `remove`, which re-check it in full as it
+/// runs. Both end in a rescan, so the list tells the truth again straight away.
 @MainActor
 @Observable
 final class WorktreeGroupActions {
@@ -20,13 +21,34 @@ final class WorktreeGroupActions {
         self.service = service ?? WorktreeCleanupService(git: app.environment.git)
     }
 
-    /// The merged rows that may actually be removed in bulk. Protection wins over
-    /// merge state: the primary checkout, a merge target's own checkout, a locked,
-    /// bare or detached worktree and the one being browsed all simply stay.
+    /// The rows that may actually be removed in bulk: exactly those whose own
+    /// trash is showing, so protection, agent activity and a stale result all keep
+    /// a row out, and the one being browsed stays too.
     func eligibleEntries(for worktrees: [Worktree]) -> [CleanupEntry] {
-        let paths = Set(worktrees.map(\.path))
-        return (app.mergeStatus.snapshot?.entries ?? []).filter {
-            paths.contains($0.id) && $0.canRemove(includingIgnored: true) && isEligible($0, includingBrowsed: false)
+        worktrees.compactMap { worktree in
+            guard case .remove(let entry)? = app.worktreeStatus(for: worktree).trashAction,
+                  !isBrowsed(worktree.path) else { return nil }
+            return entry
+        }
+    }
+
+    /// For the clean-up sheet: each of these rows it leaves alone, and why.
+    func skippedFacts(for worktrees: [Worktree]) -> [WorktreeCardFact] {
+        worktrees.compactMap { worktree in
+            let status = app.worktreeStatus(for: worktree)
+            let reason: String
+            if status.showsTrash {
+                guard isBrowsed(worktree.path) else { return nil }
+                reason = "it’s the worktree you’re viewing"
+            } else if let activity = status.activityWarning {
+                reason = activity.prefix(1).lowercased() + activity.dropFirst()
+            } else if status.isRechecking {
+                reason = "it is still being checked"
+            } else {
+                reason = "it isn’t safe to delete right now"
+            }
+            return WorktreeCardFact(icon: .warning, text: "“\(worktree.branch ?? worktree.name)” is skipped: " + reason,
+                                    tone: .muted)
         }
     }
 
@@ -52,12 +74,17 @@ final class WorktreeGroupActions {
     /// explicitly chosen row be the one being browsed; bulk clean-up skips it.
     @discardableResult
     func remove(_ entries: [CleanupEntry], deleteBranch: Bool, includingBrowsed: Bool = false) -> Task<Void, Never>? {
-        guard !isWorking, !entries.isEmpty, let repo = app.selector.selectedRepo else { return nil }
+        guard !entries.isEmpty, let repo = app.selector.selectedRepo else { return nil }
+        guard !isWorking else {
+            app.setError("Couldn't remove \(entries.count == 1 ? name(entries[0]) : "worktrees"): another removal is still running.")
+            return nil
+        }
         isWorking = true
         return Task { await performRemoval(entries, repo: repo, deleteBranch: deleteBranch, includingBrowsed: includingBrowsed) }
     }
 
-    /// The row trash: remove a merged row, or prune when the row is missing.
+    /// The row trash and "Remove Worktree…": remove the folder the sheet opened
+    /// on, or prune when the row is missing.
     @discardableResult
     func perform(_ action: WorktreeStatus.TrashAction, deleteBranch: Bool) -> Task<Void, Never>? {
         switch action {
@@ -68,7 +95,11 @@ final class WorktreeGroupActions {
 
     @discardableResult
     func prune() -> Task<Void, Never>? {
-        guard !isWorking, let repo = app.selector.selectedRepo else { return nil }
+        guard let repo = app.selector.selectedRepo else { return nil }
+        guard !isWorking else {
+            app.setError("Couldn't forget missing worktrees: a removal is still running.")
+            return nil
+        }
         isWorking = true
         return Task {
             do {
@@ -84,10 +115,8 @@ final class WorktreeGroupActions {
     private func performRemoval(_ entries: [CleanupEntry], repo: Repository, deleteBranch: Bool, includingBrowsed: Bool) async {
         // Await each removal: cleanup writes never run concurrently.
         for entry in entries {
-            let scanAgent = app.environment.agentStatuses
-            let states = await Task.detached { scanAgent([entry.id], Date()) }.value
-            guard isEligible(entry, includingBrowsed: includingBrowsed), !isActive(entry), states[entry.id] != .working else {
-                app.setError("Couldn't remove \(name(entry)): it is in use.")
+            if let reason = await refusal(entry, includingBrowsed: includingBrowsed) {
+                app.setError("Couldn't remove \(name(entry)): \(reason)")
                 continue
             }
             do {
@@ -114,18 +143,32 @@ final class WorktreeGroupActions {
                                       enabled: true, revision: app.selector.mergeRevision)
     }
 
-    private func isEligible(_ entry: CleanupEntry, includingBrowsed: Bool) -> Bool {
-        !entry.worktree.isPrimary && !entry.isTarget && !entry.worktree.isLocked
-            && !entry.worktree.isBare && !entry.worktree.isDetached
-            && (includingBrowsed || entry.id != app.selector.selectedWorktree?.path)
-    }
+    private func isBrowsed(_ path: String) -> Bool { path == app.selector.selectedWorktree?.path }
 
-    /// Something is writing to the folder right now. Read fresh, immediately before
-    /// the removal, never from the scan that produced the row.
-    private func isActive(_ entry: CleanupEntry) -> Bool {
-        let info = app.selector.info(for: entry.worktree)
-        return info.agentState == .working || info.isLive
-            || app.environment.activityMonitor.isBusy(worktreePath: entry.id, within: 5, now: Date())
+    /// Why `entry` can't be removed right now; nil when nothing stands in the way.
+    /// Read fresh, immediately before the removal, never from the scan or the
+    /// sheet that produced it: an agent working or waiting there (every harness),
+    /// anything open in the folder, or files changed or a command run within the
+    /// window the working orb uses. What Git knows (the commit, targets, local and
+    /// hidden work, protection) the cleanup service re-checks itself.
+    private func refusal(_ entry: CleanupEntry, includingBrowsed: Bool) async -> String? {
+        if !includingBrowsed, isBrowsed(entry.id) { return "it’s the worktree you’re viewing." }
+        var paths = app.selector.worktrees.map(\.path)
+        if !paths.contains(entry.id) { paths.append(entry.id) }
+        let now = Date()
+        let agentStatuses = app.environment.agentStatuses
+        let worktreesInUse = app.environment.worktreesInUse
+        let (states, inUse) = await Task.detached { [paths] in (agentStatuses(paths, now), worktreesInUse(paths, now)) }.value
+        switch states[entry.id] {
+        case .working?: return "an agent is working in it."
+        case .needsAttention?: return "an agent is waiting for you in it."
+        case .idle?, nil: break
+        }
+        if inUse.contains(entry.id) { return "it is open in a terminal, editor or agent." }
+        if app.environment.activityMonitor.isBusy(worktreePath: entry.id, within: GenericActivity.window, now: now) {
+            return "files are changing or a command is running in it."
+        }
+        return nil
     }
 
     private func name(_ entry: CleanupEntry) -> String {
