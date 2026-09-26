@@ -176,20 +176,26 @@ public struct CodexRolloutScanner: AgentActivitySource {
     public var sessionsRoot: URL
     public var thresholds: AgentStatusThresholds
     public var tailBytes: Int
-    /// How many date folders back are listed. A resumed thread keeps writing to
-    /// the rollout in the folder of the day it started.
+    /// How many date folders back are listed on every scan. A resumed thread keeps
+    /// writing to the rollout in the folder of the day it started, however long
+    /// ago, so older folders are listed too, only less often (`archiveInterval`).
     public var lookbackDays: Int
+    /// How often the folders past `lookbackDays` are listed again. A thread found
+    /// there written recently is then read on every scan, like a recent one.
+    public var archiveInterval: TimeInterval
     /// Summaries of files unchanged since the last scan (same size and mtime)
     /// are reused: a busy agent rewrites one or two rollouts a second, not all.
     private let cache = CodexSummaryCache()
+    private let archive = CodexArchive()
 
     public init(sessionsRoot: URL = CodexRolloutScanner.defaultSessionsRoot,
                 thresholds: AgentStatusThresholds = AgentStatusThresholds(),
-                tailBytes: Int = 256 * 1_024, lookbackDays: Int = 30) {
+                tailBytes: Int = 256 * 1_024, lookbackDays: Int = 30, archiveInterval: TimeInterval = 15) {
         self.sessionsRoot = sessionsRoot
         self.thresholds = thresholds
         self.tailBytes = tailBytes
         self.lookbackDays = lookbackDays
+        self.archiveInterval = archiveInterval
     }
 
     public static var defaultSessionsRoot: URL {
@@ -245,11 +251,13 @@ public struct CodexRolloutScanner: AgentActivitySource {
 
     // MARK: - Files
 
-    /// Rollouts in the last `lookbackDays` date folders, by thread id.
+    /// Rollouts in the last `lookbackDays` date folders, plus the older ones
+    /// written recently, by thread id.
     private func rolloutFiles(now: Date) -> [String: RolloutFile] {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
         var files: [String: RolloutFile] = [:]
+        var recentFolders = Set<String>()
         for back in 0...max(0, lookbackDays) {
             guard let day = calendar.date(byAdding: .day, value: -back, to: now) else { continue }
             let parts = calendar.dateComponents([.year, .month, .day], from: day)
@@ -258,17 +266,62 @@ public struct CodexRolloutScanner: AgentActivitySource {
                 .appendingPathComponent(String(format: "%04d", year), isDirectory: true)
                 .appendingPathComponent(String(format: "%02d", month), isDirectory: true)
                 .appendingPathComponent(String(format: "%02d", dayOfMonth), isDirectory: true)
-            guard let entries = try? FileManager.default.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]
-            ) else { continue }
-            for url in entries where url.pathExtension == "jsonl" && url.lastPathComponent.hasPrefix("rollout-") {
-                guard let mtime = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-                else { continue }
-                let id = String(url.deletingPathExtension().lastPathComponent.suffix(36))
-                files[id] = RolloutFile(id: id, url: url, mtime: mtime)
-            }
+            recentFolders.insert(dir.standardizedFileURL.path)
+            for file in rollouts(in: dir) { files[file.id] = file }
+        }
+        for file in archivedFiles(now: now, excluding: recentFolders) where files[file.id] == nil {
+            files[file.id] = file
         }
         return files
+    }
+
+    /// Rollouts past the recent folders that were written within `idle`. Listing
+    /// every older folder costs one directory read each, so it runs at most every
+    /// `archiveInterval`; in between, only the files it found are checked again.
+    private func archivedFiles(now: Date, excluding recentFolders: Set<String>) -> [RolloutFile] {
+        if archive.isDue(now: now, interval: archiveInterval) {
+            let found = dateFolders().filter { !recentFolders.contains($0.standardizedFileURL.path) }
+                .flatMap(rollouts(in:))
+                .filter { now.timeIntervalSince($0.mtime) < thresholds.idle }
+            archive.store(found.map(\.url), at: now)
+        }
+        return archive.files.compactMap { url in
+            // A fresh URL: resource values are cached per URL instance.
+            let current = URL(fileURLWithPath: url.path)
+            guard let mtime = try? current.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            else { return nil }
+            return RolloutFile(id: Self.threadID(of: current), url: current, mtime: mtime)
+        }
+    }
+
+    /// Every `YYYY/MM/DD` folder under the sessions root.
+    private func dateFolders() -> [URL] {
+        func subfolders(of dir: URL, digits: Int) -> [URL] {
+            let entries = (try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+            return entries.filter { name in
+                name.lastPathComponent.count == digits && name.lastPathComponent.allSatisfy(\.isNumber)
+            }
+        }
+        return subfolders(of: sessionsRoot, digits: 4)
+            .flatMap { subfolders(of: $0, digits: 2) }
+            .flatMap { subfolders(of: $0, digits: 2) }
+    }
+
+    private func rollouts(in dir: URL) -> [RolloutFile] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return entries.compactMap { url in
+            guard url.pathExtension == "jsonl", url.lastPathComponent.hasPrefix("rollout-"),
+                  let mtime = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            else { return nil }
+            return RolloutFile(id: Self.threadID(of: url), url: url, mtime: mtime)
+        }
+    }
+
+    private static func threadID(of url: URL) -> String {
+        String(url.deletingPathExtension().lastPathComponent.suffix(36))
     }
 
     // MARK: - Reading one rollout
@@ -392,6 +445,29 @@ private struct RolloutFile {
     var id: String
     var url: URL
     var mtime: Date
+}
+
+/// The older rollouts found written recently, and when the older folders were
+/// last listed.
+private final class CodexArchive: @unchecked Sendable {
+    private let lock = NSLock()
+    private var listedAt: Date?
+    private var found: [URL] = []
+
+    func isDue(now: Date, interval: TimeInterval) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let listedAt else { return true }
+        return now.timeIntervalSince(listedAt) >= interval || now < listedAt
+    }
+
+    func store(_ urls: [URL], at now: Date) {
+        lock.lock(); found = urls; listedAt = now; lock.unlock()
+    }
+
+    var files: [URL] {
+        lock.lock(); defer { lock.unlock() }
+        return found
+    }
 }
 
 /// Rollout summaries by file, valid while the file keeps its size and mtime.

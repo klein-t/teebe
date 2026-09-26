@@ -297,7 +297,7 @@ struct CodexRolloutScannerTests {
         #expect(states == [lens: .idle, katast: .idle, launch: .idle])
     }
 
-    @Test("resumed threads in older date folders are read; folders past the lookback are not")
+    @Test("resumed threads are read from their date folder, however old")
     func dateFolders() throws {
         let fx = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fx.root) }
@@ -305,8 +305,33 @@ struct CodexRolloutScannerTests {
                   id: parentID, fx, daysAgo: 4)
         #expect(fx.scanner.states(forWorktreePaths: katastPaths, now: now)[lens] == .working)
         try FileManager.default.removeItem(at: fx.root)
+        // Started 45 days ago, resumed today: the rollout is written where it began.
+        let fresh = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fresh.root) }
         try write(userTurn([Rollout.patch(lens + "/a.py", call: "c1", at: now.addingTimeInterval(-3))]),
-                  id: parentID, fx, daysAgo: 45)
+                  id: parentID, fresh, daysAgo: 45)
+        #expect(fresh.scanner.states(forWorktreePaths: katastPaths, now: now)[lens] == .working)
+    }
+
+    @Test("an old thread resumed after a scan is found by the next look at the older folders, and followed after")
+    func resumedAfterAScan() throws {
+        let fx = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fx.root) }
+        let lines = userTurn([Rollout.patch(lens + "/a.py", call: "c1", at: now.addingTimeInterval(-3))])
+        try write(lines, id: parentID, fx, daysAgo: 90, mtime: now.addingTimeInterval(-90 * 86_400))
         #expect(fx.scanner.states(forWorktreePaths: katastPaths, now: now)[lens] == .idle)
+
+        // Resumed: new records, a fresh modification time.
+        let later = now.addingTimeInterval(fx.scanner.archiveInterval + 1)
+        let resumed = lines.dropLast() + [Rollout.patch(lens + "/a.py", call: "c1", at: later.addingTimeInterval(-3))]
+        try write(Array(resumed), id: parentID, fx, daysAgo: 90, mtime: later.addingTimeInterval(-1))
+        #expect(fx.scanner.states(forWorktreePaths: katastPaths, now: later)[lens] == .working)
+
+        // Between looks at the older folders, a thread already found is still read
+        // on every scan: its turn ending shows at once.
+        let soon = later.addingTimeInterval(2)
+        try write(Array(resumed) + [Rollout.event("task_complete", at: soon.addingTimeInterval(-1))],
+                  id: parentID, fx, daysAgo: 90, mtime: soon.addingTimeInterval(-1))
+        #expect(fx.scanner.states(forWorktreePaths: katastPaths, now: soon)[lens] == .needsAttention)
     }
 }
