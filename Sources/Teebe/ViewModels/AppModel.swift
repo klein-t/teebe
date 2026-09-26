@@ -415,10 +415,12 @@ final class AppModel {
 
     /// Bring the selected repository's remote refs up to date. The setting gates
     /// background fetches only; explicit Refresh also bypasses the rate limit. Writing
-    /// refs is what makes the merge check re-run, through the repository watcher.
+    /// refs is what makes the merge check re-run, through the repository watcher. The
+    /// rows' sync facts are re-read here too: the watcher is off in low power.
     func refreshRemotes(force: Bool, now: Date = Date()) async {
-        guard force || fetchAutomatically, let repo = selector.selectedRepo else { return }
-        await remoteRefresher.fetch(repoPath: repo.path, force: force, now: now)
+        guard force || fetchAutomatically, let repo = selector.selectedRepo,
+              await remoteRefresher.fetch(repoPath: repo.path, force: force, now: now) else { return }
+        await selector.refreshWorktreeInfo()
     }
 
     /// The branch (full ref, e.g. `refs/heads/release/2`) this repository's

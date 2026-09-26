@@ -220,17 +220,20 @@ final class SelectorModel {
         return (raw as NSString).isAbsolutePath ? raw : (repo.path as NSString).appendingPathComponent(raw)
     }
 
-    /// FSEvents on the repo's git common dir: re-scan only when the change touched the
-    /// worktree admin area (`worktrees/…`). Internal + async so it is unit-testable
-    /// without real FSEvents.
+    /// FSEvents on the repo's git common dir: re-scan when the change touched the
+    /// worktree admin area (`worktrees/…`); re-read the rows' sync facts when only
+    /// refs moved (a fetch, a commit, a deleted remote branch). Internal + async so
+    /// it is unit-testable without real FSEvents.
     func handleRepoWatchEvent(_ changedPaths: [String]) async {
         guard selectedRepo != nil, let adminDir = worktreesAdminDir else { return }
         let commonDir = (adminDir as NSString).deletingLastPathComponent
-        if changedPaths.contains(where: { $0.hasPrefix(commonDir + "/refs/") || $0 == commonDir + "/packed-refs" }) {
-            mergeRevision += 1
+        let refsChanged = changedPaths.contains { $0.hasPrefix(commonDir + "/refs/") || $0 == commonDir + "/packed-refs" }
+        if refsChanged { mergeRevision += 1 }
+        if changedPaths.contains(where: { $0.hasPrefix(adminDir) }) {
+            await refreshWorktrees()
+        } else if refsChanged {
+            await refreshWorktreeInfo()
         }
-        guard changedPaths.contains(where: { $0.hasPrefix(adminDir) }) else { return }
-        await refreshWorktrees()
     }
 
     /// Re-discover the repo's worktrees + branches in place — the manual Refresh
