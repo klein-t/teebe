@@ -27,14 +27,17 @@ private actor MergeScanStub: WorktreeCleanupChecking {
 
 /// Two worktrees. `/repo/other` is merged only while `dev` is where it started,
 /// so a moved target shows up in every row. Each scan is stamped with its call
-/// number (as `problem`), and any call can be held open.
+/// number (as `problem`), and any call can be held open. A stamp is a problem,
+/// which keeps a row out of Safe to delete, so tests about grouping turn it off.
 private actor ScriptedScan: WorktreeCleanupChecking {
     private(set) var calls = 0
     private var devSHA = "abc"
     private var dirtyFeature = false
+    private var stampsFeature = true
     private var gates: [Int: Gate] = [:]
     func moveDev(to sha: String) { devSHA = sha }
     func setFeatureDirty(_ dirty: Bool) { dirtyFeature = dirty }
+    func setStampsFeature(_ stamps: Bool) { stampsFeature = stamps }
     func hold(call: Int, _ gate: Gate) { gates[call] = gate }
     func scan(repoPath: String, extraTarget: String?) async throws -> CleanupSnapshot {
         calls += 1
@@ -42,12 +45,13 @@ private actor ScriptedScan: WorktreeCleanupChecking {
         // A real scan reads the refs first, then inspects the checkouts.
         let dev = devSHA
         let dirty = dirtyFeature
+        let stamps = stampsFeature
         if let gate = gates[call] { await gate.wait() }
         let targets = CleanupTargets.parse("refs/heads/dev\u{0}\(dev)\u{0}\u{0}\n")
         var feature = CleanupEntry(worktree: Worktree(path: repoPath + "/feature", branch: "feature"))
         feature.mergeStatus = .merged
         feature.hasLocalChanges = dirty
-        feature.problem = "scan \(call)"
+        if stamps { feature.problem = "scan \(call)" }
         var other = CleanupEntry(worktree: Worktree(path: repoPath + "/other", branch: "other"))
         other.mergeStatus = dev == "abc" ? .merged : .notConfirmed
         other.problem = "scan \(call)"
@@ -351,6 +355,7 @@ struct WorktreeMergeModelTests {
     func statusOverlayForEveryRow() async {
         let service = ScriptedScan()
         await service.setFeatureDirty(true)
+        await service.setStampsFeature(false)
         let model = makeModel(service)
         await model.refresh(repo: Repository(path: "/repo"), extraTarget: nil, enabled: true)
         #expect(model.entry(for: "/repo/feature", localChangeCount: nil)?.entry.hasLocalChanges == true)
@@ -368,6 +373,7 @@ struct WorktreeMergeModelTests {
         git.statusResult = StatusParser.parse("? new.txt\u{0}")
         let service = ScriptedScan()
         await service.setFeatureDirty(true)
+        await service.setStampsFeature(false)
         let app = AppModel(environment: makeTestEnvironment(git: git), mergeService: service)
         app.mergeStatus.scanDebounce = .zero
         _ = await app.addRepository(path: "/repo")
