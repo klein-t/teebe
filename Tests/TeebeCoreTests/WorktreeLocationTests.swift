@@ -4,8 +4,8 @@ import Testing
 
 @Suite("New worktree location")
 struct WorktreeLocationTests {
-    private let repo = "/Users/k/code/teebe"
-    private let primary = Worktree(path: "/Users/k/code/teebe", branch: "main", isPrimary: true)
+    private let repo = "/Users/dev/code/teebe"
+    private let primary = Worktree(path: "/Users/dev/code/teebe", branch: "main", isPrimary: true)
 
     private func linked(_ path: String) -> Worktree { Worktree(path: path, branch: "x") }
 
@@ -15,46 +15,46 @@ struct WorktreeLocationTests {
     func rememberedWins() {
         let parent = WorktreeLocation.parentFolder(
             repoPath: repo, remembered: "/Volumes/work/trees",
-            worktrees: [primary, linked("/Users/k/trees/teebe-a")])
+            worktrees: [primary, linked("/Users/dev/trees/teebe-a")])
         #expect(parent == "/Volumes/work/trees")
     }
 
     @Test("an empty remembered folder is ignored")
     func emptyRememberedIgnored() {
         #expect(WorktreeLocation.parentFolder(repoPath: repo, remembered: "", worktrees: [primary])
-            == "/Users/k/code")
+            == "/Users/dev/code")
     }
 
     @Test("linked worktrees sharing a parent folder set it")
     func sharedParent() {
         let parent = WorktreeLocation.parentFolder(
             repoPath: repo, remembered: nil,
-            worktrees: [primary, linked("/Users/k/trees/teebe-a"), linked("/Users/k/trees/teebe-b")])
-        #expect(parent == "/Users/k/trees")
+            worktrees: [primary, linked("/Users/dev/trees/teebe-a"), linked("/Users/dev/trees/teebe-b")])
+        #expect(parent == "/Users/dev/trees")
     }
 
     @Test("the primary checkout's own parent doesn't count as a linked worktree's")
     func primaryExcluded() {
         let parent = WorktreeLocation.parentFolder(
             repoPath: repo, remembered: nil,
-            worktrees: [Worktree(path: "/elsewhere/teebe", isPrimary: true), linked("/Users/k/trees/teebe-a")])
-        #expect(parent == "/Users/k/trees")
+            worktrees: [Worktree(path: "/elsewhere/teebe", isPrimary: true), linked("/Users/dev/trees/teebe-a")])
+        #expect(parent == "/Users/dev/trees")
     }
 
     @Test("linked worktrees in different folders are ambiguous: fall back to a sibling")
     func ambiguousParent() {
         let parent = WorktreeLocation.parentFolder(
             repoPath: repo, remembered: nil,
-            worktrees: [primary, linked("/Users/k/trees/teebe-a"), linked("/tmp/teebe-b")])
-        #expect(parent == "/Users/k/code")
+            worktrees: [primary, linked("/Users/dev/trees/teebe-a"), linked("/tmp/teebe-b")])
+        #expect(parent == "/Users/dev/code")
     }
 
     @Test("no linked worktrees: a sibling of the repository")
     func siblingFallback() {
         #expect(WorktreeLocation.parentFolder(repoPath: repo, remembered: nil, worktrees: [primary])
-            == "/Users/k/code")
+            == "/Users/dev/code")
         #expect(WorktreeLocation.parentFolder(repoPath: repo, remembered: nil, worktrees: [])
-            == "/Users/k/code")
+            == "/Users/dev/code")
     }
 
     // MARK: - Folder name

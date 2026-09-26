@@ -108,7 +108,7 @@ private enum Rollout {
 @Suite("Codex rollout records")
 struct CodexRolloutRecordTests {
     let now = Date(timeIntervalSince1970: 1_790_335_000)
-    let lens = "/private/tmp/katast-housing-affordability"
+    let lens = "/private/tmp/acme-feature"
 
     @Test("lifecycle, calls, outputs and targets are read from real record shapes")
     func parse() throws {
@@ -125,8 +125,8 @@ struct CodexRolloutRecordTests {
             line: Rollout.command(workdir: lens, escalated: true, call: "c2", at: now)))
         #expect(command.kind == .toolCall(callID: "c2", question: false, escalated: true))
         #expect(command.targets == [lens])
-        #expect(CodexRolloutRecord.parse(line: Rollout.execCommand(workdir: "/Users/k/katast", call: "c3", at: now))?
-            .targets == ["/Users/k/katast"])
+        #expect(CodexRolloutRecord.parse(line: Rollout.execCommand(workdir: "/Users/dev/acme", call: "c3", at: now))?
+            .targets == ["/Users/dev/acme"])
         #expect(CodexRolloutRecord.parse(line: Rollout.ask(call: "c4", at: now))?.kind
             == .toolCall(callID: "c4", question: true, escalated: false))
         #expect(CodexRolloutRecord.parse(line: Rollout.output(call: "c1", at: now))?.kind == .toolOutput(callID: "c1"))
@@ -150,10 +150,10 @@ struct CodexRolloutRecordTests {
 @Suite("Codex rollout scanner")
 struct CodexRolloutScannerTests {
     let now = Date(timeIntervalSince1970: 1_790_335_000)
-    let launch = "/Users/k/Documents/CODE/teebe"
-    let katast = "/Users/k/katast"
-    let lens = "/private/tmp/katast-housing-affordability"
-    var katastPaths: [String] { [katast, lens] }
+    let launch = "/Users/dev/code/teebe"
+    let acme = "/Users/dev/acme"
+    let lens = "/private/tmp/acme-feature"
+    var acmePaths: [String] { [acme, lens] }
 
     struct Fixture {
         var root: URL
@@ -185,8 +185,8 @@ struct CodexRolloutScannerTests {
     let childID = "01a0d846-f616-7a53-b1ef-2eafab1f808b"
     let guardianID = "01a0d846-f674-7533-aab9-8df384a9a379"
 
-    /// The user's case: a TUI launched in the teebe checkout editing a katast
-    /// worktree through absolute paths, mid-turn.
+    /// The user's case: a TUI launched in the teebe checkout editing another
+    /// project's worktree through absolute paths, mid-turn.
     func userTurn(_ tail: [String]) -> [String] {
         [Rollout.meta(id: parentID, cwd: launch, at: now.addingTimeInterval(-600)),
          Rollout.context(cwd: launch, at: now.addingTimeInterval(-300)),
@@ -198,13 +198,13 @@ struct CodexRolloutScannerTests {
         let fx = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fx.root) }
         try write(userTurn([
-            Rollout.patch(lens + "/src/katast/api/v1/maps.py", call: "c1", at: now.addingTimeInterval(-30)),
+            Rollout.patch(lens + "/src/acme/api/v1/maps.py", call: "c1", at: now.addingTimeInterval(-30)),
             Rollout.output(call: "c1", at: now.addingTimeInterval(-29)),
             Rollout.reasoning(at: now.addingTimeInterval(-3))
         ]), id: parentID, fx)
-        let states = fx.scanner.states(forWorktreePaths: katastPaths, now: now)
+        let states = fx.scanner.states(forWorktreePaths: acmePaths, now: now)
         #expect(states[lens] == .working)
-        #expect(states[katast] == .idle)
+        #expect(states[acme] == .idle)
         // Seen from the repo it was launched in, it is still that checkout's session.
         #expect(fx.scanner.states(forWorktreePaths: [launch], now: now)[launch] == .working)
     }
@@ -220,7 +220,7 @@ struct CodexRolloutScannerTests {
                 Rollout.event(end, at: now.addingTimeInterval(-20)),
                 Rollout.event("token_count", at: now.addingTimeInterval(-19))
             ]), id: parentID, fx)
-            #expect(fx.scanner.states(forWorktreePaths: katastPaths, now: now)[lens] == .needsAttention)
+            #expect(fx.scanner.states(forWorktreePaths: acmePaths, now: now)[lens] == .needsAttention)
         }
     }
 
@@ -232,7 +232,7 @@ struct CodexRolloutScannerTests {
             Rollout.command(workdir: lens, call: "c0", at: now.addingTimeInterval(-50)),
             Rollout.ask(call: "c1", at: now.addingTimeInterval(-5))
         ]), id: parentID, fx)
-        #expect(fx.scanner.states(forWorktreePaths: katastPaths, now: now)[lens] == .needsAttention)
+        #expect(fx.scanner.states(forWorktreePaths: acmePaths, now: now)[lens] == .needsAttention)
 
         for (reviewer, age, expected) in [("user", 90.0, AgentActivityState.needsAttention),
                                           ("user", 10.0, .working), ("auto_review", 90.0, .working)] {
@@ -243,7 +243,7 @@ struct CodexRolloutScannerTests {
                          Rollout.event("task_started", at: now.addingTimeInterval(-300)),
                          Rollout.command(workdir: lens, escalated: true, call: "c2", at: now.addingTimeInterval(-age))]
             try write(lines, id: parentID, fx)
-            #expect(fx.scanner.states(forWorktreePaths: katastPaths, now: now)[lens] == expected)
+            #expect(fx.scanner.states(forWorktreePaths: acmePaths, now: now)[lens] == expected)
         }
     }
 
@@ -264,7 +264,7 @@ struct CodexRolloutScannerTests {
         let filler = (0..<40).map { Rollout.reasoning(at: now.addingTimeInterval(-200 + Double($0))) }
         try write(userTurn(filler + [Rollout.fileChange(lens + "/web/lib/a.ts", at: now.addingTimeInterval(-2))]),
                   id: parentID, fx)
-        #expect(fx.scanner.states(forWorktreePaths: katastPaths, now: now)[lens] == .working)
+        #expect(fx.scanner.states(forWorktreePaths: acmePaths, now: now)[lens] == .working)
     }
 
     @Test("a working subagent lights its worktree and its parent's; a finished one and guardians add nothing")
@@ -272,8 +272,8 @@ struct CodexRolloutScannerTests {
         let fx = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fx.root) }
         // The parent's turn ended long enough ago to be idle on its own.
-        try write([Rollout.meta(id: parentID, cwd: katast, at: now.addingTimeInterval(-4_000)),
-                   Rollout.context(cwd: katast, at: now.addingTimeInterval(-4_000)),
+        try write([Rollout.meta(id: parentID, cwd: acme, at: now.addingTimeInterval(-4_000)),
+                   Rollout.context(cwd: acme, at: now.addingTimeInterval(-4_000)),
                    Rollout.event("task_complete", at: now.addingTimeInterval(-3_900))],
                   id: parentID, fx, mtime: now.addingTimeInterval(-3_900))
         try write([Rollout.meta(id: childID, cwd: launch, source: Rollout.subagentSource(parent: parentID),
@@ -283,9 +283,9 @@ struct CodexRolloutScannerTests {
         try write([Rollout.meta(id: guardianID, cwd: launch, source: Rollout.guardianSource, at: now.addingTimeInterval(-60)),
                    Rollout.context(cwd: launch, at: now.addingTimeInterval(-60)),
                    Rollout.event("task_started", at: now.addingTimeInterval(-60))], id: guardianID, fx)
-        var states = fx.scanner.states(forWorktreePaths: katastPaths + [launch], now: now)
+        var states = fx.scanner.states(forWorktreePaths: acmePaths + [launch], now: now)
         #expect(states[lens] == .working)
-        #expect(states[katast] == .working)
+        #expect(states[acme] == .working)
         #expect(states[launch] == .idle)
 
         try write([Rollout.meta(id: childID, cwd: launch, source: Rollout.subagentSource(parent: parentID),
@@ -293,8 +293,8 @@ struct CodexRolloutScannerTests {
                    Rollout.event("task_started", at: now.addingTimeInterval(-300)),
                    Rollout.commandDone(cwd: lens, at: now.addingTimeInterval(-40)),
                    Rollout.event("task_complete", at: now.addingTimeInterval(-4))], id: childID, fx)
-        states = fx.scanner.states(forWorktreePaths: katastPaths + [launch], now: now)
-        #expect(states == [lens: .idle, katast: .idle, launch: .idle])
+        states = fx.scanner.states(forWorktreePaths: acmePaths + [launch], now: now)
+        #expect(states == [lens: .idle, acme: .idle, launch: .idle])
     }
 
     @Test("resumed threads are read from their date folder, however old")
@@ -303,14 +303,14 @@ struct CodexRolloutScannerTests {
         defer { try? FileManager.default.removeItem(at: fx.root) }
         try write(userTurn([Rollout.patch(lens + "/a.py", call: "c1", at: now.addingTimeInterval(-3))]),
                   id: parentID, fx, daysAgo: 4)
-        #expect(fx.scanner.states(forWorktreePaths: katastPaths, now: now)[lens] == .working)
+        #expect(fx.scanner.states(forWorktreePaths: acmePaths, now: now)[lens] == .working)
         try FileManager.default.removeItem(at: fx.root)
         // Started 45 days ago, resumed today: the rollout is written where it began.
         let fresh = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fresh.root) }
         try write(userTurn([Rollout.patch(lens + "/a.py", call: "c1", at: now.addingTimeInterval(-3))]),
                   id: parentID, fresh, daysAgo: 45)
-        #expect(fresh.scanner.states(forWorktreePaths: katastPaths, now: now)[lens] == .working)
+        #expect(fresh.scanner.states(forWorktreePaths: acmePaths, now: now)[lens] == .working)
     }
 
     @Test("an old thread resumed after a scan is found by the next look at the older folders, and followed after")
@@ -319,19 +319,19 @@ struct CodexRolloutScannerTests {
         defer { try? FileManager.default.removeItem(at: fx.root) }
         let lines = userTurn([Rollout.patch(lens + "/a.py", call: "c1", at: now.addingTimeInterval(-3))])
         try write(lines, id: parentID, fx, daysAgo: 90, mtime: now.addingTimeInterval(-90 * 86_400))
-        #expect(fx.scanner.states(forWorktreePaths: katastPaths, now: now)[lens] == .idle)
+        #expect(fx.scanner.states(forWorktreePaths: acmePaths, now: now)[lens] == .idle)
 
         // Resumed: new records, a fresh modification time.
         let later = now.addingTimeInterval(fx.scanner.archiveInterval + 1)
         let resumed = lines.dropLast() + [Rollout.patch(lens + "/a.py", call: "c1", at: later.addingTimeInterval(-3))]
         try write(Array(resumed), id: parentID, fx, daysAgo: 90, mtime: later.addingTimeInterval(-1))
-        #expect(fx.scanner.states(forWorktreePaths: katastPaths, now: later)[lens] == .working)
+        #expect(fx.scanner.states(forWorktreePaths: acmePaths, now: later)[lens] == .working)
 
         // Between looks at the older folders, a thread already found is still read
         // on every scan: its turn ending shows at once.
         let soon = later.addingTimeInterval(2)
         try write(Array(resumed) + [Rollout.event("task_complete", at: soon.addingTimeInterval(-1))],
                   id: parentID, fx, daysAgo: 90, mtime: soon.addingTimeInterval(-1))
-        #expect(fx.scanner.states(forWorktreePaths: katastPaths, now: soon)[lens] == .needsAttention)
+        #expect(fx.scanner.states(forWorktreePaths: acmePaths, now: soon)[lens] == .needsAttention)
     }
 }

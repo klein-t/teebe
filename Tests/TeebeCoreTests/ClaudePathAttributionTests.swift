@@ -32,9 +32,9 @@ private func toolResult(at date: Date, cwd: String) -> String {
 @Suite("Claude Code sessions are attributed by the paths they touch")
 struct ClaudePathAttributionTests {
     let now = Date(timeIntervalSince1970: 1_784_000_000)
-    let launch = "/Users/k/Documents/CODE/teebe"
-    let lens = "/private/tmp/katast-housing-affordability"
-    let other = "/private/tmp/katast-prod-preservation"
+    let launch = "/Users/dev/code/teebe"
+    let lens = "/private/tmp/acme-feature"
+    let other = "/private/tmp/acme-hotfix"
     var paths: [String] { [launch, lens, other] }
 
     struct Fixture {
@@ -75,7 +75,7 @@ struct ClaudePathAttributionTests {
         let fx = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fx.root) }
         try write([
-            toolUse("Edit", input: #"{"file_path":"\#(lens)/src/katast/api/v1/maps.py","old_string":"a","new_string":"b"}"#,
+            toolUse("Edit", input: #"{"file_path":"\#(lens)/src/acme/api/v1/maps.py","old_string":"a","new_string":"b"}"#,
                     at: now.addingTimeInterval(-20), cwd: launch, id: "msg_01"),
             toolResult(at: now.addingTimeInterval(-19), cwd: launch),
             toolUse("Bash", input: #"{"command":"cd \#(lens) && pytest -q tests/api","timeout":600000}"#,
@@ -107,7 +107,7 @@ struct ClaudePathAttributionTests {
         let fx = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fx.root) }
         try write([
-            toolUse("Edit", input: #"{"file_path":"/tmp/katast-housing-affordability/web/lib/a.ts","old_string":"a","new_string":"b"}"#,
+            toolUse("Edit", input: #"{"file_path":"/tmp/acme-feature/web/lib/a.ts","old_string":"a","new_string":"b"}"#,
                     at: now.addingTimeInterval(-5), cwd: launch)
         ], fx)
         #expect(fx.scanner.states(forWorktreePaths: paths, now: now)[lens] == .working)
@@ -121,7 +121,7 @@ struct ClaudePathAttributionTests {
             toolUse("Edit", input: #"{"file_path":"\#(lens)/old.py","old_string":"a","new_string":"b"}"#,
                     at: now.addingTimeInterval(-900), cwd: launch, id: "msg_01"),
             toolResult(at: now.addingTimeInterval(-899), cwd: launch),
-            toolUse("Read", input: #"{"file_path":"/Users/k/.claude/CLAUDE.md"}"#,
+            toolUse("Read", input: #"{"file_path":"/Users/dev/.claude/CLAUDE.md"}"#,
                     at: now.addingTimeInterval(-5), cwd: launch, id: "msg_02")
         ], fx)
         let states = fx.scanner.states(forWorktreePaths: paths, now: now)

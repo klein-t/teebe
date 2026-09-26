@@ -4,25 +4,25 @@ import Testing
 
 @Suite("Harness-agnostic activity")
 struct GenericActivityTests {
-    let primary = "/Users/k/katast"
-    let nested = "/Users/k/katast/.claude/worktrees/avm-v1"
-    let lens = "/private/tmp/katast-housing-affordability"
+    let primary = "/Users/dev/acme"
+    let nested = "/Users/dev/acme/.claude/worktrees/audit"
+    let lens = "/private/tmp/acme-feature"
     var worktrees: [String] { [primary, nested, lens] }
 
     @Test("file events count for their deepest worktree, except Git bookkeeping, build output and caches")
     func routing() {
         #expect(WorktreeActivityRouter.changedWorktrees(
-            eventPaths: [lens + "/web/lib/housing-affordability.test.ts"], among: worktrees) == [lens])
+            eventPaths: [lens + "/web/lib/feature.test.ts"], among: worktrees) == [lens])
         #expect(WorktreeActivityRouter.changedWorktrees(
             eventPaths: [nested + "/src/a.py", primary + "/README.md"], among: worktrees) == [nested, primary])
         #expect(WorktreeActivityRouter.changedWorktrees(eventPaths: [
             primary + "/.git/index", primary + "/web/node_modules/.vite/deps/x.js", lens + "/web/.next/cache/a",
-            lens + "/src/katast/__pycache__/maps.cpython-313.pyc", lens + "/.DS_Store", "/elsewhere/file.txt"
+            lens + "/src/acme/__pycache__/maps.cpython-313.pyc", lens + "/.DS_Store", "/elsewhere/file.txt"
         ], among: worktrees).isEmpty)
         // Only components below the worktree root are checked: a checkout that
         // itself lives under a folder called build still reports its edits.
         #expect(WorktreeActivityRouter.changedWorktrees(
-            eventPaths: ["/Users/k/build/app/src/main.swift"], among: ["/Users/k/build/app"]) == ["/Users/k/build/app"])
+            eventPaths: ["/Users/dev/build/app/src/main.swift"], among: ["/Users/dev/build/app"]) == ["/Users/dev/build/app"])
     }
 
     @Test("a process counts when it burns CPU in the worktree; shells, agent UIs, editors and Teebe don't")

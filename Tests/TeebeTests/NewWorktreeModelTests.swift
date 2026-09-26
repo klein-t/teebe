@@ -6,7 +6,7 @@ import TeebeCore
 @MainActor
 @Suite("NewWorktreeModel")
 struct NewWorktreeModelTests {
-    private let repo = Repository(path: "/Users/k/code/teebe", name: "teebe")
+    private let repo = Repository(path: "/Users/dev/code/teebe", name: "teebe")
 
     private let branches = [
         Branch(name: "main", isCurrent: true),
@@ -21,7 +21,7 @@ struct NewWorktreeModelTests {
     private func model(
         comparison: String? = nil,
         primary: String? = "main",
-        parent: String = "/Users/k/code",
+        parent: String = "/Users/dev/code",
         registered: Set<String> = [],
         folderExists: @escaping @Sendable (String) -> Bool = { _ in false }
     ) -> NewWorktreeModel {
@@ -36,25 +36,25 @@ struct NewWorktreeModelTests {
     func defaultLocation() {
         let form = model()
         form.branch = "row-hover"
-        #expect(form.location == "/Users/k/code/teebe-row-hover")
+        #expect(form.location == "/Users/dev/code/teebe-row-hover")
     }
 
     @Test("slashes in the branch flatten into dashes, live as it's typed")
     func locationFollowsBranch() {
         let form = model()
         form.branch = "feat"
-        #expect(form.location == "/Users/k/code/teebe-feat")
+        #expect(form.location == "/Users/dev/code/teebe-feat")
         form.branch = "feat/row/hover"
-        #expect(form.location == "/Users/k/code/teebe-feat-row-hover")
+        #expect(form.location == "/Users/dev/code/teebe-feat-row-hover")
         form.branch = ""
         #expect(form.location.isEmpty)
     }
 
     @Test("the pre-filled parent folder is used")
     func usesParentFolder() {
-        let form = model(parent: "/Users/k/trees")
+        let form = model(parent: "/Users/dev/trees")
         form.branch = "x"
-        #expect(form.location == "/Users/k/trees/teebe-x")
+        #expect(form.location == "/Users/dev/trees/teebe-x")
     }
 
     @Test("choosing a folder moves the worktree there; the name keeps following the branch")
@@ -69,22 +69,22 @@ struct NewWorktreeModelTests {
 
     @Test("a folder that exists, or a path git already registered, gets a -2 suffix")
     func collisionsGetSuffixed() {
-        let onDisk = model(folderExists: { $0 == "/Users/k/code/teebe-taken" })
+        let onDisk = model(folderExists: { $0 == "/Users/dev/code/teebe-taken" })
         onDisk.branch = "taken"
-        #expect(onDisk.location == "/Users/k/code/teebe-taken-2")
+        #expect(onDisk.location == "/Users/dev/code/teebe-taken-2")
         #expect(onDisk.locationProblem == nil)
-        let registered = model(registered: ["/Users/k/code/teebe-gone"])
+        let registered = model(registered: ["/Users/dev/code/teebe-gone"])
         registered.branch = "gone"
-        #expect(registered.location == "/Users/k/code/teebe-gone-2")
+        #expect(registered.location == "/Users/dev/code/teebe-gone-2")
     }
 
     @Test("a repository with no remote still gets a location")
     func noRemote() {
         let form = NewWorktreeModel(repo: repo, branches: [Branch(name: "main", isCurrent: true)],
                                     comparisonBranch: nil, primaryBranch: "main",
-                                    parentFolder: "/Users/k/code", folderExists: { _ in false })
+                                    parentFolder: "/Users/dev/code", folderExists: { _ in false })
         form.branch = "feat/local"
-        #expect(form.location == "/Users/k/code/teebe-feat-local")
+        #expect(form.location == "/Users/dev/code/teebe-feat-local")
         #expect(form.canCreate)
     }
 
