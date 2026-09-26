@@ -133,7 +133,8 @@ struct WorktreeCleanupTests {
         let fixture = try GitFixture()
         defer { fixture.cleanup() }
         fixture.commitFile("a.txt", "base")
-        fixture.addWorktree(name: "feature", branch: "feature")
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.commitAndFastForward(branch: "feature", in: folder)
         let service = WorktreeCleanupService(git: ProcessGitClient())
         let snapshot = try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
         let primary = try #require(snapshot.entries.first { $0.worktree.isPrimary })
@@ -143,6 +144,7 @@ struct WorktreeCleanupTests {
         }
         fixture.commitFile("a.txt", "changed target")
         let entry = try #require(snapshot.entries.first { !$0.worktree.isPrimary })
+        #expect(entry.mergeStatus == .merged)
         await #expect(throws: (any Error).self) {
             try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: false, deleteBranch: false)
         }
@@ -271,4 +273,61 @@ struct WorktreeCleanupTests {
         #expect(!fixture.git(["rev-parse", "--verify", "feature"]).isEmpty)
     }
 
+    @Test("an unmerged worktree goes through the same checks: its folder goes, its branch and commits stay")
+    func unmergedRemoval() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.writeFile("f.txt", "unmerged work", in: folder)
+        fixture.stage(in: folder)
+        fixture.commit("unmerged work", in: folder)
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        let entry = try #require(try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
+            .entries.first { $0.worktree.branch == "feature" })
+        #expect(entry.mergeStatus == .notConfirmed)
+        // Deleting an unmerged branch is never on offer.
+        await #expect(throws: CleanupError.changed) {
+            try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: true, deleteBranch: true)
+        }
+        #expect(FileManager.default.fileExists(atPath: folder.path))
+        let outcome = try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: true, deleteBranch: false)
+        #expect(outcome == .notRequested)
+        #expect(!FileManager.default.fileExists(atPath: folder.path))
+        #expect(!fixture.git(["rev-parse", "--verify", "feature"]).isEmpty)
+    }
+
+    @Test("an unmerged worktree with hidden edits, new commits or a detached HEAD is not removed")
+    func unmergedProtections() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let hidden = fixture.addWorktree(name: "hidden", branch: "hidden")
+        let moved = fixture.addWorktree(name: "moved", branch: "moved")
+        let detached = fixture.root.appendingPathComponent("detached", isDirectory: true)
+        fixture.git(["worktree", "add", "-q", "--detach", detached.path, "HEAD"])
+        fixture.writeFile("d.txt", "detached work", in: detached)
+        fixture.stage(in: detached)
+        fixture.commit("detached work", in: detached)
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        let entries = try await service.scan(repoPath: fixture.repoPath, extraTarget: nil).entries
+        func entry(_ path: URL) throws -> CleanupEntry {
+            try #require(entries.first { PathUtil.standardized($0.id) == PathUtil.standardized(path.path) })
+        }
+        fixture.git(["update-index", "--skip-worktree", "a.txt"], in: hidden)
+        fixture.writeFile("a.txt", "hidden edits", in: hidden)
+        await #expect(throws: CleanupError.unsafe) {
+            try await service.remove(repoPath: fixture.repoPath, entry: try entry(hidden), includingIgnored: true, deleteBranch: false)
+        }
+        fixture.writeFile("m.txt", "new commit", in: moved)
+        fixture.stage(in: moved)
+        fixture.commit("new commit", in: moved)
+        await #expect(throws: CleanupError.changed) {
+            try await service.remove(repoPath: fixture.repoPath, entry: try entry(moved), includingIgnored: true, deleteBranch: false)
+        }
+        await #expect(throws: CleanupError.unsafe) {
+            try await service.remove(repoPath: fixture.repoPath, entry: try entry(detached), includingIgnored: true, deleteBranch: false)
+        }
+        for folder in [hidden, moved, detached] { #expect(FileManager.default.fileExists(atPath: folder.path)) }
+    }
 }
