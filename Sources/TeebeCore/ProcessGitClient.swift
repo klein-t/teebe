@@ -104,12 +104,37 @@ public struct ProcessGitClient: GitClient {
 
     public func fetchOrigin(repoPath: String) async throws {
         // A read of the remote, so it stays interruptible. The extra environment
-        // makes every credential path fail fast rather than waiting on a prompt.
-        let result = try await run(["fetch", "--quiet", "origin"], in: repoPath,
-                                   extraEnvironment: ["GIT_SSH_COMMAND": "ssh -o BatchMode=yes"])
+        // makes every credential path fail fast rather than waiting on a prompt,
+        // through the SSH command the repository already uses.
+        let configured = try? await run(["config", "--get", "core.sshCommand"], in: repoPath)
+        let sshCommand = configured.flatMap { $0.succeeded ? $0.stdoutString : nil }?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let environment = Self.fetchEnvironment(inherited: ProcessInfo.processInfo.environment,
+                                                sshCommand: sshCommand?.isEmpty == false ? sshCommand : nil)
+        let result = try await run(Self.fetchArguments, in: repoPath, extraEnvironment: environment)
         guard result.succeeded else {
             throw Self.mapError(arguments: result.arguments, directory: repoPath, result: result)
         }
+    }
+
+    /// Pruning drops tracking refs of branches deleted on the remote, which is what
+    /// lets a worktree's branch read as deleted there.
+    static let fetchArguments = ["fetch", "--quiet", "--prune", "origin"]
+
+    /// What a background fetch adds to the environment: SSH in batch mode, so it
+    /// fails instead of asking for a passphrase or a host key, and no askpass
+    /// dialog. The user's own SSH command (a per-repository key in
+    /// `core.sshCommand`, or `GIT_SSH_COMMAND`, which Git prefers) is kept and only
+    /// gets the batch option; a `GIT_SSH` program is left alone, since setting a
+    /// command would replace it.
+    static func fetchEnvironment(inherited: [String: String], sshCommand: String?) -> [String: String] {
+        var environment = ["SSH_ASKPASS_REQUIRE": "never"]
+        if let command = inherited["GIT_SSH_COMMAND"].flatMap({ $0.isEmpty ? nil : $0 }) ?? sshCommand {
+            environment["GIT_SSH_COMMAND"] = command + " -o BatchMode=yes"
+        } else if inherited["GIT_SSH"] == nil {
+            environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+        }
+        return environment
     }
 
     // MARK: - Low-level
