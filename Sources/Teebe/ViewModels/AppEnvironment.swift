@@ -44,6 +44,11 @@ struct AppEnvironment {
     /// Whether the volume a path lives on is mounted; a worktree on a drive that
     /// isn't connected is hidden, never forgotten. Overridable in tests.
     let isVolumeMounted: @Sendable (_ path: String) -> Bool
+    /// Asks the user for an app to open a file type with (`file` when opening one;
+    /// `current` is preselected). nil when canceled. Faked in tests.
+    let chooseApp: @MainActor (_ file: URL?, _ typeKey: String, _ current: URL?) -> URL?
+    /// Whether a remembered app is still installed. Overridable in tests.
+    let appExists: @Sendable (_ app: URL) -> Bool
 
     init(
         git: GitClient,
@@ -61,7 +66,9 @@ struct AppEnvironment {
         makeAgentPingListener: @escaping @MainActor () -> AgentPingListening = { DarwinAgentPingListener() },
         folderExists: @escaping @Sendable (String) -> Bool = { AppEnvironment.isDirectory($0) },
         folderIsGone: @escaping @Sendable (String) -> Bool = { MissingWorktrees.isGone($0) },
-        isVolumeMounted: @escaping @Sendable (String) -> Bool = { MissingWorktrees.isOnMountedVolume($0) }
+        isVolumeMounted: @escaping @Sendable (String) -> Bool = { MissingWorktrees.isOnMountedVolume($0) },
+        chooseApp: @escaping @MainActor (URL?, String, URL?) -> URL? = { AppChooser.choose(file: $0, typeKey: $1, current: $2) },
+        appExists: @escaping @Sendable (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
     ) {
         self.git = git
         self.opener = opener
@@ -79,6 +86,8 @@ struct AppEnvironment {
         self.folderExists = folderExists
         self.folderIsGone = folderIsGone
         self.isVolumeMounted = isVolumeMounted
+        self.chooseApp = chooseApp
+        self.appExists = appExists
     }
 
     nonisolated static func isDirectory(_ path: String) -> Bool {

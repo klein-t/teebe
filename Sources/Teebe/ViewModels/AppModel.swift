@@ -50,6 +50,8 @@ final class AppModel {
     let selector: SelectorModel
     let mergeStatus: WorktreeMergeModel
     let remoteRefresher: RemoteRefresher
+    /// The app each file type opens with (asked on first open, then remembered).
+    let openWith: OpenWithModel
 
     /// The group-header actions. Built on first use because they need the finished
     /// model back; one instance, so a removal in flight is visible everywhere.
@@ -78,6 +80,7 @@ final class AppModel {
         self.selector = SelectorModel(environment: environment)
         self.mergeStatus = WorktreeMergeModel(service: mergeService ?? WorktreeCleanupService(git: environment.git))
         self.remoteRefresher = RemoteRefresher(git: environment.git)
+        self.openWith = OpenWithModel(environment: environment, apps: self.state.openWithApps ?? [:])
         // Keep the legacy key so existing grouping choices survive the new default.
         self.groupWorktreesByMergeStatus = self.state.showMergeStatus ?? false
         self.fetchAutomatically = self.state.fetchAutomatically ?? true
@@ -93,6 +96,7 @@ final class AppModel {
         }
         // Deleted worktrees are never forgotten while a removal is running.
         self.selector.isRemovalRunning = { [weak self] in self?.groupActionsStorage?.isWorking == true }
+        self.openWith.onChange = { [weak self] in self?.persist() }
     }
 
     /// Single entry point for the global error banner. Replaces any existing
@@ -247,11 +251,12 @@ final class AppModel {
 
     // MARK: - File activation (double-click / context menu)
 
-    /// Open a file in its native app (D1). Directories are ignored.
+    /// Open a file in its native app (D1): the app remembered for its type, asking
+    /// which one the first time. Directories are ignored.
     func open(_ node: FileNode) {
         guard !node.isDirectory else { return }
         do {
-            try environment.opener.open(URL(fileURLWithPath: node.path))
+            try openWith.open(URL(fileURLWithPath: node.path))
             setError(nil)
         } catch {
             setError("Couldn't open \(node.name)")
@@ -262,15 +267,15 @@ final class AppModel {
         environment.opener.reveal(URL(fileURLWithPath: node.path))
     }
 
+    /// Open With…: pick the app, open the file with it, and remember it for the type.
     func openWith(_ node: FileNode) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        panel.allowedContentTypes = [.application]
-        panel.prompt = "Open With"
-        guard panel.runModal() == .OK, let appURL = panel.url else { return }
-        try? environment.opener.open(URL(fileURLWithPath: node.path), withApplicationAt: appURL)
+        guard !node.isDirectory else { return }
+        do {
+            try openWith.chooseAndOpen(URL(fileURLWithPath: node.path))
+            setError(nil)
+        } catch {
+            setError("Couldn't open \(node.name)")
+        }
     }
 
     func copyPath(_ node: FileNode) {
@@ -464,6 +469,7 @@ final class AppModel {
         state.fetchAutomatically = fetchAutomatically
         state.deleteBranchOnRemove = deleteBranchOnRemove
         state.appearance = appearance == .system ? nil : appearance.rawValue
+        state.openWithApps = openWith.apps.isEmpty ? nil : openWith.apps
         state.lastSelectedRepoPath = selector.selectedRepo?.path
         state.lastSelectedWorktreePath = selector.selectedWorktree?.path
         try? environment.store.save(state)

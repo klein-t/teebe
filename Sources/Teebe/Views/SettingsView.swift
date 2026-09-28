@@ -52,6 +52,8 @@ struct SettingsView: View {
                 extraMergeTargetRow
             }
 
+            openWithSection
+
             Section {
                 Toggle("Automatically check for updates", isOn: Binding(
                     get: { updater.automaticallyChecksForUpdates },
@@ -109,6 +111,55 @@ struct SettingsView: View {
             .font(.system(size: 11))
         }
         .disabled(repo == nil)
+    }
+
+    /// The app remembered for each file type: change it, or forget it so the next
+    /// open asks again.
+    private var openWithSection: some View {
+        Section {
+            if app.openWith.entries.isEmpty {
+                Text("None yet. The first time you open a file type, \(Brand.name) asks which app to use.")
+                    .font(Typography.secondary).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(app.openWith.entries) { entry in
+                    openWithRow(entry)
+                }
+            }
+        } header: {
+            HStack {
+                Text("Open files with")
+                Spacer()
+                if !app.openWith.entries.isEmpty {
+                    Button("Forget All") { app.openWith.forgetAll() }
+                        .buttonStyle(.link).font(Typography.secondary)
+                }
+            }
+        }
+    }
+
+    private func openWithRow(_ entry: OpenWithModel.Entry) -> some View {
+        HStack(spacing: 6) {
+            Text(entry.typeName)
+                .font(entry.typeKey == FileTypeKey.noExtension ? Typography.body : .system(size: 12, design: .monospaced))
+                .foregroundStyle(entry.typeKey == FileTypeKey.noExtension ? .secondary : .primary)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 8)
+            Image(nsImage: NSWorkspace.shared.icon(forFile: entry.appURL.path))
+                .resizable().frame(width: 16, height: 16)
+            Text(entry.appName)
+                .lineLimit(1).truncationMode(.tail)
+            Button("Change…") { app.openWith.changeApp(forType: entry.typeKey) }
+                .controlSize(.small)
+            Button {
+                app.openWith.forget(type: entry.typeKey)
+            } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Forget the app for \(entry.typeName)")
+            .hoverHelp("Forget, so the next open asks again")
+        }
     }
 
     /// `refs/remotes/origin/release/2` reads as `origin/release/2`.

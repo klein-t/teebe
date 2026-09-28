@@ -131,8 +131,10 @@ actor Gate {
 final class FakeFileOpener: FileOpener, @unchecked Sendable {
     private(set) var opened: [URL] = []
     private(set) var revealed: [URL] = []
-    func open(_ url: URL) throws { opened.append(url) }
-    func open(_ url: URL, withApplicationAt appURL: URL) throws {}
+    /// Each open's app (nil for the default app), parallel to `opened`.
+    private(set) var apps: [URL?] = []
+    func open(_ url: URL) throws { opened.append(url); apps.append(nil) }
+    func open(_ url: URL, withApplicationAt appURL: URL) throws { opened.append(url); apps.append(appURL) }
     func reveal(_ url: URL) { revealed.append(url) }
 }
 
@@ -261,7 +263,10 @@ func makeTestEnvironment(
     /// Defaults to "whatever `folderExists` says isn't there": fake paths are
     /// never on disk, so the real check would read every one as deleted.
     folderIsGone: (@Sendable (String) -> Bool)? = nil,
-    isVolumeMounted: @escaping @Sendable (String) -> Bool = { _ in true }
+    isVolumeMounted: @escaping @Sendable (String) -> Bool = { _ in true },
+    /// Defaults to picking a fake app, as if the user chose one every time.
+    chooseApp: @escaping @MainActor (URL?, String, URL?) -> URL? = { _, _, _ in URL(fileURLWithPath: "/Applications/Editor.app") },
+    appExists: @escaping @Sendable (URL) -> Bool = { _ in true }
 ) -> AppEnvironment {
     let storeURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("tb-test-\(UUID().uuidString)")
@@ -282,6 +287,8 @@ func makeTestEnvironment(
         makeAgentPingListener: { agentPing ?? FakeAgentPing() },
         folderExists: folderExists,
         folderIsGone: folderIsGone ?? { !folderExists($0) },
-        isVolumeMounted: isVolumeMounted
+        isVolumeMounted: isVolumeMounted,
+        chooseApp: chooseApp,
+        appExists: appExists
     )
 }
