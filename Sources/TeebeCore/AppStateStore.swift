@@ -76,6 +76,9 @@ public struct AppState: Codable, Equatable, Sendable {
     /// The folder last chosen for new worktrees, keyed by repository path.
     /// Optional so older state files decode; a missing entry means no choice yet.
     public var worktreeParentByRepo: [String: String]?
+    /// The app chosen to open each file type (a `FileTypeKey`), as the app's path.
+    /// Optional so older state files decode; a missing entry means ask on open.
+    public var openWithApps: [String: String]?
 
     public init(
         repositories: [PersistedRepository] = [],
@@ -92,7 +95,8 @@ public struct AppState: Codable, Equatable, Sendable {
         showMergeStatus: Bool? = nil,
         fetchAutomatically: Bool? = nil,
         deleteBranchOnRemove: Bool? = nil,
-        worktreeParentByRepo: [String: String]? = nil
+        worktreeParentByRepo: [String: String]? = nil,
+        openWithApps: [String: String]? = nil
     ) {
         self.repositories = repositories
         self.showChangedOnly = showChangedOnly
@@ -109,6 +113,7 @@ public struct AppState: Codable, Equatable, Sendable {
         self.fetchAutomatically = fetchAutomatically
         self.deleteBranchOnRemove = deleteBranchOnRemove
         self.worktreeParentByRepo = worktreeParentByRepo
+        self.openWithApps = openWithApps
     }
 }
 
