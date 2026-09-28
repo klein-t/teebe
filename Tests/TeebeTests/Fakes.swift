@@ -25,6 +25,11 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     /// When set, each `status` call awaits this before returning — lets a test hold a
     /// refresh "in flight" to exercise coalescing of watcher events.
     var statusGate: (@Sendable () async -> Void)?
+    /// Per-worktree `status` failures (keyed by worktree path).
+    var statusErrors: [String: GitError] = [:]
+    /// Every directory a `status` or `run` call was made in, in order.
+    private var gitDirectories: [String] = []
+    var touchedDirectories: [String] { statusLock.lock(); defer { statusLock.unlock() }; return gitDirectories }
 
     var beforeWorktrees: (@Sendable () async -> Void)?
     func worktrees(repoPath: String) async throws -> [Worktree] {
@@ -34,8 +39,9 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     }
     func branches(repoPath: String) async throws -> [Branch] { branchesResult }
     func status(worktreePath: String) async throws -> StatusResult {
-        statusLock.lock(); statusCalls += 1; statusLock.unlock()
+        statusLock.lock(); statusCalls += 1; gitDirectories.append(worktreePath); statusLock.unlock()
         if let statusGate { await statusGate() }
+        if let error = statusErrors[worktreePath] { throw error }
         return statusResult
     }
     var workingDiffHandler: (@Sendable (String) async -> DiffFile?)?
@@ -89,6 +95,7 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     var gitCommonDirOutput: String?
     @discardableResult
     func run(_ arguments: [String], in directory: String) async throws -> GitInvocationResult {
+        statusLock.lock(); gitDirectories.append(directory); statusLock.unlock()
         var stdout = Data()
         if arguments == ["rev-parse", "--git-common-dir"], let gitCommonDirOutput {
             stdout = Data(gitCommonDirOutput.utf8)
@@ -247,7 +254,8 @@ func makeTestEnvironment(
     processActivity: (@Sendable ([String], Date) -> Set<String>)? = nil,
     worktreesInUse: @escaping @Sendable ([String], Date) -> Set<String> = { _, _ in [] },
     notify: (@MainActor (String, String) -> Void)? = nil,
-    agentPing: AgentPingListening? = nil
+    agentPing: AgentPingListening? = nil,
+    folderExists: @escaping @Sendable (String) -> Bool = { _ in true }
 ) -> AppEnvironment {
     let storeURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("tb-test-\(UUID().uuidString)")
@@ -265,6 +273,7 @@ func makeTestEnvironment(
         processActivity: processActivity,
         worktreesInUse: worktreesInUse,
         notify: notify ?? { _, _ in },
-        makeAgentPingListener: { agentPing ?? FakeAgentPing() }
+        makeAgentPingListener: { agentPing ?? FakeAgentPing() },
+        folderExists: folderExists
     )
 }

@@ -135,6 +135,11 @@ struct WorktreesSection: View {
             Task { await app.mergeStatus.recheck(path: path) }
         }
         .sheet(item: $confirmation) { confirmationSheet($0) }
+        .onChange(of: app.isForgetMissingRequested, initial: true) { _, requested in
+            guard requested else { return }
+            app.isForgetMissingRequested = false
+            confirmation = .prune
+        }
         .sheet(isPresented: Binding(
             get: { app.newWorktree != nil },
             set: { if !$0 { app.newWorktree = nil } }

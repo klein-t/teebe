@@ -35,6 +35,9 @@ struct AppEnvironment {
     /// Factory for the darwin-notification listener the Claude Code hook pings
     /// (`notifyutil -p dev.teebe.agent`). Overridable with a fake in tests.
     let makeAgentPingListener: @MainActor () -> AgentPingListening
+    /// Whether a worktree's folder is still on disk (a registered worktree's
+    /// folder can be deleted behind Git's back). Overridable in tests.
+    let folderExists: @Sendable (_ path: String) -> Bool
 
     init(
         git: GitClient,
@@ -49,7 +52,8 @@ struct AppEnvironment {
         processActivity: (@Sendable ([String], Date) -> Set<String>)? = nil,
         worktreesInUse: @escaping @Sendable ([String], Date) -> Set<String> = { _, _ in [] },
         notify: @escaping @MainActor (String, String) -> Void = { _, _ in },
-        makeAgentPingListener: @escaping @MainActor () -> AgentPingListening = { DarwinAgentPingListener() }
+        makeAgentPingListener: @escaping @MainActor () -> AgentPingListening = { DarwinAgentPingListener() },
+        folderExists: @escaping @Sendable (String) -> Bool = { AppEnvironment.isDirectory($0) }
     ) {
         self.git = git
         self.opener = opener
@@ -64,6 +68,12 @@ struct AppEnvironment {
         self.worktreesInUse = worktreesInUse
         self.notify = notify
         self.makeAgentPingListener = makeAgentPingListener
+        self.folderExists = folderExists
+    }
+
+    nonisolated static func isDirectory(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     var worktreeService: WorktreeService { WorktreeService(git: git) }

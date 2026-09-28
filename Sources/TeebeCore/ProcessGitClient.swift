@@ -282,7 +282,10 @@ public struct ProcessGitClient: GitClient {
             do {
                 try process.run()
             } catch {
-                throw GitError.executableNotFound
+                let directory = process.currentDirectoryURL?.path ?? ""
+                var isDirectory: ObjCBool = false
+                let exists = FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory) && isDirectory.boolValue
+                throw ProcessGitClient.launchFailure(directory: directory, directoryExists: exists)
             }
             self.process = process
         }
@@ -300,6 +303,12 @@ public struct ProcessGitClient: GitClient {
             process = nil
             lock.unlock()
         }
+    }
+
+    /// Why `git` could not be started: a working directory that is gone (a
+    /// deleted worktree) is the usual cause; only otherwise is git itself missing.
+    static func launchFailure(directory: String, directoryExists: Bool) -> GitError {
+        directoryExists ? .executableNotFound : .workingDirectoryMissing(path: directory)
     }
 
     private static func mapError(arguments: [String], directory: String, result: GitInvocationResult) -> GitError {

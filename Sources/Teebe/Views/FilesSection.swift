@@ -42,49 +42,54 @@ struct FilesSection: View {
 
             if isOpen {
                 VStack(spacing: 0) {
-                    TextField("Search files", text: $worktree.searchQuery)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 12))
-                        .padding(.horizontal, 11).padding(.vertical, 5)
-                        .focused(searchFocused)
-                        .onChange(of: app.searchFocusRequest) { _, _ in searchFocused.wrappedValue = true }
-                        // ↓ drops focus into the results so the tree's arrow keys take over.
-                        .onKeyPress(.downArrow) {
-                            searchFocused.wrappedValue = false
-                            if let first = worktree.visibleRows.first,
-                               worktree.selectedPath == nil
-                                || !worktree.visibleRows.contains(where: { $0.node.path == worktree.selectedPath }) {
-                                worktree.select(first.node.path)
+                    if worktree.isFolderMissing {
+                        MissingFolderPlaceholder { app.requestForgetMissing() }
+                        Spacer(minLength: 0)
+                    } else {
+                        TextField("Search files", text: $worktree.searchQuery)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                            .padding(.horizontal, 11).padding(.vertical, 5)
+                            .focused(searchFocused)
+                            .onChange(of: app.searchFocusRequest) { _, _ in searchFocused.wrappedValue = true }
+                            // ↓ drops focus into the results so the tree's arrow keys take over.
+                            .onKeyPress(.downArrow) {
+                                searchFocused.wrappedValue = false
+                                if let first = worktree.visibleRows.first,
+                                   worktree.selectedPath == nil
+                                    || !worktree.visibleRows.contains(where: { $0.node.path == worktree.selectedPath }) {
+                                    worktree.select(first.node.path)
+                                }
+                                return .handled
                             }
-                            return .handled
-                        }
-                        // Enter opens the current (or first) result without leaving the field.
-                        .onKeyPress(.return) {
-                            guard let node = worktree.selectedNode ?? worktree.visibleRows.first?.node else { return .ignored }
-                            if node.isDirectory { worktree.toggleExpand(node) } else { app.open(node) }
-                            return .handled
-                        }
-                        // Esc clears the query first, then hands focus back to the tree.
-                        .onKeyPress(.escape) {
-                            if worktree.searchQuery.isEmpty { searchFocused.wrappedValue = false } else { worktree.searchQuery = "" }
-                            return .handled
-                        }
-                    ScrollViewReader { proxy in
-                        // Rows fade into the window's bottom edge while more are below,
-                        // like the WORKTREES and CHANGES lists.
-                        BottomFadingScrollView {
-                            FileRowsView(app: app, preview: preview)
-                        }
-                        .scrollBounceBehavior(.basedOnSize)
-                        // Keep the keyboard cursor on-screen: scroll the minimal amount
-                        // to reveal it when ↑/↓ moves selection past the visible edge.
-                        // Snap, don't animate — an animated scrollTo fights the row's
-                        // highlight animation and SwiftUI's relayout and reads as a
-                        // bounce (the old row flashes before settling). Finder/Xcode
-                        // snap on keyboard nav too.
-                        .onChange(of: worktree.selectedPath) { _, sel in
-                            guard app.activeSection == .files, let sel else { return }
-                            proxy.scrollTo(sel, anchor: nil)
+                            // Enter opens the current (or first) result without leaving the field.
+                            .onKeyPress(.return) {
+                                guard let node = worktree.selectedNode ?? worktree.visibleRows.first?.node else { return .ignored }
+                                if node.isDirectory { worktree.toggleExpand(node) } else { app.open(node) }
+                                return .handled
+                            }
+                            // Esc clears the query first, then hands focus back to the tree.
+                            .onKeyPress(.escape) {
+                                if worktree.searchQuery.isEmpty { searchFocused.wrappedValue = false } else { worktree.searchQuery = "" }
+                                return .handled
+                            }
+                        ScrollViewReader { proxy in
+                            // Rows fade into the window's bottom edge while more are below,
+                            // like the WORKTREES and CHANGES lists.
+                            BottomFadingScrollView {
+                                FileRowsView(app: app, preview: preview)
+                            }
+                            .scrollBounceBehavior(.basedOnSize)
+                            // Keep the keyboard cursor on-screen: scroll the minimal amount
+                            // to reveal it when ↑/↓ moves selection past the visible edge.
+                            // Snap, don't animate — an animated scrollTo fights the row's
+                            // highlight animation and SwiftUI's relayout and reads as a
+                            // bounce (the old row flashes before settling). Finder/Xcode
+                            // snap on keyboard nav too.
+                            .onChange(of: worktree.selectedPath) { _, sel in
+                                guard app.activeSection == .files, let sel else { return }
+                                proxy.scrollTo(sel, anchor: nil)
+                            }
                         }
                     }
                 }
@@ -103,6 +108,27 @@ struct FilesSection: View {
         }
         .frame(maxHeight: isOpen && liveResizing ? .infinity : nil)
         .clipped()
+    }
+}
+
+/// Stands in for the file list when the selected worktree's folder is gone: a
+/// calm explanation and the way out, instead of an empty tree and an error.
+struct MissingFolderPlaceholder: View {
+    let onForget: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("This worktree's folder is gone.", systemImage: "folder.badge.questionmark")
+                .font(Typography.bodyEmphasis)
+            Text("Git still lists it, but the folder was moved or deleted. Forget it to clean up.")
+                .font(Typography.secondary).foregroundStyle(Palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Forget…", action: onForget)
+                .controlSize(.small)
+                .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 30).padding(.vertical, 12)
     }
 }
 

@@ -100,6 +100,28 @@ struct ProcessGitClientTests {
         #expect(file.hunks.first?.lines.contains { $0.content == "line2 CHANGED" && $0.kind == .addition } == true)
     }
 
+    // MARK: Launch failures
+
+    @Test("git run in a deleted worktree folder reports the folder missing, not git")
+    func missingWorkingDirectory() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("README.md", "# repo\n")
+        let worktreePath = fixture.addWorktree(name: "wt-gone", branch: "gone").path
+        try FileManager.default.removeItem(atPath: worktreePath)
+
+        await #expect(throws: GitError.workingDirectoryMissing(path: worktreePath)) {
+            _ = try await git.status(worktreePath: worktreePath)
+        }
+    }
+
+    @Test("a launch failure in a folder that exists still means git itself is missing")
+    func launchFailureMapping() {
+        #expect(ProcessGitClient.launchFailure(directory: "/repo-gone", directoryExists: false)
+            == .workingDirectoryMissing(path: "/repo-gone"))
+        #expect(ProcessGitClient.launchFailure(directory: "/repo", directoryExists: true) == .executableNotFound)
+    }
+
     // MARK: Cancellation
 
     @Test("cancelling a task stops the git subprocess instead of waiting it out")

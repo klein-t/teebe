@@ -34,6 +34,9 @@ public enum GitError: Error, Sendable, Equatable {
     case worktreeBusy(path: String)
     /// `git` executable could not be located.
     case executableNotFound
+    /// The folder the command was to run in no longer exists (e.g. a deleted
+    /// worktree), so `git` could not be started there.
+    case workingDirectoryMissing(path: String)
     /// Output could not be decoded/parsed into the expected shape.
     case decodingFailed(String)
 }
