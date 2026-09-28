@@ -16,17 +16,28 @@ public struct SectionLayout: Codable, Equatable, Sendable {
     public var changesOpen: Bool
     public var filesOpen: Bool
     public var windowHeight: Double
+    public var worktreesHeight: Double?
+    /// Height the CHANGES list was dragged to, unclamped. Optional so older state
+    /// files (written before the divider existed) still decode.
+    public var changesHeight: Double?
+    public var collapsedWorktreeGroups: [String]?
 
     public init(
         worktreesOpen: Bool = true,
         changesOpen: Bool = true,
         filesOpen: Bool = true,
-        windowHeight: Double = 640
+        windowHeight: Double = 640,
+        worktreesHeight: Double? = nil,
+        changesHeight: Double? = nil,
+        collapsedWorktreeGroups: [String]? = nil
     ) {
         self.worktreesOpen = worktreesOpen
         self.changesOpen = changesOpen
         self.filesOpen = filesOpen
         self.windowHeight = windowHeight
+        self.worktreesHeight = worktreesHeight
+        self.changesHeight = changesHeight
+        self.collapsedWorktreeGroups = collapsedWorktreeGroups
     }
 }
 
@@ -52,6 +63,12 @@ public struct AppState: Codable, Equatable, Sendable {
     /// Appearance override: "light", "dark", or nil to follow the system. Optional so
     /// older state files decode.
     public var appearance: String?
+    /// Saved comparison refs by repository. Missing entries use automatic detection.
+    public var cleanupTargetByRepo: [String: String]?
+    public var showMergeStatus: Bool?
+    /// Fetch each repository's remote refs in the background. Optional so older
+    /// state files decode; nil means the default (on).
+    public var fetchAutomatically: Bool?
 
     public init(
         repositories: [PersistedRepository] = [],
@@ -63,7 +80,10 @@ public struct AppState: Codable, Equatable, Sendable {
         layoutByRepo: [String: SectionLayout]? = nil,
         lastSeenVersion: String? = nil,
         hookOfferResponse: String? = nil,
-        appearance: String? = nil
+        appearance: String? = nil,
+        cleanupTargetByRepo: [String: String]? = nil,
+        showMergeStatus: Bool? = nil,
+        fetchAutomatically: Bool? = nil
     ) {
         self.repositories = repositories
         self.showChangedOnly = showChangedOnly
@@ -75,6 +95,9 @@ public struct AppState: Codable, Equatable, Sendable {
         self.lastSeenVersion = lastSeenVersion
         self.hookOfferResponse = hookOfferResponse
         self.appearance = appearance
+        self.cleanupTargetByRepo = cleanupTargetByRepo
+        self.showMergeStatus = showMergeStatus
+        self.fetchAutomatically = fetchAutomatically
     }
 }
 
@@ -97,9 +120,22 @@ public final class AppStateStore: @unchecked Sendable {
 
     /// Load persisted state, returning a default `AppState` when the file is
     /// missing or unreadable (graceful first-run / corruption handling).
+    /// A file that exists but cannot be decoded is moved aside first: the app
+    /// saves again soon after loading, which would otherwise destroy the only
+    /// copy of a recoverable list of repositories.
     public func load() -> AppState {
         guard let data = try? Data(contentsOf: url) else { return AppState() }
-        return (try? JSONDecoder().decode(AppState.self, from: data)) ?? AppState()
+        if let state = try? JSONDecoder().decode(AppState.self, from: data) { return state }
+        setAside()
+        return AppState()
+    }
+
+    private func setAside() {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withTimeZone]
+        let name = url.lastPathComponent + ".corrupt-" + formatter.string(from: Date())
+        try? FileManager.default.moveItem(at: url, to: url.deletingLastPathComponent()
+            .appendingPathComponent(name))
     }
 
     public func save(_ state: AppState) throws {

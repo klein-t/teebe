@@ -29,6 +29,7 @@ final class SelectorModel {
     private(set) var branches: [Branch] = []
     /// Sync/activity info keyed by worktree path.
     private(set) var worktreeInfo: [String: WorktreeInfo] = [:]
+    private(set) var mergeRevision = 0
     var errorMessage: String?
 
     let worktree: WorktreeModel
@@ -74,8 +75,14 @@ final class SelectorModel {
         self.environment = environment
         self.worktree = WorktreeModel(environment: environment)
         // An external write to the active worktree should re-light its live dot
-        // immediately, without waiting for a manual refresh.
-        self.worktree.onActivity = { [weak self] _ in self?.refreshLiveState() }
+        // immediately, without waiting for a manual refresh. It must NOT bump
+        // `mergeRevision`: editing file content cannot change merge ancestry, and a
+        // busy agent fires a batch every 250 ms — each one would restart the whole
+        // merge scan. Ref writes go through `handleRepoWatchEvent`, worktree
+        // add/remove through `applyDiscovered`.
+        self.worktree.onActivity = { [weak self] _ in
+            self?.refreshLiveState()
+        }
     }
 
     /// Recompute only the cheap `isLive` flags from the activity monitor (no git),
@@ -132,11 +139,11 @@ final class SelectorModel {
         await startRepoWatching(repo)
         startAgentWatching()
         do {
-            worktrees = try await environment.worktreeService.worktrees(for: repo)
+            applyDiscovered(try await environment.worktreeService.worktrees(for: repo))
             branches = try await environment.branchService.branches(for: repo)
             errorMessage = nil
         } catch {
-            worktrees = []
+            applyDiscovered([])
             branches = []
             errorMessage = WorktreeModel.describe(error)
         }
@@ -183,6 +190,10 @@ final class SelectorModel {
     /// without real FSEvents.
     func handleRepoWatchEvent(_ changedPaths: [String]) async {
         guard selectedRepo != nil, let adminDir = worktreesAdminDir else { return }
+        let commonDir = (adminDir as NSString).deletingLastPathComponent
+        if changedPaths.contains(where: { $0.hasPrefix(commonDir + "/refs/") || $0 == commonDir + "/packed-refs" }) {
+            mergeRevision += 1
+        }
         guard changedPaths.contains(where: { $0.hasPrefix(adminDir) }) else { return }
         await refreshWorktrees()
     }
@@ -215,7 +226,7 @@ final class SelectorModel {
             errorMessage = WorktreeModel.describe(error)
             return
         }
-        worktrees = discovered
+        applyDiscovered(discovered)
         branches = discoveredBranches
         await refreshWorktreeInfo()
         // Keep the current selection if it still exists; only re-focus when it's gone.
@@ -229,6 +240,17 @@ final class SelectorModel {
             worktree.clear()
             onSelectionChange?()
         }
+    }
+
+    /// Adopt a freshly discovered worktree list. Merge ancestry can only have moved
+    /// when the set of checkouts changed or one of their HEADs did, so only that
+    /// bumps `mergeRevision`. Re-discovering the same trees — which is what a manual
+    /// Refresh, a selection change, or leaving low power (alt-tab) does — reuses the
+    /// last scan instead of restarting a full N-worktree check.
+    private func applyDiscovered(_ discovered: [Worktree]) {
+        func identity(_ trees: [Worktree]) -> [String] { trees.map { $0.path + "\u{0}" + $0.head } }
+        if identity(discovered) != identity(worktrees) { mergeRevision += 1 }
+        worktrees = discovered
     }
 
     /// Load per-worktree ahead/behind + change count + live state for the
@@ -405,12 +427,31 @@ final class SelectorModel {
     func highlightSelectedWorktree() { highlightedWorktree = selectedWorktree }
 
     /// Move the keyboard cursor one row (no switch — that happens on commit).
-    func moveWorktreeHighlight(by delta: Int) {
-        guard !worktrees.isEmpty else { return }
-        let base = highlightedWorktree ?? selectedWorktree
-        let index = base.flatMap { b in worktrees.firstIndex { $0.path == b.path } } ?? 0
-        let next = max(0, min(worktrees.count - 1, index + delta))
-        highlightedWorktree = worktrees[next]
+    func moveWorktreeHighlight(by delta: Int, in visibleRows: [Worktree]? = nil) {
+        let rows = visibleRows ?? worktrees
+        guard !rows.isEmpty else { return }
+        let edge = delta > 0 ? rows.count - 1 : 0
+        guard let base = highlightedWorktree ?? selectedWorktree else {
+            highlightedWorktree = rows[delta > 0 ? 0 : rows.count - 1]
+            return
+        }
+        if let index = rows.firstIndex(where: { $0.path == base.path }) {
+            highlightedWorktree = rows[max(0, min(rows.count - 1, index + delta))]
+            return
+        }
+        // The cursor sits on a row hidden inside a collapsed group, so it has no
+        // position in the visible list. Place it by the full worktree order and step
+        // to the nearest visible neighbour in the direction of travel — falling back
+        // to the first row would silently jump the cursor to the top of the list.
+        guard let origin = worktrees.firstIndex(where: { $0.path == base.path }) else {
+            highlightedWorktree = rows[delta > 0 ? 0 : rows.count - 1]
+            return
+        }
+        let visiblePaths = Set(rows.map(\.path))
+        let neighbour = delta > 0
+            ? worktrees[(origin + 1)...].first { visiblePaths.contains($0.path) }
+            : worktrees[..<origin].last { visiblePaths.contains($0.path) }
+        highlightedWorktree = neighbour ?? rows[edge]
     }
 
     /// Commit the highlighted worktree (Enter): switch to it unless it's already current.

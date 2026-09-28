@@ -21,6 +21,12 @@ struct PendingMutation: Equatable {
 final class WorktreeModel {
     private(set) var root: FileNode?
     private(set) var status: StatusResult?
+    /// The checkout `status` was read from. `worktreePath` moves the instant another
+    /// worktree is clicked, while the read itself lands a moment later, so anything
+    /// folding the live status into a row must key off this instead — otherwise the
+    /// row just clicked is briefly described by the previous checkout's status, which
+    /// drops it into the wrong group and jumps it back when the read arrives.
+    private(set) var statusPath: String?
     private(set) var changes: [FileChange] = []
     var filter: ChangeFilter = .all
     var showIgnored = false { didSet { childrenCache.removeAll(); rebuildTree() } }
@@ -120,6 +126,7 @@ final class WorktreeModel {
         watcher = nil
         root = nil
         status = nil
+        statusPath = nil
         changes = []
         worktreePath = nil
         errorMessage = nil
@@ -207,6 +214,7 @@ final class WorktreeModel {
         do {
             let result = try await environment.statusService.status(worktreePath: worktreePath)
             status = result
+            statusPath = worktreePath
             changes = result.changes
             errorMessage = nil
         } catch {

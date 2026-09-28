@@ -135,5 +135,12 @@ private struct RootWindowContent: View {
             )) { _ in
                 app.setBackgrounded(!NSApp.occlusionState.contains(.visible))
             }
+            // Coming back to the app is the moment its view of the remote is most
+            // likely stale. Rate-limited and silent; see RemoteRefresher.
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSApplication.didBecomeActiveNotification
+            )) { _ in
+                Task { await app.refreshRemotes(force: false) }
+            }
     }
 }

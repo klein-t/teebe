@@ -6,6 +6,56 @@ import TeebeCore
 @MainActor
 @Suite("AppModel")
 struct AppModelTests {
+    @Test("saved grouping preferences survive independently of automatic fetching", arguments: [true, false])
+    func savedGrouping(grouped: Bool) throws {
+        let env = makeTestEnvironment()
+        try env.store.save(AppState(showMergeStatus: grouped, fetchAutomatically: false))
+        let app = AppModel(environment: env)
+        #expect(app.groupWorktreesByMergeStatus == grouped)
+        #expect(!app.fetchAutomatically)
+        app.groupWorktreesByMergeStatus.toggle()
+        let restored = AppModel(environment: env)
+        #expect(restored.groupWorktreesByMergeStatus == !grouped)
+        #expect(!restored.fetchAutomatically)
+    }
+
+    @Test("startup deduplicates history, restores selection, and defaults to a flat worktree list")
+    func historyMigration() async throws {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/a", branch: "main", isPrimary: true)]
+        let env = makeTestEnvironment(git: git)
+        try env.store.save(AppState(repositories: [PersistedRepository(path: "/a"), PersistedRepository(path: "/b"),
+                                                  PersistedRepository(path: "/a/")], lastSelectedRepoPath: "/a/"))
+        let app = AppModel(environment: env)
+        await app.bootstrap()
+        #expect(app.repositories.count == 2)
+        #expect(app.selector.selectedRepo?.path == "/a")
+        #expect(app.recentRepositories.first?.path == "/a")
+        #expect(env.store.load().repositories.count == 2)
+        #expect(!app.groupWorktreesByMergeStatus)
+        app.groupWorktreesByMergeStatus = true
+        app.floatOnTop = true
+        #expect(AppModel(environment: env).groupWorktreesByMergeStatus)
+        await app.selector.selectRepo(Repository(path: "/b"))
+        #expect(app.recentRepositories.first?.path == "/b")
+        #expect(app.repositories.count == 2)
+    }
+
+    @Test("concurrent adds cannot append the same repository twice")
+    func concurrentAdd() async {
+        let gate = AddRepositoryGate()
+        let git = FakeGitClient()
+        git.beforeWorktrees = { await gate.enter() }
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+        let first = Task { await app.addRepository(path: "/repo") }
+        let second = Task { await app.addRepository(path: "/repo") }
+        while await gate.arrivals < 2 { await Task.yield() }
+        await gate.open()
+        let results = await [first.value, second.value]
+        #expect(results.filter { $0 }.count == 1)
+        #expect(app.repositories.map(\.path) == ["/repo"])
+    }
+
     @Test("adding a valid git repo records and persists it")
     func addRepo() async {
         let git = FakeGitClient()
@@ -100,6 +150,17 @@ struct AppModelTests {
 @MainActor
 @Suite("SelectorModel")
 struct SelectorModelTests {
+    @Test("target ref changes refresh merge icons but ordinary index writes do not")
+    func mergeRefEvents() async {
+        let selector = SelectorModel(environment: makeTestEnvironment())
+        await selector.selectRepo(Repository(path: "/repo"))
+        let revision = selector.mergeRevision
+        await selector.handleRepoWatchEvent(["/repo/.git/index"])
+        #expect(selector.mergeRevision == revision)
+        await selector.handleRepoWatchEvent(["/repo/.git/refs/remotes/origin/dev"])
+        #expect(selector.mergeRevision == revision + 1)
+    }
+
     @Test("selecting a repo loads worktrees + branches and focuses primary")
     func selectRepo() async {
         let git = FakeGitClient()
@@ -202,6 +263,42 @@ struct SelectorModelTests {
         // (and its repeat-forever pulse animation) runs until the next rescan.
         await selector.refreshAgentStates(now: t.addingTimeInterval(30))
         #expect(selector.info(for: git.worktreesResult[0]).isLive == false)
+    }
+
+    @Test("edits, selection changes and focus returns reuse the last merge scan")
+    func mergeScanTriggers() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [
+            Worktree(path: "/repo", branch: "main", head: "aaa", isPrimary: true),
+            Worktree(path: "/repo-wt", branch: "feature", head: "bbb")
+        ]
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
+        await selector.selectRepo(Repository(path: "/repo"))
+        let before = selector.mergeRevision
+
+        // A busy agent fires a watcher batch every 250 ms. File content cannot
+        // change merge ancestry, so ten batches must not restart the scan even once.
+        for _ in 0..<10 { await selector.worktree.handleFileSystemEvent() }
+        #expect(selector.mergeRevision == before)
+
+        // Nor may clicking another worktree, or the window un-occluding on alt-tab.
+        await selector.selectWorktree(git.worktreesResult[1])
+        #expect(selector.mergeRevision == before)
+        for _ in 0..<2 {
+            await selector.setLowPower(true)
+            await selector.setLowPower(false)
+        }
+        #expect(selector.mergeRevision == before)
+
+        // A new checkout does move ancestry, so that one scans.
+        git.worktreesResult.append(Worktree(path: "/repo-new", branch: "new", head: "ccc"))
+        await selector.refreshWorktrees()
+        #expect(selector.mergeRevision == before + 1)
+
+        // And so does a commit in an existing checkout.
+        git.worktreesResult[1].head = "ddd"
+        await selector.refreshWorktrees()
+        #expect(selector.mergeRevision == before + 2)
     }
 
     @Test("refreshWorktreeInfo computes live state alongside sync counts")
@@ -760,4 +857,11 @@ struct LastWindowClosedTests {
         #expect(!AppDelegate.hasVisibleWindow([(visible: false, isPanel: false), (visible: true, isPanel: true)]))
         #expect(!AppDelegate.hasVisibleWindow([]))
     }
+}
+
+private actor AddRepositoryGate {
+    private let gate = Gate()
+    private(set) var arrivals = 0
+    func enter() async { arrivals += 1; await gate.wait() }
+    func open() async { await gate.open() }
 }

@@ -62,7 +62,7 @@ struct PreviewPanel: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
-                .help("Unified or side-by-side")
+                .hoverHelp("Choose unified or side-by-side diff", highlight: false)
             }
         }
         .font(.system(size: 12, design: .monospaced))

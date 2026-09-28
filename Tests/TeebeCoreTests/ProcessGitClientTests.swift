@@ -23,6 +23,42 @@ struct ProcessGitClientTests {
         #expect(worktrees.contains { $0.branch == "feature" })
     }
 
+    @Test("worktree add arguments put the start point after the path")
+    func worktreeAddArguments() {
+        #expect(ProcessGitClient.worktreeAddArguments(
+            path: "/tmp/wt", branch: "feat", createBranch: true, startPoint: "origin/dev")
+            == ["worktree", "add", "-b", "feat", "/tmp/wt", "origin/dev"])
+        #expect(ProcessGitClient.worktreeAddArguments(
+            path: "/tmp/wt", branch: "feat", createBranch: true, startPoint: nil)
+            == ["worktree", "add", "-b", "feat", "/tmp/wt"])
+        // An empty start point means "from HEAD", same as nil.
+        #expect(ProcessGitClient.worktreeAddArguments(
+            path: "/tmp/wt", branch: "feat", createBranch: true, startPoint: "")
+            == ["worktree", "add", "-b", "feat", "/tmp/wt"])
+        // Checking out an existing branch: the branch is the trailing argument and
+        // a start point would be meaningless.
+        #expect(ProcessGitClient.worktreeAddArguments(
+            path: "/tmp/wt", branch: "feat", createBranch: false, startPoint: "origin/dev")
+            == ["worktree", "add", "/tmp/wt", "feat"])
+    }
+
+    @Test("worktree add branches from the given start point")
+    func worktreeAddFromStartPoint() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("seed.txt", "seed\n")
+        let base = fixture.currentHead()
+        fixture.createBranch("base")
+        fixture.commitFile("later.txt", "later\n")
+
+        let linked = fixture.root.appendingPathComponent("from-base").path
+        try await git.addWorktree(repoPath: fixture.repoPath, path: linked, branch: "feat",
+                                  createBranch: true, startPoint: "base")
+        let head = fixture.git(["rev-parse", "HEAD"], in: URL(fileURLWithPath: linked))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(head == base)
+    }
+
     // MARK: M2 — Status & change model
 
     @Test("status reports working changes across kinds")
@@ -62,6 +98,68 @@ struct ProcessGitClientTests {
         #expect(file.addedCount == 1)
         #expect(file.removedCount == 1)
         #expect(file.hunks.first?.lines.contains { $0.content == "line2 CHANGED" && $0.kind == .addition } == true)
+    }
+
+    // MARK: Cancellation
+
+    @Test("cancelling a task stops the git subprocess instead of waiting it out")
+    func cancellationStopsGit() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        // A FIFO nobody writes to: `git apply` blocks on the open until it is killed.
+        let blocker = fixture.root.appendingPathComponent("blocking.patch").path
+        #expect(mkfifo(blocker, 0o600) == 0)
+        let started = Date()
+        let task = Task { try await git.run(["apply", blocker], in: fixture.repoPath) }
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(!fixture.git(["status", "--porcelain"]).contains("blocking"))
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(Date().timeIntervalSince(started) < 5)
+    }
+
+    @Test("a cancelled task still finishes a worktree removal")
+    func removalIgnoresCancellation() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        let task = Task {
+            try? await Task.sleep(for: .seconds(60))
+            #expect(Task.isCancelled)
+            try await git.removeWorktree(repoPath: fixture.repoPath, worktreePath: folder.path, force: false)
+        }
+        task.cancel()
+        try await task.value
+        #expect(!FileManager.default.fileExists(atPath: folder.path))
+    }
+
+    @Test("prune drops a worktree whose folder is gone and keeps one that is still there")
+    func prune() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let gone = fixture.addWorktree(name: "gone", branch: "gone")
+        let kept = fixture.addWorktree(name: "kept", branch: "kept")
+        try FileManager.default.removeItem(at: gone)
+
+        try await git.pruneWorktrees(repoPath: fixture.repoPath)
+
+        let paths = try await git.worktrees(repoPath: fixture.repoPath).map(\.path)
+        #expect(!paths.contains { $0.hasSuffix("/gone") })
+        #expect(paths.contains { $0.hasSuffix("/kept") })
+        #expect(FileManager.default.fileExists(atPath: kept.path))
+    }
+
+    @Test("fetching a repository with no origin fails without waiting on a prompt")
+    func fetchWithoutOrigin() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        await #expect(throws: GitError.self) {
+            try await git.fetchOrigin(repoPath: fixture.repoPath)
+        }
     }
 
     @Test("status on a non-git directory throws notAGitRepository")

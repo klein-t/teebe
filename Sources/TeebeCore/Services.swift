@@ -16,8 +16,11 @@ public struct WorktreeService: Sendable {
         }
     }
 
-    public func addWorktree(in repo: Repository, at path: String, branch: String, createBranch: Bool = true) async throws {
-        try await git.addWorktree(repoPath: repo.path, path: path, branch: branch, createBranch: createBranch)
+    /// `startPoint` is the ref a newly created branch starts from; nil means HEAD.
+    public func addWorktree(in repo: Repository, at path: String, branch: String,
+                            createBranch: Bool = true, startPoint: String? = nil) async throws {
+        try await git.addWorktree(repoPath: repo.path, path: path, branch: branch,
+                                  createBranch: createBranch, startPoint: startPoint)
     }
 
     public func removeWorktree(in repo: Repository, worktree: Worktree, force: Bool = false) async throws {
