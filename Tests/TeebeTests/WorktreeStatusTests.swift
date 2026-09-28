@@ -61,7 +61,7 @@ struct WorktreeStatusTests {
         #expect(!fresh.showsTrash)
         #expect(fresh.card.title == "Not merged")
         #expect(fresh.card.subtitle == "No commits of its own yet.")
-        #expect(facts(fresh) == ["No uncommitted changes", "No commits yet", "Not on remote"])
+        #expect(facts(fresh) == ["No uncommitted changes", "No commits yet", "Couldn’t check remote"])
         // Only proven from the branch's own record; otherwise it may have been merged.
         let likely = status(entry { $0.hasNoCommits = true })
         #expect(likely.card.subtitle == "Merge not confirmed.")
@@ -89,10 +89,10 @@ struct WorktreeStatusTests {
         // A target can't be removed, so its edits are not a removal blocker.
         #expect(status(target, count: 1).card.subtitle == "Work here isn’t committed yet.")
         #expect(status(target, info: .init(agentState: .working)).mark == .working)
-        #expect(facts(status(target, count: 1)) == ["1 uncommitted change", "Merge target", "Not on remote"])
+        #expect(facts(status(target, count: 1)) == ["1 uncommitted change", "Merge target", "Couldn’t check remote"])
         #expect(status(target).card.title == "Base branch")
         #expect(status(target).card.subtitle == "Other worktrees are compared to it.")
-        #expect(facts(status(target)) == ["No uncommitted changes", "Merge target", "Not on remote"])
+        #expect(facts(status(target)) == ["No uncommitted changes", "Merge target", "Couldn’t check remote"])
     }
 
     @Test("the trash shows on removable ✓ rows only, never on a broken link")
@@ -170,7 +170,7 @@ struct WorktreeStatusTests {
         #expect(dirty.card.title == "Uncommitted changes")
         #expect(dirty.card.subtitle == "Commit or discard them before removing.")
         #expect(dirty.card.facts.first == WorktreeCardFact(icon: .pencil, text: "8 uncommitted changes", tone: .warn))
-        #expect(facts(dirty) == ["8 uncommitted changes", "Merged into dev (squashed)", "Not on remote"])
+        #expect(facts(dirty) == ["8 uncommitted changes", "Merged into dev (squashed)", "Couldn’t check remote"])
 
         let unmerged = status(entry(), count: 1, info: .init(remote: .sameBranch(remote: "origin", ahead: 4, behind: 0)))
         #expect(unmerged.card.title == "Uncommitted changes")
@@ -198,13 +198,13 @@ struct WorktreeStatusTests {
         let ring = status(entry())
         #expect(ring.card.title == "Not merged")
         #expect(ring.card.subtitle == "Its commits aren’t in main or dev yet.")
-        #expect(facts(ring) == ["No uncommitted changes", "Not in main or dev yet", "Not on remote"])
+        #expect(facts(ring) == ["No uncommitted changes", "Not in main or dev yet", "Couldn’t check remote"])
 
         let unknown = status(entry { $0.mergeStatus = .unknown; $0.problem = "Could not inspect this worktree"; $0.isInspected = false })
         #expect(unknown.card.title == "Couldn’t check")
         #expect(unknown.card.subtitle == "Couldn’t check this worktree.")
         // Not inspected is not clean.
-        #expect(facts(unknown) == ["Couldn’t check for changes", "Couldn’t check merge status", "Not on remote"])
+        #expect(facts(unknown) == ["Couldn’t check for changes", "Couldn’t check merge status", "Couldn’t check remote"])
 
         let unlinked = status(entry {
             $0.isBroken = true
@@ -242,7 +242,7 @@ struct WorktreeStatusTests {
         // The files were read; only the comparison failed. What the files said still stands.
         let comparisonFailed = entry { $0.mergeStatus = .unknown; $0.problem = "Could not inspect this worktree" }
         #expect(subtitle(comparisonFailed) == "Couldn’t check if it’s merged.")
-        #expect(facts(status(comparisonFailed)) == ["No uncommitted changes", "Couldn’t check merge status", "Not on remote"])
+        #expect(facts(status(comparisonFailed)) == ["No uncommitted changes", "Couldn’t check merge status", "Couldn’t check remote"])
         #expect(subtitle(entry { $0.mergeStatus = .unknown }, targets: []) == "No branch to compare it against.")
         // The card title is the group's, from one constant.
         #expect(status(entry()).card.title == WorktreeGroup.notMergedTitle)
@@ -254,10 +254,10 @@ struct WorktreeStatusTests {
         let checking = status(nil, isChecking: true)
         #expect(checking.card.title == "Checking…")
         #expect(checking.card.subtitle == "Looking for this branch in main or dev.")
-        #expect(facts(checking) == ["Checking for changes…", "Checking merge status…", "Not on remote"])
+        #expect(facts(checking) == ["Checking for changes…", "Checking merge status…", "Couldn’t check remote"])
         #expect(status(nil).card.title == "Couldn’t check")
         #expect(status(nil).card.subtitle == "Couldn’t check this worktree.")
-        #expect(facts(status(nil)) == ["Couldn’t check for changes", "Couldn’t check merge status", "Not on remote"])
+        #expect(facts(status(nil)) == ["Couldn’t check for changes", "Couldn’t check merge status", "Couldn’t check remote"])
         // What the live read already counted still shows.
         #expect(facts(status(nil, info: .init(changeCount: 2), isChecking: true))[0] == "2 uncommitted changes")
     }
@@ -299,7 +299,7 @@ struct WorktreeStatusTests {
         let card = lockedStatus.card
         #expect(card.title == "Merged")
         #expect(card.subtitle == "Locked, so Teebe won’t remove it.")
-        #expect(card.facts.map(\.text) == ["No uncommitted changes", "Merged into dev", "Not on remote"])
+        #expect(card.facts.map(\.text) == ["No uncommitted changes", "Merged into dev", "Couldn’t check remote"])
         let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
         #expect(status(entry(primary, merged: [dev])).card.subtitle == "The main checkout, so Teebe won’t remove it.")
         let detached = Worktree(path: "/d", head: "abc", isDetached: true)
@@ -311,12 +311,12 @@ struct WorktreeStatusTests {
         let skipped = status(entry(merged: [dev]) { $0.hasUncheckedFiles = true })
         #expect(skipped.card.title == "Merged")
         #expect(skipped.card.subtitle == "Some files are marked unchanged in Git, so Teebe won’t remove it.")
-        #expect(facts(skipped) == ["No uncommitted changes", "Merged into dev", "Not on remote"])
+        #expect(facts(skipped) == ["No uncommitted changes", "Merged into dev", "Couldn’t check remote"])
         #expect(status(entry(merged: [dev]) { $0.hasSubmodules = true }).card.subtitle
                 == "It contains a submodule, so Teebe won’t remove it.")
         // Ignored files are ordinary clutter on hover; they only matter at removal.
         let ignored = status(entry(merged: [dev]) { $0.hasIgnoredFiles = true; $0.ignoredPaths = [".build/"] })
-        #expect(facts(ignored) == ["No uncommitted changes", "Merged into dev", "Not on remote"])
+        #expect(facts(ignored) == ["No uncommitted changes", "Merged into dev", "Couldn’t check remote"])
     }
 
     @Test("one eligibility result: the ✓, the group, the trash and the prompt never disagree")
@@ -493,6 +493,23 @@ struct WorktreeStatusTests {
                 == "Ignored files will be deleted too (.build/)")
         #expect(WorktreeWording.ignoredFact([entryWith(["a/very/long/path/to/some/cache/file.bin"])])?.text
                 == "Ignored files will be deleted too (a/very/l…file.bin)")
+    }
+
+    @Test("the remote fact says exactly what is known about the remote, briefly")
+    func remoteWording() {
+        func text(_ remote: RemoteSync) -> String { WorktreeWording.remoteFact(remote).text }
+        #expect(text(.sameBranch(remote: "origin", ahead: 0, behind: 0)) == "Up to date with origin")
+        #expect(text(.sameBranch(remote: "origin", ahead: 1, behind: 2)) == "1 to push · 2 to pull")
+        #expect(text(.remoteDeleted) == "Remote branch deleted")
+        #expect(text(.noUpstream) == "No upstream")
+        #expect(text(.notOnRemote("origin")) == "Not on origin")
+        #expect(text(.otherUpstream("origin/dev", isGone: false)) == "Tracks origin/dev")
+        #expect(text(.otherUpstream("origin/dev", isGone: true)) == "Upstream origin/dev deleted")
+        #expect(text(.unknown) == "Couldn’t check remote")
+        // It never changes what is safe: a row not on any remote can still be Safe to delete.
+        let merged = entry(merged: [dev])
+        #expect(status(merged, info: .init(remote: .notOnRemote("origin"))).isSafeToDelete)
+        #expect(status(merged, info: .init(remote: .unknown)).isSafeToDelete)
     }
 
     @Test("lists read naturally")

@@ -332,7 +332,11 @@ enum WorktreeWording {
     static func remoteFact(_ remote: RemoteSync) -> WorktreeCardFact {
         switch remote {
         case .remoteDeleted: return WorktreeCardFact(icon: .cloud, text: "Remote branch deleted", tone: .muted)
-        case .notOnRemote: return WorktreeCardFact(icon: .cloud, text: "Not on remote", tone: .muted)
+        case .otherUpstream(let name, let isGone):
+            return WorktreeCardFact(icon: .cloud, text: isGone ? "Upstream \(name) deleted" : "Tracks \(name)", tone: .muted)
+        case .noUpstream: return WorktreeCardFact(icon: .cloud, text: "No upstream", tone: .muted)
+        case .notOnRemote(let remote): return WorktreeCardFact(icon: .cloud, text: "Not on \(remote)", tone: .muted)
+        case .unknown: return WorktreeCardFact(icon: .cloud, text: "Couldn’t check remote", tone: .muted)
         case let .sameBranch(name, ahead, behind):
             guard ahead > 0 || behind > 0 else {
                 return WorktreeCardFact(icon: .cloud, text: "Up to date with \(name)", tone: .muted)

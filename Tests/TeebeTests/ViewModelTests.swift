@@ -194,7 +194,7 @@ struct SelectorModelTests {
         let selector = SelectorModel(environment: makeTestEnvironment(git: git))
         await selector.selectRepo(Repository(path: "/repo"))
         let tracking = selector.info(for: git.worktreesResult[0])
-        #expect(tracking.remote == .notOnRemote)
+        #expect(tracking.remote == .otherUpstream("origin/dev", isGone: false))
         #expect(!tracking.hasSync)
 
         git.statusResult = StatusResult(branch: "feature", upstream: "origin/feature", ahead: 3, behind: 1)
@@ -202,6 +202,20 @@ struct SelectorModelTests {
         let same = selector.info(for: git.worktreesResult[0])
         #expect(same.remote == .sameBranch(remote: "origin", ahead: 3, behind: 1))
         #expect(same.ahead == 3 && same.behind == 1)
+
+        // No upstream: not on origin only when origin has no branch of that name,
+        // as the repository's remote branches say after a push or fetch.
+        git.statusResult = StatusResult(branch: "feature")
+        git.branchesResult = [Branch(name: "origin/main", isRemote: true)]
+        await selector.refreshWorktrees()
+        #expect(selector.info(for: git.worktreesResult[0]).remote == .notOnRemote("origin"))
+        git.branchesResult.append(Branch(name: "origin/feature", isRemote: true))
+        await selector.refreshWorktrees()
+        #expect(selector.info(for: git.worktreesResult[0]).remote == .noUpstream)
+        // A failed read is not a fact about the remote.
+        git.statusErrors[git.worktreesResult[0].path] = .notAGitRepository(path: "/repo")
+        await selector.refreshWorktreeInfo()
+        #expect(selector.info(for: git.worktreesResult[0]).remote == .unknown)
     }
 
     @Test("a failed repo selection surfaces a human-readable error, not a raw Swift error")

@@ -21,8 +21,9 @@ final class SelectorModel {
         /// What the coding agents working in this worktree are doing, from their
         /// own records (session logs, rollouts, session registry).
         var agentState: AgentActivityState = .idle
-        /// The branch against its same-named remote branch.
-        var remote: RemoteSync = .notOnRemote
+        /// The branch against its same-named remote branch; unknown until a status
+        /// read succeeds.
+        var remote: RemoteSync = .unknown
         /// The folder is gone but Git's record of it still holds work no branch
         /// has, so the row stays listed instead of being forgotten.
         var isKeptMissing = false
@@ -271,6 +272,10 @@ final class SelectorModel {
         if changedPaths.contains(where: { $0.hasPrefix(adminDir) }) {
             await refreshWorktrees()
         } else if refsChanged {
+            // A push or fetch can add or drop the remote branch a row is compared with.
+            if let repo = selectedRepo, let found = try? await environment.branchService.branches(for: repo) {
+                branches = found
+            }
             await refreshWorktreeInfo()
         }
     }
@@ -418,11 +423,12 @@ final class SelectorModel {
             return byPath
         }
         let agentStates = await agentTask.value
+        let remoteBranches = Set(branches.filter(\.isRemote).map(\.name))
         var info: [String: WorktreeInfo] = [:]
         for worktree in worktrees {
             let status = statuses[worktree.path] ?? nil
             let agent = agentStates[worktree.path] ?? .idle
-            let remote = status.map(RemoteSync.init(status:)) ?? .notOnRemote
+            let remote = status.map { RemoteSync(status: $0, remoteBranches: remoteBranches) } ?? .unknown
             info[worktree.path] = WorktreeInfo(
                 ahead: remote.ahead,
                 behind: remote.behind,
