@@ -10,6 +10,8 @@ import SwiftUI
 struct BottomFadingScrollView<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var onFadeHeightChange: ((CGFloat) -> Void)?
+    /// How far the content is scrolled down, reported as it scrolls.
+    var onScrollOffsetChange: ((CGFloat) -> Void)?
     @State private var coordinateSpace = UUID()
     @State private var contentBottom: CGFloat = 0
     @State private var viewportHeight: CGFloat = 0
@@ -58,8 +60,10 @@ struct BottomFadingScrollView<Content: View>: View {
             content()
                 .background {
                     GeometryReader { geometry in
-                        Color.clear.onChange(of: geometry.frame(in: .named(coordinateSpace)).maxY,
-                                             initial: true) { _, bottom in contentBottom = bottom }
+                        let frame = geometry.frame(in: .named(coordinateSpace))
+                        Color.clear
+                            .onChange(of: frame.maxY, initial: true) { _, bottom in contentBottom = bottom }
+                            .onChange(of: frame.minY, initial: true) { _, top in onScrollOffsetChange?(-top) }
                     }
                 }
         }
