@@ -315,7 +315,7 @@ struct WorktreeStatusTests {
         #expect(facts(dirty)[1] == "Checking merge status…")
     }
 
-    @Test("merged but protected keeps its title and says why in the sentence, not as extra facts")
+    @Test("merged but kept says plainly that it is merged, and why it isn't safe to delete")
     func mergedButProtected() {
         let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
         let lockedStatus = status(entry(locked, merged: [dev]) { $0.problem = "Locked worktree" })
@@ -323,23 +323,24 @@ struct WorktreeStatusTests {
         #expect(lockedStatus.mark == .notMerged)
         #expect(lockedStatus.group == .notMerged)
         let card = lockedStatus.card
-        #expect(card.title == "Merged")
-        #expect(card.subtitle == "Locked, so Teebe won’t remove it.")
+        #expect(card.title == "Not safe to delete")
+        #expect(card.subtitle == "Merged, but locked.")
         #expect(card.facts.map(\.text) == ["No uncommitted changes", "Merged into dev", "Couldn’t check remote"])
         let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
-        #expect(status(entry(primary, merged: [dev])).card.subtitle == "The main checkout, so Teebe won’t remove it.")
+        #expect(status(entry(primary, merged: [dev])).card.subtitle == "Merged, but it’s the main checkout.")
         let detached = Worktree(path: "/d", head: "abc", isDetached: true)
         let detachedStatus = status(entry(detached, merged: [dev]) { $0.problem = "Detached HEAD" })
-        #expect(detachedStatus.card.subtitle == "Detached HEAD, not on a branch.")
+        #expect(detachedStatus.card.subtitle == "Merged, but on a detached HEAD.")
         #expect(detachedStatus.group == .notMerged)
         #expect(detachedStatus.mark == .notMerged)
+        #expect(status(entry(merged: [dev]) { $0.operation = .rebase }).card.subtitle == "Merged, rebase in progress.")
         // Merged commits, but Git could be hiding local work: no ✓, and the sentence says why.
         let skipped = status(entry(merged: [dev]) { $0.hasUncheckedFiles = true })
-        #expect(skipped.card.title == "Merged")
-        #expect(skipped.card.subtitle == "Some files are marked unchanged in Git, so Teebe won’t remove it.")
+        #expect(skipped.card.title == "Not safe to delete")
+        #expect(skipped.card.subtitle == "Merged, but couldn’t finish checking.")
         #expect(facts(skipped) == ["No uncommitted changes", "Merged into dev", "Couldn’t check remote"])
         #expect(status(entry(merged: [dev]) { $0.hasSubmodules = true }).card.subtitle
-                == "It contains a submodule, so Teebe won’t remove it.")
+                == "Merged, but it contains a submodule.")
         // Ignored files are ordinary clutter on hover; they only matter at removal.
         let ignored = status(entry(merged: [dev]) { $0.hasIgnoredFiles = true; $0.ignoredPaths = [".build/"] })
         #expect(facts(ignored) == ["No uncommitted changes", "Merged into dev", "Couldn’t check remote"])

@@ -247,7 +247,7 @@ private struct Facts {
             return ("Broken link", "The folder’s .git link is missing, so Teebe leaves its files alone.")
         case .merged:
             return isRemovable ? ("Safe to delete", "Its committed changes are merged. You can remove it.")
-                : ("Merged", WorktreeWording.reason(worktree, entry) ?? "Teebe won’t remove it right now.")
+                : (Self.blockedTitle, WorktreeWording.mergedReason(worktree, entry) ?? "Merged, but Teebe won’t remove it now.")
         case .notMerged: return notMergedHeadline
         }
     }
@@ -260,14 +260,14 @@ private struct Facts {
             return ("Checking…", "Looking for this branch in \(targets).")
         }
         guard let entry, entry.isInspected else { return ("Couldn’t check", "Couldn’t check this worktree.") }
-        let title = switch entry.mergeStatus {
-        case .merged: "Merged"
-        case .notConfirmed: WorktreeGroup.notMergedTitle
-        case .unknown: "Couldn’t check"
+        if entry.mergeStatus == .merged {
+            // Merged, but something keeps it: say both, plainly.
+            return (Self.blockedTitle, WorktreeWording.mergedReason(worktree, entry) ?? "Merged, but Teebe won’t remove it now.")
         }
+        let title = entry.mergeStatus == .notConfirmed ? WorktreeGroup.notMergedTitle : "Couldn’t check"
         if let reason = WorktreeWording.reason(worktree, entry) { return (title, reason) }
         switch entry.mergeStatus {
-        case .merged: return (title, "Teebe won’t remove it right now.")
+        case .merged: return (title, "Merged, but Teebe won’t remove it now.")
         case .notConfirmed:
             if isMergeUnconfirmed { return (title, "Merge not confirmed.") }
             if entry.hasNoCommits { return (title, "No commits of its own yet.") }
@@ -278,6 +278,10 @@ private struct Facts {
             return (title, targetNames.isEmpty ? "No branch to compare it against." : "Couldn’t check if it’s merged.")
         }
     }
+
+    /// The title of a merged row something keeps: it sits in Not merged, so the
+    /// title says what matters, and the sentence says it is merged, and why not.
+    static let blockedTitle = "Not safe to delete"
 
     /// Not shown as merged, but it may well be: a branch that only looks unstarted
     /// (nothing proves it has no commits of its own), or one whose remote branch
@@ -372,6 +376,20 @@ enum WorktreeWording {
         if let operation = entry?.operation { return inProgress(operation) + "." }
         if protection == detachedHead { return "Detached HEAD, not on a branch." }
         return protection + ", so Teebe won’t remove it."
+    }
+
+    /// A merged row's sentence when something keeps it: "Merged, but locked.",
+    /// "Merged, rebase in progress."; nil when nothing protects it.
+    static func mergedReason(_ worktree: Worktree, _ entry: CleanupEntry?) -> String? {
+        guard let protection = protection(worktree, entry) else { return nil }
+        if let operation = entry?.operation { return "Merged, " + inProgress(operation).lowercased() + "." }
+        if worktree.isPrimary { return "Merged, but it’s the main checkout." }
+        if worktree.isLocked { return "Merged, but locked." }
+        if protection == detachedHead { return "Merged, but on a detached HEAD." }
+        // Git hides some files' edits, so the check can't see everything.
+        if entry?.hasUncheckedFiles == true { return "Merged, but couldn’t finish checking." }
+        if entry?.hasSubmodules == true { return "Merged, but it contains a submodule." }
+        return "Merged, but " + protection.prefix(1).lowercased() + protection.dropFirst() + "."
     }
 
     private static let detachedHead = "Detached HEAD"
