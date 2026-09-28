@@ -188,6 +188,57 @@ struct HoverHelpTests {
         #expect(shortPanel.frame.width < 160)
     }
 
+    @Test func hoverTracksWhileTheWindowIsInactive() {
+        // Like Finder's tooltips: an inactive but visible window still reacts.
+        for options in [HoverHelpView.trackingOptions, PointerHoverView.trackingOptions] {
+            #expect(options.contains(.activeAlways))
+            #expect(!options.contains(.activeInKeyWindow))
+            #expect(!options.contains(.activeInActiveApp))
+            #expect(options.contains(.inVisibleRect))
+        }
+    }
+
+    @Test func helpShowsOnAWindowThatIsNotKey() throws {
+        guard CGMainDisplayID() != 0 else { return }
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 440, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let owner = HoverHelpView(frame: NSRect(x: 20, y: 20, width: 22, height: 28))
+        owner.text = "Fetch and refresh"
+        window.contentView?.addSubview(owner)
+        window.orderFront(nil)
+        #expect(!window.isKeyWindow)
+        #expect(HoverHelpPresenter.canShow(owner: owner, window: window, pointerInside: true, buttonsDown: false))
+        #expect(!HoverHelpPresenter.canShow(owner: owner, window: window, pointerInside: false, buttonsDown: false))
+        #expect(!HoverHelpPresenter.canShow(owner: owner, window: window, pointerInside: true, buttonsDown: true))
+        owner.enabled = false
+        #expect(!HoverHelpPresenter.canShow(owner: owner, window: window, pointerInside: true, buttonsDown: false))
+        owner.enabled = true
+        let presenter = HoverHelpPresenter()
+        defer { presenter.dismiss() }
+        presenter.show(owner: owner, window: window)
+        let panel = try #require(presenter.panel)
+        // Stays up while another app is frontmost, and never activates Teebe.
+        #expect(!panel.hidesOnDeactivate)
+        #expect(panel.styleMask.contains(.nonactivatingPanel))
+        #expect(!panel.canBecomeKey)
+    }
+
+    @Test func pointerHoverReportsEnterAndExit() throws {
+        var states: [Bool] = []
+        let view = PointerHoverView(frame: NSRect(x: 0, y: 0, width: 22, height: 26))
+        view.onHover = { states.append($0) }
+        let event = try #require(NSEvent.enterExitEvent(
+            with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil
+        ))
+        view.mouseEntered(with: event)
+        view.mouseExited(with: event)
+        #expect(states == [true, false])
+        #expect(view.hitTest(NSPoint(x: 10, y: 10)) == nil)
+    }
+
     @Test func windowChangesCancelPendingHelp() {
         let window = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
