@@ -40,6 +40,6 @@ struct ShellSmokeTests {
         _ = RootView(app: app, preview: preview)
         _ = PreviewPanel(preview: preview, app: app)
         _ = DiffContentView(file: DiffFile(newPath: "a.txt"))
-        _ = FileRowsView(app: app, preview: preview)
+        _ = FileRowsView(app: app, preview: preview, sticky: StickyFolders())
     }
 }
