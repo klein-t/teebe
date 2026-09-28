@@ -96,7 +96,6 @@ struct WorktreeRemovalSheet: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.name).font(Typography.bodyEmphasis)
                 Text(item.displayPath).font(Typography.secondary).foregroundStyle(.secondary)
-                    .hoverHelp(item.path, highlight: false)
             }
             .lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 0)
