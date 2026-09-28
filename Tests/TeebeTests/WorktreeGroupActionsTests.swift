@@ -60,6 +60,7 @@ struct WorktreeGroupActionsTests {
     private func merged(_ path: String, branch: String) -> CleanupEntry {
         var entry = CleanupEntry(worktree: Worktree(path: path, branch: branch, head: "abc"))
         entry.mergeStatus = .merged
+        entry.isInspected = true
         return entry
     }
 
@@ -259,6 +260,9 @@ struct WorktreeGroupActionsTests {
         let actions = WorktreeGroupActions(app: app, service: stub)
 
         #expect(actions.eligibleEntries(for: rows).map(\.id) == ["/free"])
+        // The group agrees with the bin: only the browsed row, removable from its own trash, is kept out of it.
+        #expect(rows.filter { app.worktreeStatus(for: $0).group == .merged }.map(\.path) == ["/free", "/browsed"])
+        #expect(rows.filter { app.worktreeStatus(for: $0).mark == .merged }.map(\.path) == ["/free", "/browsed"])
         #expect(actions.skippedFacts(for: rows).map(\.text) == [
             "“waiting” is skipped: an agent is waiting for you here",
             "“working” is skipped: an agent is working here",

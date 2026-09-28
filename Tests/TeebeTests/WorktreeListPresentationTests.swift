@@ -10,6 +10,7 @@ struct WorktreeListPresentationTests {
     func classification() {
         var entry = CleanupEntry(worktree: Worktree(path: "/feature"))
         entry.mergeStatus = .merged
+        entry.isInspected = true
         #expect(status(entry).group == .merged)
         entry.hasIgnoredFiles = true
         #expect(status(entry).group == .merged)
@@ -26,11 +27,13 @@ struct WorktreeListPresentationTests {
     func unconfirmedFoldsIntoNotMerged() {
         var skipped = CleanupEntry(worktree: Worktree(path: "/skipped"))
         skipped.mergeStatus = .merged
+        skipped.isInspected = true
         skipped.hasUncheckedFiles = true
         #expect(status(skipped).group == .notMerged)
 
         var submodule = CleanupEntry(worktree: Worktree(path: "/submodule"))
         submodule.mergeStatus = .merged
+        submodule.isInspected = true
         submodule.hasSubmodules = true
         #expect(status(submodule).group == .notMerged)
 
@@ -50,6 +53,7 @@ struct WorktreeListPresentationTests {
                          Worktree(path: "/detached", head: "abc", isDetached: true)] {
             var entry = CleanupEntry(worktree: worktree)
             entry.mergeStatus = .merged
+            entry.isInspected = true
             entry.problem = worktree.isLocked ? "Locked worktree" : "Detached HEAD"
             let rowStatus = status(entry)
             #expect(rowStatus.group == .notMerged)
@@ -59,12 +63,23 @@ struct WorktreeListPresentationTests {
         }
     }
 
-    @Test("agent activity never moves a row between groups")
-    func agentDoesNotRegroup() {
+    @Test("a row something is working in is not Safe to delete: the group, the ✓ and the trash agree")
+    func activityKeepsRowOutOfSafeToDelete() {
         var entry = CleanupEntry(worktree: Worktree(path: "/feature", branch: "feature"))
         entry.mergeStatus = .merged
-        for agent in [AgentActivityState.idle, .working, .needsAttention] {
-            #expect(status(entry, info: .init(agentState: agent)).group == .merged)
+        entry.isInspected = true
+        entry.isInspected = true
+        let idle = status(entry)
+        #expect(idle.group == .merged)
+        #expect(idle.isSafeToDelete)
+        #expect(idle.mark == .merged)
+        #expect(idle.trashAction == .remove(entry))
+        for info in [SelectorModel.WorktreeInfo(agentState: .working), .init(agentState: .needsAttention), .init(isLive: true)] {
+            let active = status(entry, info: info)
+            #expect(active.group == .notMerged)
+            #expect(!active.isSafeToDelete)
+            #expect(active.mark != .merged)
+            #expect(active.trashAction == nil)
         }
     }
 
@@ -76,6 +91,7 @@ struct WorktreeListPresentationTests {
         let target = Worktree(path: "/dev")
         var cleanEntry = CleanupEntry(worktree: clean)
         cleanEntry.mergeStatus = .merged
+        cleanEntry.isInspected = true
         var dirtyEntry = CleanupEntry(worktree: dirty)
         dirtyEntry.hasLocalChanges = true
         var targetEntry = CleanupEntry(worktree: target)
@@ -106,6 +122,7 @@ struct WorktreeListPresentationTests {
         func merged(_ path: String) -> CleanupEntry {
             var entry = CleanupEntry(worktree: Worktree(path: path, branch: String(path.dropFirst())))
             entry.mergeStatus = .merged
+            entry.isInspected = true
             return entry
         }
         let ahead = SelectorModel.WorktreeInfo(remote: .sameBranch(remote: "origin/a", ahead: 2, behind: 0))
@@ -154,6 +171,7 @@ struct WorktreeListPresentationTests {
         for tree in [zed, alpha, unnamed] {
             var entry = CleanupEntry(worktree: tree)
             entry.mergeStatus = .merged
+            entry.isInspected = true
             entries[tree.path] = status(entry)
         }
         let list = WorktreeListPresentation(worktrees: [zed, alpha, unnamed], statuses: entries,
@@ -168,8 +186,10 @@ struct WorktreeListPresentationTests {
         let gone = Worktree(path: "/gone", branch: "gone")
         var keptEntry = CleanupEntry(worktree: kept)
         keptEntry.mergeStatus = .merged
+        keptEntry.isInspected = true
         var goneEntry = CleanupEntry(worktree: gone)
         goneEntry.mergeStatus = .merged
+        goneEntry.isInspected = true
         // The scan finished after the worktree was removed, so its result outlives it.
         let list = WorktreeListPresentation(worktrees: [kept],
                                             statuses: [kept.path: status(keptEntry), gone.path: status(goneEntry)],
@@ -187,6 +207,7 @@ struct WorktreeListPresentationTests {
         let dirty = Worktree(path: "/dirty", branch: "dirty")
         var mergedEntry = CleanupEntry(worktree: merged)
         mergedEntry.mergeStatus = .merged
+        mergedEntry.isInspected = true
         var dirtyEntry = CleanupEntry(worktree: dirty)
         dirtyEntry.hasLocalChanges = true
         let list = WorktreeListPresentation(
@@ -208,8 +229,10 @@ struct WorktreeListPresentationTests {
         let stale = Worktree(path: "/stale", branch: "stale")
         var mergedEntry = CleanupEntry(worktree: merged)
         mergedEntry.mergeStatus = .merged
+        mergedEntry.isInspected = true
         var staleEntry = CleanupEntry(worktree: stale)
         staleEntry.mergeStatus = .notConfirmed
+        staleEntry.isInspected = true
         let list = WorktreeListPresentation(
             worktrees: [merged, stale],
             statuses: [merged.path: status(mergedEntry), stale.path: status(staleEntry)],
@@ -233,6 +256,7 @@ struct WorktreeListPresentationTests {
         git.worktreesResult = [primary, clean, dirty, target]
         var cleanEntry = CleanupEntry(worktree: clean)
         cleanEntry.mergeStatus = .merged
+        cleanEntry.isInspected = true
         var dirtyEntry = CleanupEntry(worktree: dirty)
         dirtyEntry.hasLocalChanges = true
         var targetEntry = CleanupEntry(worktree: target)

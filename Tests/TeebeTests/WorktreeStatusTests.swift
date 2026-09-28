@@ -234,12 +234,14 @@ struct WorktreeStatusTests {
         let headMoved = status(merged, worktree: Worktree(path: "/feature", branch: "feature", head: "def"))
         for stale in [rechecking, headMoved] {
             #expect(stale.mark == .notMerged)
-            #expect(stale.group == .merged)
+            // Not Safe to delete while the result is out of date: nothing offers it for removal.
+            #expect(stale.group == .notMerged)
+            #expect(!stale.isSafeToDelete)
             #expect(!stale.showsTrash)
             #expect(stale.card.title == "Checking…")
             #expect(stale.card.subtitle == "Looking for this branch in main or dev.")
             #expect(facts(stale)[1] == "Checking merge status…")
-            // Inside the group the ring stays, so the row says why it has no trash.
+            // Inside its group the ring stays, so the row says it is being checked.
             #expect(stale.rowMark(grouped: true) == .notMerged)
             #expect(stale.hasHoverCard(grouped: true))
         }
@@ -278,6 +280,41 @@ struct WorktreeStatusTests {
         // Ignored files are ordinary clutter on hover; they only matter at removal.
         let ignored = status(entry(merged: [dev]) { $0.hasIgnoredFiles = true; $0.ignoredPaths = [".build/"] })
         #expect(facts(ignored) == ["No uncommitted changes", "Merged into dev", "Not on remote"])
+    }
+
+    @Test("one eligibility result: the ✓, the group, the trash and the prompt never disagree")
+    func sharedEligibility() {
+        let merged = entry(merged: [dev])
+        let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
+        let rows: [(String, WorktreeStatus, CleanupEntry?)] = [
+            ("safe", status(merged), merged),
+            ("agent", status(merged, info: .init(agentState: .working)), merged),
+            ("waiting", status(merged, info: .init(agentState: .needsAttention)), merged),
+            ("live", status(merged, info: .init(isLive: true)), merged),
+            ("rechecking", WorktreeStatus(worktree: feature, merge: WorktreeMergeEntry(entry: merged, isRechecking: true),
+                                          info: .init(), targetNames: ["dev"], isChecking: false), merged),
+            ("head moved", status(merged, worktree: Worktree(path: "/feature", branch: "feature", head: "def")), merged),
+            ("no result", status(nil, isChecking: true), nil),
+            ("not inspected", status(entry(merged: [dev]) { $0.isInspected = false }), entry(merged: [dev]) { $0.isInspected = false }),
+            ("broken", status(entry(merged: [dev]) { $0.isBroken = true }), entry(merged: [dev]) { $0.isBroken = true }),
+            ("locked", status(entry(locked, merged: [dev])), entry(locked, merged: [dev])),
+            ("rebasing", status(entry(merged: [dev]) { $0.operation = .rebase }), entry(merged: [dev]) { $0.operation = .rebase }),
+            ("dirty", status(merged, count: 1), merged),
+            ("unmerged", status(entry()), entry())
+        ]
+        for (name, row, scanned) in rows {
+            let prompt = WorktreeRemovalPrompt(worktree: scanned?.worktree ?? feature,
+                                               status: row, merge: scanned.map { WorktreeMergeEntry(entry: $0) })
+            let safe = name == "safe"
+            #expect(row.isSafeToDelete == safe, "\(name)")
+            #expect((row.group == .merged) == safe, "\(name)")
+            #expect((row.mark == .merged) == safe, "\(name)")
+            #expect(row.showsTrash == safe, "\(name)")
+            #expect(prompt.offersBranchDeletion == safe, "\(name)")
+            #expect(prompt.canRemove == row.removal.canRemoveFolder, "\(name)")
+            // Only these can have their folder removed: clean, checked, nothing protecting or working.
+            #expect(row.removal.canRemoveFolder == ["safe", "unmerged"].contains(name), "\(name)")
+        }
     }
 
     @Test("an unfinished Git operation keeps a merged, clean row out of Safe to delete and blocks removal")
@@ -332,7 +369,7 @@ struct WorktreeStatusTests {
         let unmergedClean = WorktreeRemovalPrompt(worktree: feature, status: status(unmerged),
                                                   merge: WorktreeMergeEntry(entry: unmerged))
         #expect(unmergedClean.facts.map { $0.text } == ["Not merged yet", "Nothing uncommitted"])
-        #expect(unmergedClean.explanation == "The worktree folder is deleted. The branch is kept.")
+        #expect(unmergedClean.explanation == "The worktree folder is deleted. The branch and its commits are kept.")
         #expect(unmergedClean.canRemove)
 
         let submodule = entry(merged: [dev]) { $0.hasSubmodules = true }
