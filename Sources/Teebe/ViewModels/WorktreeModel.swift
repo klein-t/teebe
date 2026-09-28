@@ -147,8 +147,9 @@ final class WorktreeModel {
         self.queue = repo.map { environment.makeQueue(repoPath: $0.path) }
         self.expandedPaths.removeAll()
         self.childrenCache.removeAll()
-        // Nothing of the previous selection survives, even if this load fails.
-        resetContents()
+        // The previous contents stay up until this read replaces them: clearing them
+        // first left an empty CHANGES list for the length of the read, and the window
+        // wrapped to it and grew back. A failed read still replaces them (`refresh`).
         errorMessage = nil
         isFolderMissing = false
         guard environment.folderExists(worktreePath) else { return markFolderMissing() }
@@ -254,6 +255,14 @@ final class WorktreeModel {
             guard worktreePath == self.worktreePath else { return }
             return markFolderMissing()
         } catch {
+            guard worktreePath == self.worktreePath else { return }
+            // The first read of a new selection failed: never leave the previous
+            // worktree's changes standing in for this one's.
+            if statusPath != worktreePath {
+                status = nil
+                statusPath = nil
+                changes = []
+            }
             errorMessage = Self.describe(error)
         }
         rebuildTree()

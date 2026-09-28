@@ -19,13 +19,14 @@ struct MissingWorktreeTests {
     private let dirty = Worktree(path: "/repo-dirty", branch: "dirty")
     private let gone = Worktree(path: "/repo-gone", branch: "gone")
     private let broken = Worktree(path: "/repo-broken", branch: "broken")
+    private let alsoDirty = Worktree(path: "/repo-also-dirty", branch: "also-dirty")
 
     private func eightChanges() -> StatusResult {
         StatusResult(branch: "dirty", changes: (1...8).map { FileChange(path: "f\($0).txt", worktreeStatus: .modified) })
     }
 
     private func makeSelector(git: FakeGitClient, folders: FolderSet) async -> SelectorModel {
-        git.worktreesResult = [primary, dirty, gone, broken]
+        git.worktreesResult = [primary, dirty, gone, broken, alsoDirty]
         let selector = SelectorModel(environment: makeTestEnvironment(git: git, folderExists: { folders.exists($0) }))
         await selector.selectRepo(Repository(path: "/repo"))
         return selector
@@ -72,6 +73,30 @@ struct MissingWorktreeTests {
         #expect(model.statusPath == nil)
         #expect(!model.isFolderMissing)
         #expect(model.errorMessage == "fatal: bad object")
+    }
+
+    @Test("switching worktrees goes straight to the next change list, never through an empty one")
+    func switchKeepsChangesUntilTheNextReadLands() async {
+        let git = FakeGitClient()
+        git.statusResult = eightChanges()
+        let selector = await makeSelector(git: git, folders: FolderSet())
+        await selector.selectWorktree(dirty)
+        #expect(selector.worktree.changeCount == 8)
+
+        // Hold the next status read in flight: an empty list in this gap is what the
+        // window wraps to, shrinking it for the length of one read.
+        let gate = Gate()
+        git.statusGate = { await gate.wait() }
+        let callsBefore = git.statusCallCount
+        let switching = Task { await selector.selectWorktree(alsoDirty) }
+        while git.statusCallCount == callsBefore { await Task.yield() }
+        #expect(selector.worktree.worktreePath == alsoDirty.path)
+        #expect(selector.worktree.changeCount == 8)
+
+        await gate.open()
+        await switching.value
+        #expect(selector.worktree.changeCount == 8)
+        #expect(selector.worktree.statusPath == alsoDirty.path)
     }
 
     @Test("selecting a present worktree after a missing one leaves the placeholder state")
