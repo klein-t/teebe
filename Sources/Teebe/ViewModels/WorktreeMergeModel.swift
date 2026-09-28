@@ -44,8 +44,8 @@ final class WorktreeMergeModel {
     private var recheckRequests: [String: Int] = [:]
     /// When the scan behind the last full result shown began.
     private var publishedScan = 0
-    /// Full-refresh scans running now, and the rechecks waiting for them to land.
-    private var refreshScans = 0
+    /// Full refreshes pending or running, and the rechecks waiting for them to land.
+    private var refreshesInFlight = 0
     private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(service: WorktreeCleanupChecking) { self.service = service }
@@ -61,6 +61,8 @@ final class WorktreeMergeModel {
             recheckRequests.removeAll()
             return
         }
+        refreshesInFlight += 1
+        defer { endRefresh() }
         let sameRepository = currentRepo?.path == repo.path
         currentRepo = repo
         currentExtraTarget = extraTarget
@@ -88,8 +90,6 @@ final class WorktreeMergeModel {
         isChecking = true
         defer { if generation == token { isChecking = false } }
         let started = tick()
-        refreshScans += 1
-        defer { endRefreshScan() }
         do {
             let result = try await service.scan(repoPath: repo.path, extraTarget: extraTarget)
             guard generation == token, !Task.isCancelled else { return }
@@ -105,7 +105,7 @@ final class WorktreeMergeModel {
     /// row in place: every other row keeps the result — and the group — it already
     /// has, instead of the whole list being invalidated and regrouped mid-look.
     /// The scanner checks a whole repository at a time, so a recheck never races a
-    /// refresh: it waits for one already scanning, and a refresh that began after it
+    /// refresh: it waits for one pending or scanning, and a refresh that began after it
     /// was asked for answers it. When a merge target moved, every row's result is
     /// stale, so the whole new result is shown.
     func recheck(path: String) async {
@@ -114,7 +114,7 @@ final class WorktreeMergeModel {
         recheckRequests[path] = request
         defer { if recheckRequests[path] == request { recheckRequests[path] = nil } }
         try? await Task.sleep(for: scanDebounce)
-        while refreshScans > 0 { await withCheckedContinuation { refreshWaiters.append($0) } }
+        while refreshesInFlight > 0 { await withCheckedContinuation { refreshWaiters.append($0) } }
         guard !Task.isCancelled, recheckRequests[path] == request, let repo = currentRepo else { return }
         let extraTarget = currentExtraTarget
         let started = tick()
@@ -150,9 +150,9 @@ final class WorktreeMergeModel {
         store(result, key: key, revision: revision)
     }
 
-    private func endRefreshScan() {
-        refreshScans -= 1
-        guard refreshScans == 0 else { return }
+    private func endRefresh() {
+        refreshesInFlight -= 1
+        guard refreshesInFlight == 0 else { return }
         let waiters = refreshWaiters
         refreshWaiters.removeAll()
         for waiter in waiters { waiter.resume() }
