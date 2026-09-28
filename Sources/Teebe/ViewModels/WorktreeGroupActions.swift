@@ -2,11 +2,16 @@ import Foundation
 import Observation
 import TeebeCore
 
-/// One line of the remove-all confirmation: the worktree as its row names it, and
-/// where its folder is.
+/// One row of a removal sheet's list: the worktree as its row names it, where its
+/// folder is, and whether it wears the merged check.
 struct WorktreeRemovalItem: Equatable {
     let name: String
+    /// The full path, shown on hover.
     let path: String
+    let isMerged: Bool
+
+    /// The path as the sheet shows it, with the home folder as `~`.
+    var displayPath: String { (path as NSString).abbreviatingWithTildeInPath }
 }
 
 /// The work behind the group-header action, the row trash and "Remove
@@ -65,7 +70,7 @@ final class WorktreeGroupActions {
 
     /// Every worktree the remove-all sheet will remove, in list order.
     func confirmationItems(_ entries: [CleanupEntry]) -> [WorktreeRemovalItem] {
-        entries.map { WorktreeRemovalItem(name: name($0), path: ($0.id as NSString).abbreviatingWithTildeInPath) }
+        entries.map { WorktreeRemovalItem(name: name($0), path: $0.id, isMerged: $0.mergeStatus == .merged) }
     }
 
     func confirmationMessage(_ entries: [CleanupEntry], deleteBranch: Bool) -> String {

@@ -5,8 +5,8 @@ import SwiftUI
 /// sheet rather than a confirmation dialog, because it holds a checkbox.
 struct WorktreeRemovalSheet: View {
     let title: String
-    /// Remove-all only: every worktree it will remove.
-    var items: [WorktreeRemovalItem] = []
+    /// Every worktree it will remove: one for a row, all of them for remove-all.
+    let items: [WorktreeRemovalItem]
     let facts: [WorktreeCardFact]
     let explanation: String
     /// The remembered "Also delete the branch" choice; nil hides the checkbox.
@@ -17,12 +17,21 @@ struct WorktreeRemovalSheet: View {
     let onConfirm: () -> Void
     @Environment(\.dismiss) private var dismiss
 
+    private static let rowHeight: CGFloat = 40
+    /// Rows shown before the list scrolls.
+    private static let visibleRows = 6
+    private static let hairline = Color(nsColor: .separatorColor)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title).font(Typography.heading)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.bottom, 10)
-            if !items.isEmpty { itemList.padding(.bottom, 10) }
+                .padding(.bottom, 6)
+            Text(explanation)
+                .font(Typography.body).foregroundStyle(.secondary)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+            if !items.isEmpty { itemList.padding(.top, 12) }
             if !facts.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(facts.enumerated()), id: \.offset) { WorktreeFactRow(fact: $0.element, font: Typography.body) }
@@ -30,12 +39,8 @@ struct WorktreeRemovalSheet: View {
                 .padding(.horizontal, 10).padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .padding(.bottom, 12)
+                .padding(.top, 10)
             }
-            Text(explanation)
-                .font(Typography.body).foregroundStyle(.secondary)
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
             if let deleteBranch {
                 Toggle(deleteBranchTitle, isOn: deleteBranch)
                     .toggleStyle(.checkbox)
@@ -58,23 +63,47 @@ struct WorktreeRemovalSheet: View {
         .frame(width: 340)
     }
 
-    /// Branch and folder of each worktree, scrolling once the list gets long.
+    /// An inset list: hairline-separated rows in a rounded container, scrolling
+    /// once there are more than `visibleRows`.
     private var itemList: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(items, id: \.path) { item in
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(item.name).font(Typography.bodyEmphasis)
-                        Text(item.path).font(Typography.secondary).foregroundStyle(.secondary)
-                    }
-                    .lineLimit(1).truncationMode(.middle)
-                    .accessibilityElement(children: .combine)
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        return ScrollView {
+            VStack(spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.path) { index, item in
+                    if index > 0 { Self.hairline.frame(height: 0.5).padding(.leading, 36) }
+                    itemRow(item)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollBounceBehavior(.basedOnSize)
-        .frame(maxHeight: CGFloat(min(items.count, 6)) * 36)
+        .frame(height: CGFloat(min(items.count, Self.visibleRows)) * Self.rowHeight
+               + CGFloat(max(min(items.count, Self.visibleRows) - 1, 0)) * 0.5)
+        .background(Color.primary.opacity(0.04), in: shape)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(Self.hairline, lineWidth: 0.5))
+    }
+
+    private func itemRow(_ item: WorktreeRemovalItem) -> some View {
+        HStack(spacing: 8) {
+            Group {
+                if item.isMerged {
+                    WorktreeMarkView(mark: .merged)
+                } else {
+                    Image(systemName: "arrow.triangle.branch").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.name).font(Typography.bodyEmphasis)
+                Text(item.displayPath).font(Typography.secondary).foregroundStyle(.secondary)
+                    .hoverHelp(item.path, highlight: false)
+            }
+            .lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: Self.rowHeight)
+        .accessibilityElement(children: .combine)
     }
 }
 

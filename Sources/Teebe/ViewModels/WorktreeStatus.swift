@@ -294,6 +294,8 @@ enum WorktreeWording {
 /// The single-row removal confirmation, per row state.
 struct WorktreeRemovalPrompt: Equatable {
     let title: String
+    /// The one worktree, as the sheet's list shows it.
+    let item: WorktreeRemovalItem
     let facts: [WorktreeCardFact]
     let explanation: String
     /// Show the "Also delete the branch" checkbox: only for a merged row that is
@@ -306,6 +308,8 @@ struct WorktreeRemovalPrompt: Equatable {
     /// Removing one existing worktree folder.
     init(worktree: Worktree, status: WorktreeStatus, merge: WorktreeMergeEntry?) {
         title = "Remove “\(worktree.branch ?? worktree.name)”?"
+        item = WorktreeRemovalItem(name: worktree.branch ?? worktree.name, path: worktree.path,
+                                   isMerged: status.mark == .merged)
         let entry = merge?.entry
         let isChecking = entry == nil || status.isRechecking
         var facts = [Self.mergeFact(entry, isChecking: isChecking)]

@@ -66,6 +66,10 @@ struct WorktreeStatusTests {
         let prompt = WorktreeRemovalPrompt(worktree: feature, status: fresh,
                                            merge: WorktreeMergeEntry(entry: entry { $0.hasNoCommits = true }))
         #expect(prompt.facts.first == WorktreeCardFact(icon: .merge, text: "No commits yet", tone: .muted))
+        #expect(prompt.item == WorktreeRemovalItem(name: "feature", path: "/feature", isMerged: false))
+        let safe = status(entry(merged: [dev]))
+        #expect(WorktreeRemovalPrompt(worktree: feature, status: safe, merge: WorktreeMergeEntry(entry: entry(merged: [dev])))
+            .item == WorktreeRemovalItem(name: "feature", path: "/feature", isMerged: true))
         #expect(!prompt.offersBranchDeletion)
     }
 

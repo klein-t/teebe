@@ -120,11 +120,14 @@ struct WorktreeGroupActionsTests {
         #expect(actions.confirmationTitle([plain]) == "Remove 1 worktree?")
         #expect(actions.confirmationTitle([plain, ignored]) == "Remove 2 worktrees?")
         #expect(actions.confirmationItems([plain, ignored])
-                == [WorktreeRemovalItem(name: "plain", path: "/plain"), WorktreeRemovalItem(name: "ignored", path: "/ignored")])
-        // A detached checkout is named by its folder; a home path is shortened.
+                == [WorktreeRemovalItem(name: "plain", path: "/plain", isMerged: true),
+                    WorktreeRemovalItem(name: "ignored", path: "/ignored", isMerged: true)])
+        // A detached checkout is named by its folder; a home path is shortened for display only.
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let detached = CleanupEntry(worktree: Worktree(path: home + "/wt/loose", head: "abc", isDetached: true))
-        #expect(actions.confirmationItems([detached]) == [WorktreeRemovalItem(name: "loose", path: "~/wt/loose")])
+        let item = actions.confirmationItems([detached])[0]
+        #expect(item == WorktreeRemovalItem(name: "loose", path: home + "/wt/loose", isMerged: false))
+        #expect(item.displayPath == "~/wt/loose")
         #expect(actions.confirmationMessage([plain], deleteBranch: false)
                 == "The folder will be deleted from your Mac. The branch will be kept.")
         #expect(actions.confirmationMessage([plain, ignored], deleteBranch: false)

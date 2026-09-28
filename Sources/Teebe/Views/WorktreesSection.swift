@@ -146,7 +146,7 @@ struct WorktreesSection: View {
         switch confirmation {
         case let .worktree(worktree, action):
             let prompt = app.removalPrompt(for: worktree)
-            WorktreeRemovalSheet(title: prompt.title, facts: prompt.facts, explanation: prompt.explanation,
+            WorktreeRemovalSheet(title: prompt.title, items: [prompt.item], facts: prompt.facts, explanation: prompt.explanation,
                                  deleteBranch: prompt.offersBranchDeletion ? $app.deleteBranchOnRemove : nil,
                                  canConfirm: prompt.canRemove && action != nil && !app.groupActions.isWorking) {
                 // Never anything but the captured action, through the guarded path.
