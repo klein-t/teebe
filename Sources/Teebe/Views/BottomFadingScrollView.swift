@@ -73,6 +73,9 @@ struct BottomFadingScrollView<Content: View>: View {
 
     @ViewBuilder
     private func bottomEdge(_ scroll: some View, fade: CGFloat) -> some View {
+        // The edge-effect API ships with the macOS 26 SDK (Swift 6.2); older
+        // toolchains build the gradient fallback only.
+        #if compiler(>=6.2)
         if #available(macOS 26, *), Self.usesSystemEdgeEffect {
             scroll
                 .scrollEdgeEffectStyle(.soft, for: .bottom)
@@ -84,23 +87,30 @@ struct BottomFadingScrollView<Content: View>: View {
                     Color.black.opacity(0.001).frame(height: 1).allowsHitTesting(false)
                 }
         } else {
-            scroll
-                .mask {
-                    // The whole viewport, scrollbar strip included, as one gradient:
-                    // two abutting shapes left a hairline seam between them.
-                    GeometryReader { geometry in
-                        let layout = Self.maskLayout(size: geometry.size, fadeHeight: fade)
-                        LinearGradient(stops: Self.maskStops(solid: layout.solid.height, total: geometry.size.height),
-                                       startPoint: .top, endPoint: .bottom)
-                    }
-                }
-                .overlay(alignment: .bottom) {
-                    // A faint shadow along the edge, so rows read as slipping under it.
-                    LinearGradient(colors: [.clear, Self.edgeShadow], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 4)
-                        .opacity(fade > 0 ? 1 : 0)
-                        .allowsHitTesting(false)
-                }
+            gradientEdge(scroll, fade: fade)
+        }
+        #else
+        gradientEdge(scroll, fade: fade)
+        #endif
+    }
+
+    private func gradientEdge(_ scroll: some View, fade: CGFloat) -> some View {
+        scroll
+        .mask {
+            // The whole viewport, scrollbar strip included, as one gradient:
+            // two abutting shapes left a hairline seam between them.
+            GeometryReader { geometry in
+                let layout = Self.maskLayout(size: geometry.size, fadeHeight: fade)
+                LinearGradient(stops: Self.maskStops(solid: layout.solid.height, total: geometry.size.height),
+                               startPoint: .top, endPoint: .bottom)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            // A faint shadow along the edge, so rows read as slipping under it.
+            LinearGradient(colors: [.clear, Self.edgeShadow], startPoint: .top, endPoint: .bottom)
+                .frame(height: 4)
+                .opacity(fade > 0 ? 1 : 0)
+                .allowsHitTesting(false)
         }
     }
 
