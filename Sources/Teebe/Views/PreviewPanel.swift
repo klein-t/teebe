@@ -28,7 +28,26 @@ struct PreviewPanel: View {
         .onChange(of: preview.currentPath) { focused = true }
         // Space toggles the peek shut (Quick Look convention); Esc does too.
         .onKeyPress(.space) { close(); return .handled }
+        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { step($0.key) }
         .onExitCommand { close() }
+    }
+
+    /// Arrow keys while the peek is key: move the list selection (Finder-style) and
+    /// show the newly selected file.
+    private func step(_ key: KeyEquivalent) -> KeyPress.Result {
+        let arrow: PeekArrow
+        switch key {
+        case .upArrow: arrow = .up
+        case .downArrow: arrow = .down
+        case .leftArrow: arrow = .left
+        default: arrow = .right
+        }
+        let worktree = app.selector.worktree
+        guard let node = worktree.stepPeek(arrow, in: app.activeSection) else { return .ignored }
+        if !node.isDirectory, let worktreePath = worktree.worktreePath {
+            Task { await preview.update(for: node, worktreePath: worktreePath) }
+        }
+        return .handled
     }
 
     private func close() {
