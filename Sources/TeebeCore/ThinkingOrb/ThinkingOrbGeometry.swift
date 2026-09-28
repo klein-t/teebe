@@ -82,6 +82,26 @@ public struct ThinkingOrbStyle: Sendable {
     }
 }
 
+// MARK: - Phase
+
+extension ThinkingOrbStyle {
+    /// Geometry seconds of one full solving cycle: 14 quarter turns scrambled and
+    /// unwound at 0.42 s each, then a 1.2 s rest. Also several breathing wobbles.
+    public static let phaseSpan: Double = 2 * 14 * 0.42 + 1.2
+
+    /// A per-worktree offset into geometry time, so orbs of the same state don't
+    /// move in lockstep. FNV-1a rather than `Hasher`, whose seed changes every
+    /// launch: a worktree keeps its phase across redraws and relaunches.
+    public static func phaseOffset(for key: String) -> Double {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in key.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return Double(hash >> 11) / Double(UInt64(1) << 53) * phaseSpan
+    }
+}
+
 // MARK: - Presets
 
 extension ThinkingOrbStyle {
