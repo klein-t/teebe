@@ -41,13 +41,14 @@ struct LowPowerModeTests {
         return Rig(selector: selector, states: states, spy: spy, box: box, ping: ping)
     }
 
-    /// The three live watchers after a repo is selected: repo git dir, Claude
-    /// projects root, and the active worktree's tree.
+    /// The four live watchers after a repo is selected: repo git dir, Claude
+    /// projects root, the active worktree's tree, and every worktree's files.
     func liveWatchers(_ box: WatcherBox) -> [FakeWatcher] {
         [
             box.watching(".git"),
             box.watching("projects"),
-            box.watchers.last { $0.watchedPaths == ["/repo"] }
+            box.watchers.last { $0.watchedPaths == ["/repo"] },
+            box.watchers.last { $0.watchedPaths == ["/repo", "/repo-wt"] }
         ].compactMap { $0 }
     }
 
@@ -63,7 +64,7 @@ struct LowPowerModeTests {
     func enteringStopsWatchers() async {
         let rig = await makeRig()
         let watchers = liveWatchers(rig.box)
-        #expect(watchers.count == 3)
+        #expect(watchers.count == 4)
         #expect(watchers.allSatisfy { $0.isWatching })
 
         await rig.selector.setLowPower(true)
@@ -87,6 +88,22 @@ struct LowPowerModeTests {
         #expect(rig.spy.posted.count == 1)
     }
 
+    @Test("a ping that lands before Claude Code records the new state is followed by a catch-up re-derive")
+    func pingCatchUp() async throws {
+        let rig = await makeRig()
+        rig.selector.agentPingSettle = 0.2
+        await rig.selector.setLowPower(true)
+
+        // UserPromptSubmit pings before the prompt is logged or the session
+        // registry turns busy; the state only changes a moment later.
+        rig.ping.fire()
+        try await Task.sleep(for: .milliseconds(50))
+        rig.states["/repo-wt"] = .working
+        try await Task.sleep(for: .milliseconds(500))
+
+        #expect(rig.selector.info(for: rig.selector.worktrees[1]).agentState == .working)
+    }
+
     @Test("exiting low power restarts watchers and re-derives state")
     func exitingRestartsAndRefreshes() async {
         let rig = await makeRig()
@@ -97,7 +114,7 @@ struct LowPowerModeTests {
         await rig.selector.setLowPower(false)
 
         #expect(!rig.selector.isLowPower)
-        #expect(liveWatchers(rig.box).filter(\.isWatching).count == 3)
+        #expect(liveWatchers(rig.box).filter(\.isWatching).count == 4)
         #expect(rig.selector.info(for: rig.selector.worktrees[1]).agentState == .working)
     }
 

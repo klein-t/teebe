@@ -34,6 +34,9 @@ public enum GitError: Error, Sendable, Equatable {
     case worktreeBusy(path: String)
     /// `git` executable could not be located.
     case executableNotFound
+    /// The folder the command was to run in no longer exists (e.g. a deleted
+    /// worktree), so `git` could not be started there.
+    case workingDirectoryMissing(path: String)
     /// Output could not be decoded/parsed into the expected shape.
     case decodingFailed(String)
 }
@@ -50,6 +53,9 @@ public struct StatusResult: Equatable, Sendable {
     public var isDetached: Bool
     public var oid: String?
     public var changes: [FileChange]
+    /// An upstream is configured but Git has no ahead/behind for it: the remote
+    /// branch it tracked is gone (deleted, then pruned by a fetch).
+    public var isUpstreamGone: Bool
 
     public init(
         branch: String? = nil,
@@ -58,7 +64,8 @@ public struct StatusResult: Equatable, Sendable {
         behind: Int = 0,
         isDetached: Bool = false,
         oid: String? = nil,
-        changes: [FileChange] = []
+        changes: [FileChange] = [],
+        isUpstreamGone: Bool = false
     ) {
         self.branch = branch
         self.upstream = upstream
@@ -67,6 +74,7 @@ public struct StatusResult: Equatable, Sendable {
         self.isDetached = isDetached
         self.oid = oid
         self.changes = changes
+        self.isUpstreamGone = isUpstreamGone
     }
 }
 
@@ -100,9 +108,6 @@ public protocol GitClient: Sendable {
     /// `worktree add -b <branch> <path> <start-point>`); nil means HEAD.
     func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool, startPoint: String?) async throws
     func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws
-    /// Drops registrations whose folders are gone. It never touches a worktree
-    /// whose folder still exists, so it needs no confirmation.
-    func pruneWorktrees(repoPath: String) async throws
 
     // Remotes
     /// `git fetch --quiet origin`, with an environment that can never prompt.

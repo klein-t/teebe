@@ -100,6 +100,28 @@ struct ProcessGitClientTests {
         #expect(file.hunks.first?.lines.contains { $0.content == "line2 CHANGED" && $0.kind == .addition } == true)
     }
 
+    // MARK: Launch failures
+
+    @Test("git run in a deleted worktree folder reports the folder missing, not git")
+    func missingWorkingDirectory() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("README.md", "# repo\n")
+        let worktreePath = fixture.addWorktree(name: "wt-gone", branch: "gone").path
+        try FileManager.default.removeItem(atPath: worktreePath)
+
+        await #expect(throws: GitError.workingDirectoryMissing(path: worktreePath)) {
+            _ = try await git.status(worktreePath: worktreePath)
+        }
+    }
+
+    @Test("a launch failure in a folder that exists still means git itself is missing")
+    func launchFailureMapping() {
+        #expect(ProcessGitClient.launchFailure(directory: "/repo-gone", directoryExists: false)
+            == .workingDirectoryMissing(path: "/repo-gone"))
+        #expect(ProcessGitClient.launchFailure(directory: "/repo", directoryExists: true) == .executableNotFound)
+    }
+
     // MARK: Cancellation
 
     @Test("cancelling a task stops the git subprocess instead of waiting it out")
@@ -135,21 +157,26 @@ struct ProcessGitClientTests {
         #expect(!FileManager.default.fileExists(atPath: folder.path))
     }
 
-    @Test("prune drops a worktree whose folder is gone and keeps one that is still there")
-    func prune() async throws {
+    @Test("removing a worktree whose folder is gone forgets only its record and keeps the branch")
+    func removeMissingFolder() async throws {
         let fixture = try GitFixture()
         defer { fixture.cleanup() }
         fixture.commitFile("a.txt", "base")
         let gone = fixture.addWorktree(name: "gone", branch: "gone")
+        let alsoGone = fixture.addWorktree(name: "also-gone", branch: "also-gone")
         let kept = fixture.addWorktree(name: "kept", branch: "kept")
         try FileManager.default.removeItem(at: gone)
+        try FileManager.default.removeItem(at: alsoGone)
+        let listedGone = try #require(try await git.worktrees(repoPath: fixture.repoPath).first { $0.path.hasSuffix("/gone") })
 
-        try await git.pruneWorktrees(repoPath: fixture.repoPath)
+        try await git.removeWorktree(repoPath: fixture.repoPath, worktreePath: listedGone.path, force: false)
 
         let paths = try await git.worktrees(repoPath: fixture.repoPath).map(\.path)
         #expect(!paths.contains { $0.hasSuffix("/gone") })
+        #expect(paths.contains { $0.hasSuffix("/also-gone") })
         #expect(paths.contains { $0.hasSuffix("/kept") })
         #expect(FileManager.default.fileExists(atPath: kept.path))
+        #expect(fixture.git(["branch", "--list", "gone"]).contains("gone"))
     }
 
     @Test("fetching a repository with no origin fails without waiting on a prompt")
@@ -160,6 +187,61 @@ struct ProcessGitClientTests {
         await #expect(throws: GitError.self) {
             try await git.fetchOrigin(repoPath: fixture.repoPath)
         }
+    }
+
+    @Test("a fetch prunes remote branches that were deleted")
+    func fetchPrunes() async throws {
+        let fixture = try GitFixture(name: "origin")
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        fixture.createBranch("gone")
+        let clone = fixture.root.appendingPathComponent("clone")
+        fixture.git(["clone", "-q", fixture.repoPath, clone.path], in: fixture.root)
+        #expect(fixture.git(["for-each-ref", "refs/remotes/origin/gone"], in: clone).contains("gone"))
+        fixture.git(["branch", "-D", "gone"])
+
+        try await git.fetchOrigin(repoPath: clone.path)
+        #expect(fixture.git(["for-each-ref", "refs/remotes/origin/gone"], in: clone).isEmpty)
+    }
+
+    @Test("a fetch keeps the repository's own SSH command, in batch mode")
+    func fetchKeepsConfiguredSSHCommand() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        // Stands in for ssh: records how it was called, then fails like an
+        // unreachable host would.
+        let bin = fixture.root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let record = fixture.root.appendingPathComponent("ssh-calls.txt")
+        let ssh = bin.appendingPathComponent("ssh")
+        try "#!/bin/sh\necho \"$@\" >> '\(record.path)'\nexit 255\n".write(to: ssh, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+        fixture.git(["remote", "add", "origin", "ssh://example.invalid/repo.git"])
+        fixture.git(["config", "core.sshCommand", ssh.path + " -i /tmp/acme-key"])
+
+        await #expect(throws: GitError.self) {
+            try await git.fetchOrigin(repoPath: fixture.repoPath)
+        }
+        let calls = (try? String(contentsOf: record, encoding: .utf8)) ?? ""
+        #expect(calls.contains("-i /tmp/acme-key"))
+        #expect(calls.contains("-o BatchMode=yes"))
+    }
+
+    @Test("the fetch environment never prompts and never replaces the user's SSH command")
+    func fetchEnvironment() {
+        let batch = "-o BatchMode=yes"
+        #expect(ProcessGitClient.fetchEnvironment(inherited: [:], sshCommand: nil)
+            == ["GIT_SSH_COMMAND": "ssh \(batch)", "SSH_ASKPASS_REQUIRE": "never"])
+        let configured = ProcessGitClient.fetchEnvironment(inherited: [:], sshCommand: "ssh -i ~/.ssh/work")
+        #expect(configured["GIT_SSH_COMMAND"] == "ssh -i ~/.ssh/work \(batch)")
+        // Git prefers the environment's command over the configured one.
+        let inherited = ProcessGitClient.fetchEnvironment(inherited: ["GIT_SSH_COMMAND": "ssh -F cfg"], sshCommand: "ssh -i k")
+        #expect(inherited["GIT_SSH_COMMAND"] == "ssh -F cfg \(batch)")
+        // A GIT_SSH program is used only when no command is set; setting one would replace it.
+        #expect(ProcessGitClient.fetchEnvironment(inherited: ["GIT_SSH": "/opt/acme/ssh"], sshCommand: nil)
+            == ["SSH_ASKPASS_REQUIRE": "never"])
+        #expect(ProcessGitClient.fetchArguments == ["fetch", "--quiet", "--prune", "origin"])
     }
 
     @Test("status on a non-git directory throws notAGitRepository")

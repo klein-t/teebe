@@ -58,7 +58,7 @@ struct ChangesSection: View {
                 changeRow(change, indented: false)
             }
             if worktree.changeCount == 0 {
-                Text("No changes")
+                Text(worktree.isFolderMissing ? "Folder missing" : "No changes")
                     .font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 30).padding(.vertical, 4)

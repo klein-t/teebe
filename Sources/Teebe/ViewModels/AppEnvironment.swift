@@ -13,18 +13,37 @@ struct AppEnvironment {
     /// Factory for a file-system watcher (overridable with a fake in tests).
     let makeWatcher: @MainActor () -> FileSystemWatcher
     /// Reads the agent activity states for all of a repo's worktree paths at
-    /// once (live: Claude Code session logs via `AgentSessionScanner`; tests
-    /// inject a script). Batched so the scanner can attribute a session logged
+    /// once (live: every harness adapter — Claude Code session logs, Codex
+    /// rollouts — combined; tests inject a script). Batched so the scanner can attribute a session logged
     /// under one worktree's project dir to the worktree it actually runs in.
     let agentStatuses: @Sendable (_ worktreePaths: [String], _ now: Date) -> [String: AgentActivityState]
     /// Where the session logs live, so a watcher can react to log writes.
     /// nil disables watching (and in tests, the watcher entirely).
     let agentProjectsRootPath: String?
+    /// Other harnesses' session folders (Codex rollouts), watched alongside.
+    let agentExtraWatchPaths: [String]
+    /// The worktrees (of those given) with a busy process in them right now —
+    /// any harness's commands, builds and tests. nil disables the probe.
+    let processActivity: (@Sendable (_ worktreePaths: [String], _ now: Date) -> Set<String>)?
+    /// Read fresh right before a removal: the worktrees (of one repo's paths)
+    /// something still has open — any process whose working directory is inside,
+    /// idle shells and agent UIs included, a live agent session registered there,
+    /// or an agent any one harness reports working there.
+    let worktreesInUse: @Sendable (_ worktreePaths: [String], _ now: Date) -> Set<String>
     /// Posts a user-facing notification (title, body).
     let notify: @MainActor (_ title: String, _ body: String) -> Void
     /// Factory for the darwin-notification listener the Claude Code hook pings
     /// (`notifyutil -p dev.teebe.agent`). Overridable with a fake in tests.
     let makeAgentPingListener: @MainActor () -> AgentPingListening
+    /// Whether a worktree's folder is still on disk (a registered worktree's
+    /// folder can be deleted behind Git's back). Overridable in tests.
+    let folderExists: @Sendable (_ path: String) -> Bool
+    /// Whether a worktree's folder is gone for certain ("no such file"), the only
+    /// evidence Teebe forgets a record on. Overridable in tests.
+    let folderIsGone: @Sendable (_ path: String) -> Bool
+    /// Whether the volume a path lives on is mounted; a worktree on a drive that
+    /// isn't connected is hidden, never forgotten. Overridable in tests.
+    let isVolumeMounted: @Sendable (_ path: String) -> Bool
 
     init(
         git: GitClient,
@@ -35,8 +54,14 @@ struct AppEnvironment {
         makeWatcher: @escaping @MainActor () -> FileSystemWatcher,
         agentStatuses: @escaping @Sendable ([String], Date) -> [String: AgentActivityState] = { _, _ in [:] },
         agentProjectsRootPath: String? = nil,
+        agentExtraWatchPaths: [String] = [],
+        processActivity: (@Sendable ([String], Date) -> Set<String>)? = nil,
+        worktreesInUse: @escaping @Sendable ([String], Date) -> Set<String> = { _, _ in [] },
         notify: @escaping @MainActor (String, String) -> Void = { _, _ in },
-        makeAgentPingListener: @escaping @MainActor () -> AgentPingListening = { DarwinAgentPingListener() }
+        makeAgentPingListener: @escaping @MainActor () -> AgentPingListening = { DarwinAgentPingListener() },
+        folderExists: @escaping @Sendable (String) -> Bool = { AppEnvironment.isDirectory($0) },
+        folderIsGone: @escaping @Sendable (String) -> Bool = { MissingWorktrees.isGone($0) },
+        isVolumeMounted: @escaping @Sendable (String) -> Bool = { MissingWorktrees.isOnMountedVolume($0) }
     ) {
         self.git = git
         self.opener = opener
@@ -46,11 +71,25 @@ struct AppEnvironment {
         self.makeWatcher = makeWatcher
         self.agentStatuses = agentStatuses
         self.agentProjectsRootPath = agentProjectsRootPath
+        self.agentExtraWatchPaths = agentExtraWatchPaths
+        self.processActivity = processActivity
+        self.worktreesInUse = worktreesInUse
         self.notify = notify
         self.makeAgentPingListener = makeAgentPingListener
+        self.folderExists = folderExists
+        self.folderIsGone = folderIsGone
+        self.isVolumeMounted = isVolumeMounted
+    }
+
+    nonisolated static func isDirectory(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     var worktreeService: WorktreeService { WorktreeService(git: git) }
+    var missingWorktrees: MissingWorktrees {
+        MissingWorktrees(git: git, folderIsGone: folderIsGone, isVolumeMounted: isVolumeMounted)
+    }
     var statusService: StatusService { StatusService(git: git) }
     var diffService: DiffService { DiffService(git: git) }
     var branchService: BranchService { BranchService(git: git) }
@@ -65,7 +104,15 @@ struct AppEnvironment {
         let projectsRoot = ProcessInfo.processInfo.environment["TEEBE_CLAUDE_PROJECTS_DIR"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? AgentSessionScanner.defaultProjectsRoot
-        let scanner = AgentSessionScanner(projectsRoot: projectsRoot)
+        let codexSessions = ProcessInfo.processInfo.environment["TEEBE_CODEX_SESSIONS_DIR"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? CodexRolloutScanner.defaultSessionsRoot
+        let processes = ProcessActivityProbe()
+        let claude = AgentSessionScanner(projectsRoot: projectsRoot)
+        let adapters = CombinedAgentActivity([
+            claude,
+            CodexRolloutScanner(sessionsRoot: codexSessions)
+        ])
         return AppEnvironment(
             git: ProcessGitClient(),
             opener: WorkspaceFileOpener(),
@@ -73,8 +120,15 @@ struct AppEnvironment {
             store: AppStateStore(),
             activityMonitor: WorktreeActivityMonitor(),
             makeWatcher: { FSEventsWatcher() },
-            agentStatuses: { paths, now in scanner.states(forWorktreePaths: paths, now: now) },
+            agentStatuses: { paths, now in adapters.states(forWorktreePaths: paths, now: now) },
             agentProjectsRootPath: projectsRoot.path,
+            agentExtraWatchPaths: [codexSessions.path],
+            processActivity: { paths, now in processes.activeWorktrees(among: paths, now: now) },
+            worktreesInUse: { paths, now in
+                processes.occupiedWorktrees(among: paths)
+                    .union(claude.liveSessionWorktrees(among: paths))
+                    .union(adapters.workingPaths(forWorktreePaths: paths, now: now))
+            },
             notify: AgentNotifier.post
         )
     }

@@ -5,10 +5,15 @@ import TeebeCore
 
 /// Shared wording for the checked menu items and Settings.
 enum WorktreePreferences {
-    static let groupingTitle = "Group by merge status"
-    static let groupingHelp = "Group worktrees by status. When off, keep a flat list with merge labels."
+    static let groupingTitle = "Group by status"
+    static let groupingHelp = "Group worktrees into Uncommitted changes, Not merged and Safe to delete. "
+        + "When off, keep a flat list; each row still shows its status."
     static let fetchTitle = "Fetch automatically"
     static let fetchHelp = "Check remotes in the background. Your files stay unchanged; Refresh still works when off."
+    static let extraTargetTitle = "Also check merges against"
+    static let extraTargetHelp = "Merges are checked against up to four branches: the default branch, the one chosen "
+        + "here, then dev, develop, main and master when they exist. "
+        + "Choose one for this repository, such as a release branch."
 }
 
 /// Root view model: owns the added repositories, persistence, and the selector.
@@ -20,7 +25,10 @@ final class AppModel {
     /// Fetch remote refs in the background, so merge results reflect what was
     /// pushed rather than what was last pulled by hand.
     var fetchAutomatically: Bool { didSet { persist() } }
-    private(set) var cleanupTargetRevision = 0
+    /// Bumped when a repository's extra merge target changes, so the scan reruns.
+    private(set) var mergeTargetRevision = 0
+    /// "Also delete the branch" in the removal confirmation; the last choice sticks.
+    var deleteBranchOnRemove: Bool { didSet { persist() } }
     var floatOnTop: Bool { didSet { persist() } }
     /// Light / dark override, or follow the system. Applied app-wide via `NSApp.appearance`.
     var appearance: AppearanceMode { didSet { appearance.apply(); persist() } }
@@ -73,6 +81,7 @@ final class AppModel {
         // Keep the legacy key so existing grouping choices survive the new default.
         self.groupWorktreesByMergeStatus = self.state.showMergeStatus ?? false
         self.fetchAutomatically = self.state.fetchAutomatically ?? true
+        self.deleteBranchOnRemove = self.state.deleteBranchOnRemove ?? true
         self.floatOnTop = false
         self.appearance = .system
         // Persist whenever the selection changes, and clear any stale global error —
@@ -82,6 +91,8 @@ final class AppModel {
             self?.persist()
             self?.setError(nil)
         }
+        // Deleted worktrees are never forgotten while a removal is running.
+        self.selector.isRemovalRunning = { [weak self] in self?.groupActionsStorage?.isWorking == true }
     }
 
     /// Single entry point for the global error banner. Replaces any existing
@@ -230,6 +241,7 @@ final class AppModel {
         // tail of entries for projects the user removed long ago.
         state.cleanupTargetByRepo?[repo.path] = nil
         state.layoutByRepo?[repo.path] = nil
+        state.worktreeParentByRepo?[repo.path] = nil
         persist()
     }
 
@@ -347,14 +359,19 @@ final class AppModel {
     /// state lives in `newWorktree` for as long as it is up.
     func presentNewWorktree() {
         guard let repo = selector.selectedRepo else { return }
-        let comparison = mergeStatus.snapshot?.targets.resolve(cleanupTarget(for: repo.path))?.name
+        let comparison = mergeStatus.snapshot?.targets.automatic?.name
         let primaryBranch = selector.worktrees.first(where: \.isPrimary)?.branch
+        let parent = WorktreeLocation.parentFolder(
+            repoPath: repo.path, remembered: state.worktreeParentByRepo?[repo.path],
+            worktrees: selector.worktrees)
         newWorktree = NewWorktreeModel(repo: repo, branches: selector.branches,
-                                       comparisonBranch: comparison, primaryBranch: primaryBranch)
+                                       comparisonBranch: comparison, primaryBranch: primaryBranch,
+                                       parentFolder: parent,
+                                       registeredPaths: Set(selector.worktrees.map(\.path)))
     }
 
-    /// Pick the worktree folder by hand. Directories only, and new ones can be made
-    /// from inside the panel.
+    /// Pick the folder new worktrees go in. Directories only, and new ones can be
+    /// made from inside the panel.
     func chooseWorktreeLocation(for form: NewWorktreeModel) {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -362,12 +379,18 @@ final class AppModel {
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
-        if !form.location.isEmpty {
-            panel.directoryURL = URL(fileURLWithPath: (form.location as NSString).deletingLastPathComponent)
-            panel.nameFieldStringValue = (form.location as NSString).lastPathComponent
-        }
+        panel.directoryURL = URL(fileURLWithPath: form.parentFolder)
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        form.setLocation(url.path)
+        setWorktreeParent(url.path, for: form)
+    }
+
+    /// Use `path` as the folder for this worktree and remember it for the repository.
+    func setWorktreeParent(_ path: String, for form: NewWorktreeModel) {
+        form.setParentFolder(path)
+        var byRepo = state.worktreeParentByRepo ?? [:]
+        byRepo[form.repo.path] = path
+        state.worktreeParentByRepo = byRepo
+        try? environment.store.save(state)
     }
 
     /// Create the worktree the sheet describes. On success the repository is
@@ -395,36 +418,30 @@ final class AppModel {
 
     /// Bring the selected repository's remote refs up to date. The setting gates
     /// background fetches only; explicit Refresh also bypasses the rate limit. Writing
-    /// refs is what makes the merge check re-run, through the repository watcher.
+    /// refs is what makes the merge check re-run, through the repository watcher. The
+    /// rows' sync facts are re-read here too: the watcher is off in low power.
     func refreshRemotes(force: Bool, now: Date = Date()) async {
-        guard force || fetchAutomatically, let repo = selector.selectedRepo else { return }
-        await remoteRefresher.fetch(repoPath: repo.path, force: force, now: now)
+        guard force || fetchAutomatically, let repo = selector.selectedRepo,
+              await remoteRefresher.fetch(repoPath: repo.path, force: force, now: now) else { return }
+        await selector.refreshWorktreeInfo()
     }
 
-    func cleanupTarget(for repoPath: String) -> String? {
+    /// The branch (full ref, e.g. `refs/heads/release/2`) this repository's
+    /// worktrees are also checked against, beyond the automatic default and the
+    /// integration branches. nil when none is set.
+    func extraMergeTarget(for repoPath: String) -> String? {
         state.cleanupTargetByRepo?[repoPath]
     }
 
-    func setCleanupTarget(_ ref: String?, for repoPath: String) {
+    /// Set or clear (nil) the extra merge target; the merge check reruns.
+    func setExtraMergeTarget(_ ref: String?, for repoPath: String) {
         var targets = state.cleanupTargetByRepo ?? [:]
         targets[repoPath] = ref
         state.cleanupTargetByRepo = targets
-        cleanupTargetRevision += 1
+        mergeTargetRevision += 1
         // Through persist(), so the write picks up the rest of the current state and
         // honours the hydration guard instead of racing bootstrap.
         persist()
-    }
-
-    func removeWorktree(_ worktree: Worktree) {
-        guard let repo = selector.selectedRepo else { return }
-        Task {
-            do {
-                try await environment.worktreeService.removeWorktree(in: repo, worktree: worktree, force: false)
-                await selector.selectRepo(repo)
-            } catch {
-                errorMessage = "Couldn't remove worktree: \(WorktreeModel.describe(error))"
-            }
-        }
     }
 
     func revealPath(_ path: String) {
@@ -445,6 +462,7 @@ final class AppModel {
         state.floatOnTop = floatOnTop
         state.showMergeStatus = groupWorktreesByMergeStatus
         state.fetchAutomatically = fetchAutomatically
+        state.deleteBranchOnRemove = deleteBranchOnRemove
         state.appearance = appearance == .system ? nil : appearance.rawValue
         state.lastSelectedRepoPath = selector.selectedRepo?.path
         state.lastSelectedWorktreePath = selector.selectedWorktree?.path

@@ -20,7 +20,9 @@ struct SectionResizeHandle: View {
 
     var body: some View {
         ZStack {
-            Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 1)
+            // The same separator as the title bar's: the lists' bottom edge effect
+            // reads as rows slipping under it.
+            Divider()
             Capsule().fill(hovered || dragging ? Palette.accent : Color.secondary.opacity(0.35))
                 .frame(width: 28, height: 3)
         }

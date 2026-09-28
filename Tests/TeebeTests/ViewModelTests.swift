@@ -186,6 +186,24 @@ struct SelectorModelTests {
         #expect(SelectorModel.WorktreeInfo(ahead: 1, behind: 2).hasSync == true)
     }
 
+    @Test("sync arrows count only against the remote copy of the same branch")
+    func worktreeInfoSameBranchOnly() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "feature", isPrimary: true)]
+        git.statusResult = StatusResult(branch: "feature", upstream: "origin/dev", ahead: 3, behind: 1)
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
+        await selector.selectRepo(Repository(path: "/repo"))
+        let tracking = selector.info(for: git.worktreesResult[0])
+        #expect(tracking.remote == .notOnRemote)
+        #expect(!tracking.hasSync)
+
+        git.statusResult = StatusResult(branch: "feature", upstream: "origin/feature", ahead: 3, behind: 1)
+        await selector.refreshWorktreeInfo()
+        let same = selector.info(for: git.worktreesResult[0])
+        #expect(same.remote == .sameBranch(remote: "origin", ahead: 3, behind: 1))
+        #expect(same.ahead == 3 && same.behind == 1)
+    }
+
     @Test("a failed repo selection surfaces a human-readable error, not a raw Swift error")
     func selectRepoErrorIsHumanReadable() async {
         let git = FakeGitClient()
@@ -241,7 +259,7 @@ struct SelectorModelTests {
         #expect(selector.info(for: git.worktreesResult[0]).isLive == false)
 
         // Once the window elapses, the dot goes idle again.
-        selector.refreshLiveState(now: t.addingTimeInterval(5))
+        selector.refreshLiveState(now: t.addingTimeInterval(GenericActivity.window))
         #expect(selector.info(for: git.worktreesResult[1]).isLive == false)
     }
 
@@ -261,7 +279,7 @@ struct SelectorModelTests {
         // No further file events: the periodic agent poll is the only thing that
         // runs, and it must also let the live flag expire — otherwise the dot
         // (and its repeat-forever pulse animation) runs until the next rescan.
-        await selector.refreshAgentStates(now: t.addingTimeInterval(30))
+        await selector.refreshAgentStates(now: t.addingTimeInterval(GenericActivity.window + 30))
         #expect(selector.info(for: git.worktreesResult[0]).isLive == false)
     }
 

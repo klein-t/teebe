@@ -39,9 +39,7 @@ struct WindowGeometryTests {
             if !grouped { #expect(list.visibleWorktrees == host.app.selector.worktrees) }
             #expect(host.app.selector.selectedWorktree == selected)
             #expect(host.app.mergeStatus.snapshot?.checkedAt == snapshot.checkedAt)
-            let label = WorktreeRowStatus(status: host.app.mergeStatus.entry(for: merged.id), changeCount: 0,
-                                          targetName: snapshot.target?.name, isChecking: host.app.mergeStatus.isChecking)
-            #expect(label.mergedHelp != nil)
+            #expect(host.app.worktreeStatus(for: merged.worktree).mark == .merged)
             host.expectSettled("grouping \(grouped)")
         }
     }
@@ -76,6 +74,32 @@ struct WindowGeometryTests {
         await host.settleGeometry()
         #expect(abs((host.hooks.changesFrame?.height ?? 0) - changes.height) <= 1)
         #expect(abs(host.window.frame.height - (original.height - 80)) <= 1)
+    }
+
+    @Test("each list's viewport ends on its divider line, with no padding between")
+    func listsEndOnTheirDividers() async throws {
+        guard let host = try await GeometryHost.make() else { return }
+        defer { host.tearDown() }
+        let dirty = try #require(host.app.selector.worktrees.first { $0.branch == "feat/dirty" })
+        await host.app.selector.selectWorktree(dirty)
+        await host.settleGeometry()
+        let content = try #require(host.window.contentView)
+        // Top to bottom: WORKTREES, CHANGES, FILES, in the hosting view's top-down space.
+        let viewports = host.scrollViews(in: content).map { $0.convert($0.bounds, to: content) }
+            .map { content.isFlipped ? $0 : NSRect(x: $0.minX, y: content.bounds.height - $0.maxY,
+                                                    width: $0.width, height: $0.height) }
+            .sorted { $0.minY < $1.minY }
+        try #require(viewports.count == 3)
+        let changes = try #require(host.hooks.changesFrame)
+        let files = try #require(host.hooks.filesFrame)
+        // The divider's line is drawn at the top of its slot; the slot is the line
+        // plus `dividerExtra`, and sits between two sections.
+        let slot = 1 + SectionSizing.dividerExtra
+        #expect(abs(changes.minY - slot - viewports[0].maxY) < 0.5, "WORKTREES stops short of its divider")
+        #expect(abs(changes.maxY - viewports[1].maxY) < 0.5, "CHANGES stops short of its divider")
+        #expect(abs(files.minY - changes.maxY - slot) < 0.5)
+        #expect(abs(content.bounds.height - viewports[2].maxY) < 0.5, "FILES stops short of the window edge")
+        for viewport in viewports { #expect(viewport.width == content.bounds.width, "a list is narrower than the window") }
     }
 
     @Test("a constrained splitter keeps its pane sizes when released")
@@ -404,6 +428,11 @@ private final class GeometryHost {
 
     func endDrag() { hooks.endDividerDrag?() }
 
+    func scrollViews(in view: NSView) -> [NSScrollView] {
+        if let scroll = view as? NSScrollView { return [scroll] }
+        return view.subviews.flatMap(scrollViews)
+    }
+
     /// Do not accept a transient match between frame and target: queued AppKit and
     /// SwiftUI callbacks can still move both. Require a quiet interval as well.
     func settleGeometry() async {
@@ -448,8 +477,8 @@ private final class GeometryHost {
 /// different numbers of uncommitted files so switching between them really does ask
 /// the window for a different height.
 private struct WorktreeFixture {
-    static let worktreeCount = 5        // primary + one per group
-    static let groupCount = 4           // merged, uncommitted changes, unmerged commits, broken
+    static let worktreeCount = 4        // primary + one per group
+    static let groupCount = 3           // merged, uncommitted changes, unmerged commits
 
     let root: URL
     var repoPath: String { root.appendingPathComponent("repo").path }
@@ -484,10 +513,6 @@ private struct WorktreeFixture {
         // different height here than anywhere else.
         let dirty = add(worktree: "wt-dirty", branch: "feat/dirty", from: repo)
         for index in 1...4 { write("d\(index).txt", "d", in: dirty) }
-
-        // Broken: git still lists it, the folder is gone.
-        let gone = add(worktree: "wt-gone", branch: "feat/gone", from: repo)
-        try? FileManager.default.removeItem(at: gone)
     }
 
     func cleanup() { try? FileManager.default.removeItem(at: root) }

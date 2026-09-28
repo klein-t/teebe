@@ -9,13 +9,20 @@ import TeebeCore
 final class SelectorModel {
     /// Per-worktree sync/activity summary for the WORKTREES list.
     struct WorktreeInfo: Equatable {
+        /// Commits to push / pull against the remote copy of this same branch;
+        /// zero when the branch tracks another branch or nothing (see `remote`).
         var ahead: Int = 0
         var behind: Int = 0
         var changeCount: Int = 0
+        /// The last `git status` read succeeded, so `changeCount` is a fact rather
+        /// than a placeholder for "unknown".
+        var hasStatus: Bool = false
         var isLive: Bool = false
-        /// What the AI agent working in this worktree is doing (from its
-        /// Claude Code session log).
+        /// What the coding agents working in this worktree are doing, from their
+        /// own records (session logs, rollouts, session registry).
         var agentState: AgentActivityState = .idle
+        /// The branch against its same-named remote branch.
+        var remote: RemoteSync = .notOnRemote
 
         /// Whether there is anything to pull or push — rows hide the "↓ ↑"
         /// indicator entirely when both counts are zero.
@@ -24,6 +31,8 @@ final class SelectorModel {
 
     private(set) var repositories: [Repository] = []
     private(set) var selectedRepo: Repository?
+    /// The worktrees Teebe shows. One whose folder is gone never is: a deleted one
+    /// is forgotten (`forgetDeleted`), one out of reach waits for its drive.
     private(set) var worktrees: [Worktree] = []
     private(set) var selectedWorktree: Worktree?
     private(set) var branches: [Branch] = []
@@ -31,6 +40,16 @@ final class SelectorModel {
     private(set) var worktreeInfo: [String: WorktreeInfo] = [:]
     private(set) var mergeRevision = 0
     var errorMessage: String?
+    /// How many deleted worktrees were forgotten since the notice was last
+    /// dismissed (or the repository changed).
+    private(set) var cleanedUpCount = 0
+    /// Answers whether a removal is running; nothing is forgotten meanwhile.
+    var isRemovalRunning: @MainActor () -> Bool = { false }
+    /// A record that was tried is left alone this long, so a refresh storm never
+    /// asks Git to forget the same worktree over and over.
+    var forgetRetryInterval: TimeInterval = 300
+    private var forgetAttempts: [String: Date] = [:]
+    private var isForgetting = false
 
     let worktree: WorktreeModel
 
@@ -66,6 +85,21 @@ final class SelectorModel {
     /// Vars so tests can shrink them.
     var agentPollInterval: TimeInterval = 30
     var lowPowerAgentPollInterval: TimeInterval = 120
+    /// Delay before the catch-up re-derive that follows a hook ping.
+    var agentPingSettle: TimeInterval = 2
+    /// How long a worktree stays working after its last file change or busy
+    /// process (`GenericActivity.window`). A var so tests can shrink it.
+    var liveWindow: TimeInterval = GenericActivity.window
+    /// One FSEvents stream over every worktree of the repo, so file activity in
+    /// a worktree that isn't selected lights its row too (any harness).
+    private var worktreesWatcher: FileSystemWatcher?
+    /// Worktrees whose uncommitted count is being re-read after a write.
+    private var countRefreshPending: Set<String> = []
+    private var isRefreshingCounts = false
+    /// Gentle poll of the process table for busy processes in the worktrees.
+    private var processPollTask: Task<Void, Never>?
+    var processPollInterval: TimeInterval = 3
+    var isPollingProcesses: Bool { processPollTask != nil }
     /// One-shot follow-up scheduled while any live dot is lit, so `isLive` expires
     /// shortly after the busy window lapses instead of latching until the next
     /// event (a latched dot keeps a repeat-forever pulse animation burning CPU).
@@ -89,13 +123,24 @@ final class SelectorModel {
     /// e.g. after a file-watch event reports external activity.
     func refreshLiveState(now: Date = Date()) {
         var anyLive = false
+        var info = worktreeInfo
         for wt in worktrees {
-            var info = worktreeInfo[wt.path] ?? WorktreeInfo()
-            info.isLive = environment.activityMonitor.isBusy(worktreePath: wt.path, within: 5, now: now)
-            anyLive = anyLive || info.isLive
-            worktreeInfo[wt.path] = info
+            var entry = info[wt.path] ?? WorktreeInfo()
+            entry.isLive = environment.activityMonitor.isBusy(worktreePath: wt.path, within: liveWindow, now: now)
+            anyLive = anyLive || entry.isLive
+            info[wt.path] = entry
         }
+        publish(info)
         scheduleLiveExpiry(anyLive: anyLive)
+    }
+
+    /// Every write to `worktreeInfo` re-renders the whole worktree list, and most
+    /// refreshes (polls, file bursts, log writes) find nothing new: only write
+    /// when a row's facts changed. Writing through the dictionary's subscript
+    /// would notify observers even when the value is unchanged.
+    private func publish(_ info: [String: WorktreeInfo]) {
+        guard info != worktreeInfo else { return }
+        worktreeInfo = info
     }
 
     /// While any dot is lit, keep a single pending re-check just past the busy
@@ -106,7 +151,8 @@ final class SelectorModel {
         liveExpiryTask = nil
         guard anyLive else { return }
         liveExpiryTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(5.5))
+            guard let window = self?.liveWindow else { return }
+            try? await Task.sleep(for: .seconds(window + 0.5))
             guard !Task.isCancelled else { return }
             self?.refreshLiveState()
         }
@@ -116,11 +162,23 @@ final class SelectorModel {
         repositories = repos
     }
 
+    /// The calm one-line notice after deleted worktrees were forgotten.
+    var cleanupNotice: String? {
+        guard cleanedUpCount > 0 else { return nil }
+        return cleanedUpCount == 1 ? "Cleaned up 1 worktree whose folder was deleted."
+            : "Cleaned up \(cleanedUpCount) worktrees whose folders were deleted."
+    }
+
+    func dismissCleanupNotice() { cleanedUpCount = 0 }
+
     func clearSelection() {
+        cleanedUpCount = 0
+        forgetAttempts.removeAll()
         repoWatcher?.stop()
         repoWatcher = nil
         worktreesAdminDir = nil
         stopAgentWatching()
+        stopWorktreeActivity()
         selectedRepo = nil
         worktrees = []
         selectedWorktree = nil
@@ -135,11 +193,18 @@ final class SelectorModel {
     /// primary-then-saved double load: two full tree loads inside the window's
     /// first layout pass escalate into an AppKit constraint-loop crash at launch.
     func selectRepo(_ repo: Repository, preferredWorktreePath: String? = nil) async {
+        if selectedRepo?.path != repo.path {
+            cleanedUpCount = 0
+            forgetAttempts.removeAll()
+        }
         selectedRepo = repo
         await startRepoWatching(repo)
         startAgentWatching()
+        var deleted: [Worktree] = []
         do {
-            applyDiscovered(try await environment.worktreeService.worktrees(for: repo))
+            let found = sortMissing(try await environment.worktreeService.worktrees(for: repo))
+            deleted = found.deleted
+            applyDiscovered(found.listed)
             branches = try await environment.branchService.branches(for: repo)
             errorMessage = nil
         } catch {
@@ -155,6 +220,7 @@ final class SelectorModel {
             await selectWorktree(target)
         }
         onSelectionChange?()
+        await forgetDeleted(deleted, in: repo)
     }
 
     // MARK: - Auto-detecting worktree add/remove
@@ -185,17 +251,20 @@ final class SelectorModel {
         return (raw as NSString).isAbsolutePath ? raw : (repo.path as NSString).appendingPathComponent(raw)
     }
 
-    /// FSEvents on the repo's git common dir: re-scan only when the change touched the
-    /// worktree admin area (`worktrees/…`). Internal + async so it is unit-testable
-    /// without real FSEvents.
+    /// FSEvents on the repo's git common dir: re-scan when the change touched the
+    /// worktree admin area (`worktrees/…`); re-read the rows' sync facts when only
+    /// refs moved (a fetch, a commit, a deleted remote branch). Internal + async so
+    /// it is unit-testable without real FSEvents.
     func handleRepoWatchEvent(_ changedPaths: [String]) async {
         guard selectedRepo != nil, let adminDir = worktreesAdminDir else { return }
         let commonDir = (adminDir as NSString).deletingLastPathComponent
-        if changedPaths.contains(where: { $0.hasPrefix(commonDir + "/refs/") || $0 == commonDir + "/packed-refs" }) {
-            mergeRevision += 1
+        let refsChanged = changedPaths.contains { $0.hasPrefix(commonDir + "/refs/") || $0 == commonDir + "/packed-refs" }
+        if refsChanged { mergeRevision += 1 }
+        if changedPaths.contains(where: { $0.hasPrefix(adminDir) }) {
+            await refreshWorktrees()
+        } else if refsChanged {
+            await refreshWorktreeInfo()
         }
-        guard changedPaths.contains(where: { $0.hasPrefix(adminDir) }) else { return }
-        await refreshWorktrees()
     }
 
     /// Re-discover the repo's worktrees + branches in place — the manual Refresh
@@ -216,9 +285,10 @@ final class SelectorModel {
     private func rescanWorktrees() async {
         guard let repo = selectedRepo else { return }
         let discovered: [Worktree]
+        let deleted: [Worktree]
         let discoveredBranches: [Branch]
         do {
-            discovered = try await environment.worktreeService.worktrees(for: repo)
+            (discovered, deleted) = sortMissing(try await environment.worktreeService.worktrees(for: repo))
             discoveredBranches = try await environment.branchService.branches(for: repo)
             errorMessage = nil
         } catch {
@@ -230,16 +300,64 @@ final class SelectorModel {
         branches = discoveredBranches
         await refreshWorktreeInfo()
         // Keep the current selection if it still exists; only re-focus when it's gone.
-        if let current = selectedWorktree, discovered.contains(where: { $0.path == current.path }) {
-            return
-        }
-        if let fallback = discovered.first(where: { $0.isPrimary }) ?? discovered.first {
+        let isSelectionListed = selectedWorktree.map { current in discovered.contains { $0.path == current.path } } ?? false
+        if !isSelectionListed, let fallback = discovered.first(where: { $0.isPrimary }) ?? discovered.first {
             await selectWorktree(fallback)
-        } else {
+        } else if !isSelectionListed {
             selectedWorktree = nil
             worktree.clear()
             onSelectionChange?()
         }
+        await forgetDeleted(deleted, in: repo)
+    }
+
+    // MARK: - Worktrees whose folder is gone
+
+    /// Split what Git lists into the rows to show and the deleted ones to forget.
+    /// A worktree out of reach (drive not mounted, or locked) is in neither: it is
+    /// hidden and left alone until its folder is back.
+    private func sortMissing(_ all: [Worktree]) -> (listed: [Worktree], deleted: [Worktree]) {
+        let missing = environment.missingWorktrees
+        var listed: [Worktree] = []
+        var deleted: [Worktree] = []
+        for worktree in all {
+            switch missing.disposition(of: worktree) {
+            case .present: listed.append(worktree)
+            case .deleted: deleted.append(worktree)
+            case .unreachable: break
+            }
+        }
+        return (listed, deleted)
+    }
+
+    /// Forget deleted worktrees' records, one at a time, never while a removal
+    /// runs. Each is re-checked right before (`MissingWorktrees.forget`), and one
+    /// tried recently is skipped. A failure stays quiet: the row is hidden anyway,
+    /// and it is tried again after `forgetRetryInterval`.
+    private func forgetDeleted(_ candidates: [Worktree], in repo: Repository, now: Date = Date()) async {
+        let due = candidates.filter { candidate in
+            forgetAttempts[candidate.path].map { now.timeIntervalSince($0) >= forgetRetryInterval } ?? true
+        }
+        guard !due.isEmpty, !isForgetting else { return }
+        isForgetting = true
+        defer { isForgetting = false }
+        let missing = environment.missingWorktrees
+        for candidate in due {
+            guard !isRemovalRunning(), selectedRepo?.path == repo.path else { return }
+            forgetAttempts[candidate.path] = now
+            if await missing.forget(candidate, repoPath: repo.path) { cleanedUpCount += 1 }
+        }
+    }
+
+    /// The folder-gone placeholder's Forget: forget just this worktree's record,
+    /// with the same checks as the automatic clean-up, then re-read the list.
+    func forgetMissingWorktree(_ path: String) async {
+        guard let repo = selectedRepo,
+              let listed = try? await environment.worktreeService.worktrees(for: repo),
+              let target = listed.first(where: { $0.path == path }) else { return }
+        forgetAttempts[path] = nil
+        await forgetDeleted([target], in: repo)
+        await refreshWorktrees()
     }
 
     /// Adopt a freshly discovered worktree list. Merge ancestry can only have moved
@@ -250,7 +368,9 @@ final class SelectorModel {
     private func applyDiscovered(_ discovered: [Worktree]) {
         func identity(_ trees: [Worktree]) -> [String] { trees.map { $0.path + "\u{0}" + $0.head } }
         if identity(discovered) != identity(worktrees) { mergeRevision += 1 }
+        let pathsChanged = discovered.map(\.path) != worktrees.map(\.path)
         worktrees = discovered
+        if pathsChanged || worktreesWatcher == nil { startWorktreeActivity() }
     }
 
     /// Load per-worktree ahead/behind + change count + live state for the
@@ -285,16 +405,19 @@ final class SelectorModel {
         for worktree in worktrees {
             let status = statuses[worktree.path] ?? nil
             let agent = agentStates[worktree.path] ?? .idle
+            let remote = status.map(RemoteSync.init(status:)) ?? .notOnRemote
             info[worktree.path] = WorktreeInfo(
-                ahead: status?.ahead ?? 0,
-                behind: status?.behind ?? 0,
+                ahead: remote.ahead,
+                behind: remote.behind,
                 changeCount: status?.changes.count ?? 0,
-                isLive: environment.activityMonitor.isBusy(worktreePath: worktree.path, within: 5, now: now),
-                agentState: agent
+                hasStatus: status != nil,
+                isLive: environment.activityMonitor.isBusy(worktreePath: worktree.path, within: liveWindow, now: now),
+                agentState: agent,
+                remote: remote
             )
         }
         notifyAgentTransitions(from: worktreeInfo, to: info)
-        worktreeInfo = info
+        publish(info)
     }
 
     func info(for worktree: Worktree) -> WorktreeInfo {
@@ -314,11 +437,11 @@ final class SelectorModel {
         for worktree in worktrees {
             var entry = info[worktree.path] ?? WorktreeInfo()
             entry.agentState = states[worktree.path] ?? .idle
-            entry.isLive = environment.activityMonitor.isBusy(worktreePath: worktree.path, within: 5, now: now)
+            entry.isLive = environment.activityMonitor.isBusy(worktreePath: worktree.path, within: liveWindow, now: now)
             info[worktree.path] = entry
         }
         notifyAgentTransitions(from: worktreeInfo, to: info)
-        worktreeInfo = info
+        publish(info)
     }
 
     /// Notify only on the working → needsAttention edge: the turn just ended (or
@@ -342,7 +465,7 @@ final class SelectorModel {
         startAgentWatcher()
         let listener = environment.makeAgentPingListener()
         listener.start { [weak self] in
-            Task { @MainActor in await self?.refreshAgentStates() }
+            Task { @MainActor in await self?.handleAgentPing() }
         }
         agentPingListener = listener
         agentPollTask = Task { [weak self] in
@@ -361,9 +484,16 @@ final class SelectorModel {
         agentWatcher?.stop()
         agentWatcher = nil
         guard !isLowPower, let root = environment.agentProjectsRootPath else { return }
+        // Claude Code's live session registry sits beside the projects root; a
+        // permission prompt flips it to waiting without writing any session log.
+        let registry = URL(fileURLWithPath: root).deletingLastPathComponent()
+            .appendingPathComponent("sessions", isDirectory: true).path
+        // Other harnesses' rollouts (Codex) change on the same cadence. FSEvents
+        // is recursive, so a resumed thread writing to an older date folder is
+        // seen too; only the paths Teebe reads cost anything.
         let watcher = environment.makeWatcher()
-        watcher.start(paths: [root], debounce: 1.0) { [weak self] _ in
-            Task { @MainActor in await self?.handleAgentWatchEvent() }
+        watcher.start(paths: [root, registry] + environment.agentExtraWatchPaths, debounce: 1.0) { [weak self] paths in
+            Task { @MainActor in await self?.handleAgentWatchEvent(paths) }
         }
         agentWatcher = watcher
     }
@@ -396,18 +526,120 @@ final class SelectorModel {
             repoWatcher?.stop()
             agentWatcher?.stop()
             agentWatcher = nil
+            stopWorktreeActivity()
             worktree.pauseWatching()
         } else {
             if let repo = selectedRepo { await startRepoWatching(repo) }
             startAgentWatcher()
+            startWorktreeActivity()
             await worktree.resumeWatching()
             await refreshWorktrees()
         }
     }
 
-    /// A coalesced batch of session-log writes — re-derive the badges.
-    func handleAgentWatchEvent() async {
+    /// A Claude Code hook pinged. Hooks run a beat before Claude Code records
+    /// what they announce (UserPromptSubmit fires before the prompt is logged
+    /// or the session registry turns busy), so look again once it has — in low
+    /// power nothing else would until the slow poll.
+    func handleAgentPing() async {
         await refreshAgentStates()
+        try? await Task.sleep(for: .seconds(agentPingSettle))
+        await refreshAgentStates()
+    }
+
+    /// A coalesced batch of session-log writes — re-derive the badges, unless
+    /// every write belongs to another project's sessions (which the scan never
+    /// reads): Claude Code sessions elsewhere log continuously.
+    func handleAgentWatchEvent(_ paths: [String]) async {
+        if let root = environment.agentProjectsRootPath,
+           !AgentSessionScanner.eventsMatter(paths, projectsRoot: root, worktreePaths: worktrees.map(\.path)) {
+            return
+        }
+        await refreshAgentStates()
+    }
+
+    // MARK: - Generic activity (any harness): files and processes
+
+    /// Watch every worktree's files and poll for busy processes. Off in low power
+    /// and without a repo; restarted when the set of worktrees changes.
+    private func startWorktreeActivity() {
+        stopWorktreeActivity()
+        guard !isLowPower, selectedRepo != nil, !worktrees.isEmpty else { return }
+        let watcher = environment.makeWatcher()
+        watcher.start(paths: worktrees.map(\.path), debounce: 1.0) { [weak self] paths in
+            Task { @MainActor in await self?.handleWorktreeFileEvents(paths) }
+        }
+        worktreesWatcher = watcher
+        guard environment.processActivity != nil else { return }
+        processPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let interval = self?.processPollInterval else { return }
+                try? await Task.sleep(for: .seconds(interval))
+                guard !Task.isCancelled else { return }
+                await self?.pollProcessActivity()
+            }
+        }
+    }
+
+    private func stopWorktreeActivity() {
+        worktreesWatcher?.stop()
+        worktreesWatcher = nil
+        processPollTask?.cancel()
+        processPollTask = nil
+    }
+
+    /// A coalesced batch of file events from any worktree: the worktrees whose
+    /// own files changed (not Git's bookkeeping, build output or caches) are
+    /// working, and their uncommitted counts are re-read. Teebe's own writes to
+    /// the selected worktree are not activity.
+    func handleWorktreeFileEvents(_ paths: [String], now: Date = Date()) async {
+        var changed = WorktreeActivityRouter.changedWorktrees(eventPaths: paths, among: worktrees.map(\.path))
+        if let selected = selectedWorktree?.path, worktree.recentSelfWrite(now: now) { changed.remove(selected) }
+        // A folder deleted outside Teebe: re-read the list, which cleans it up.
+        let deleted = changed.filter { path in
+            worktrees.contains { $0.path == path && !$0.isPrimary } && environment.folderIsGone(path)
+        }
+        if !deleted.isEmpty {
+            changed.subtract(deleted)
+            await refreshWorktrees()
+        }
+        guard !changed.isEmpty else { return }
+        for path in changed { environment.activityMonitor.recordActivity(worktreePath: path, at: now) }
+        refreshLiveState(now: now)
+        await refreshChangeCounts(changed)
+    }
+
+    /// Re-read `git status` for just these worktrees, so a new untracked file in a
+    /// worktree that isn't selected turns its row uncommitted without waiting for
+    /// the next full refresh. Concurrent requests coalesce.
+    private func refreshChangeCounts(_ paths: Set<String>) async {
+        countRefreshPending.formUnion(paths)
+        guard !isRefreshingCounts else { return }
+        isRefreshingCounts = true
+        defer { isRefreshingCounts = false }
+        let statusService = environment.statusService
+        while !countRefreshPending.isEmpty {
+            let batch = countRefreshPending
+            countRefreshPending.removeAll()
+            for path in batch {
+                guard let status = try? await statusService.status(worktreePath: path),
+                      var info = worktreeInfo[path] else { continue }
+                info.changeCount = status.changes.count
+                info.hasStatus = true
+                guard info != worktreeInfo[path] else { continue }
+                worktreeInfo[path] = info
+            }
+        }
+    }
+
+    /// One look at the process table: worktrees with a busy process are working.
+    func pollProcessActivity(now: Date = Date()) async {
+        guard let probe = environment.processActivity else { return }
+        let paths = worktrees.map(\.path)
+        let active = await Task.detached { probe(paths, now) }.value
+        guard !active.isEmpty else { return }
+        for path in active { environment.activityMonitor.recordActivity(worktreePath: path, at: now) }
+        refreshLiveState(now: now)
     }
 
     func selectWorktree(_ wt: Worktree) async {

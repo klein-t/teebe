@@ -90,4 +90,29 @@ struct RemoteRefresherTests {
         await app.selector.handleRepoWatchEvent(["/repo/.git/refs/remotes/origin/main"])
         #expect(app.selector.mergeRevision == revision + 1)
     }
+
+    @Test("a successful fetch refreshes the sync arrows and remote facts")
+    func fetchRefreshesSyncFacts() async {
+        let git = FakeGitClient()
+        let app = await app(git)
+        let primary = Worktree(path: "/repo", branch: "main", isPrimary: true)
+        #expect(app.selector.info(for: primary).behind == 0)
+
+        // The fetch brought in two commits on origin/main.
+        git.statusResult = StatusResult(branch: "main", upstream: "origin/main", behind: 2)
+        await app.refreshRemotes(force: true)
+        #expect(app.selector.info(for: primary).behind == 2)
+        #expect(app.selector.info(for: primary).remote == .sameBranch(remote: "origin", ahead: 0, behind: 2))
+    }
+
+    @Test("remote ref changes seen by the watcher refresh the sync facts too")
+    func remoteRefEventsRefreshSyncFacts() async {
+        let git = FakeGitClient()
+        let app = await app(git)
+        let primary = Worktree(path: "/repo", branch: "main", isPrimary: true)
+        // A fetch run from a terminal deleted the remote branch.
+        git.statusResult = StatusResult(branch: "main", upstream: "origin/main", isUpstreamGone: true)
+        await app.selector.handleRepoWatchEvent(["/repo/.git/refs/remotes/origin/main"])
+        #expect(app.selector.info(for: primary).remote == .remoteDeleted)
+    }
 }

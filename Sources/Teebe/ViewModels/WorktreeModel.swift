@@ -49,6 +49,9 @@ final class WorktreeModel {
     private var selectionAnchor: String?
     private(set) var worktreePath: String?
     private(set) var errorMessage: String?
+    /// The selected worktree's folder is gone (deleted, still registered with
+    /// Git): nothing is read from it and the lists show a placeholder instead.
+    private(set) var isFolderMissing = false
     private(set) var pendingMutation: PendingMutation?
 
     /// Window (seconds) used to flag a worktree as "busy" before a guarded op.
@@ -130,6 +133,7 @@ final class WorktreeModel {
         changes = []
         worktreePath = nil
         errorMessage = nil
+        isFolderMissing = false
         pendingMutation = nil
         expandedPaths.removeAll()
         childrenCache.removeAll()
@@ -143,9 +147,33 @@ final class WorktreeModel {
         self.queue = repo.map { environment.makeQueue(repoPath: $0.path) }
         self.expandedPaths.removeAll()
         self.childrenCache.removeAll()
+        // The previous contents stay up until this read replaces them: clearing them
+        // first left an empty CHANGES list for the length of the read, and the window
+        // wrapped to it and grew back. A failed read still replaces them (`refresh`).
+        errorMessage = nil
+        isFolderMissing = false
+        guard environment.folderExists(worktreePath) else { return markFolderMissing() }
         self.ignoredPaths = Set((try? await environment.statusService.ignoredPaths(worktreePath: worktreePath)) ?? [])
         startWatching(worktreePath)
         await refresh()
+    }
+
+    private func resetContents() {
+        root = nil
+        status = nil
+        statusPath = nil
+        changes = []
+        ignoredPaths = []
+    }
+
+    /// The folder is gone: show the placeholder, not an error, and stop reading it.
+    private func markFolderMissing() {
+        watcher?.stop()
+        watcher = nil
+        resetContents()
+        childrenCache.removeAll()
+        errorMessage = nil
+        isFolderMissing = true
     }
 
     // MARK: - Live file watching (FSEvents → status refresh + activity)
@@ -153,8 +181,8 @@ final class WorktreeModel {
     private func startWatching(_ path: String) {
         watcher?.stop()
         let watcher = environment.makeWatcher()
-        watcher.start(paths: [path], debounce: 0.25) { [weak self] _ in
-            Task { @MainActor in await self?.handleFileSystemEvent() }
+        watcher.start(paths: [path], debounce: 0.25) { [weak self] paths in
+            Task { @MainActor in await self?.handleFileSystemEvent(paths) }
         }
         self.watcher = watcher
     }
@@ -174,11 +202,13 @@ final class WorktreeModel {
     }
 
     /// Handle a file-watch event for the active worktree: record *external* activity
-    /// (skipping our own recent writes), notify the owner, then refresh. Synchronous
-    /// and parameterized so it is unit-testable without real FSEvents.
-    func handleFileSystemEvent(now: Date = Date()) async {
+    /// (skipping our own recent writes, and changes that are only Git bookkeeping or
+    /// build output), notify the owner, then refresh. Synchronous and parameterized
+    /// so it is unit-testable without real FSEvents; nil paths means unknown.
+    func handleFileSystemEvent(_ paths: [String]? = nil, now: Date = Date()) async {
         guard let worktreePath else { return }
-        if !recentSelfWrite(now: now) {
+        let counts = paths.map { !WorktreeActivityRouter.changedWorktrees(eventPaths: $0, among: [worktreePath]).isEmpty }
+        if !recentSelfWrite(now: now), counts ?? true {
             environment.activityMonitor.recordActivity(worktreePath: worktreePath, at: now)
             onActivity?(worktreePath)
         }
@@ -211,13 +241,28 @@ final class WorktreeModel {
     /// Re-query status and rebuild the tree (called on watcher events).
     func refresh() async {
         guard let worktreePath else { return }
+        guard environment.folderExists(worktreePath) else { return markFolderMissing() }
         do {
             let result = try await environment.statusService.status(worktreePath: worktreePath)
+            // A newer selection may have landed while this read was in flight.
+            guard worktreePath == self.worktreePath else { return }
             status = result
             statusPath = worktreePath
             changes = result.changes
             errorMessage = nil
+            isFolderMissing = false
+        } catch GitError.workingDirectoryMissing {
+            guard worktreePath == self.worktreePath else { return }
+            return markFolderMissing()
         } catch {
+            guard worktreePath == self.worktreePath else { return }
+            // The first read of a new selection failed: never leave the previous
+            // worktree's changes standing in for this one's.
+            if statusPath != worktreePath {
+                status = nil
+                statusPath = nil
+                changes = []
+            }
             errorMessage = Self.describe(error)
         }
         rebuildTree()
@@ -617,6 +662,7 @@ final class WorktreeModel {
             case .lockedIndex: return "The git index is locked; try again."
             case .worktreeBusy(let path): return "Worktree busy: \(path)"
             case .executableNotFound: return "git executable not found."
+            case .workingDirectoryMissing(let path): return "The worktree folder is missing: \(path)"
             case .decodingFailed(let message): return message
             }
         }

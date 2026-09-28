@@ -6,7 +6,7 @@ import TeebeCore
 @MainActor
 @Suite("NewWorktreeModel")
 struct NewWorktreeModelTests {
-    private let repo = Repository(path: "/Users/k/code/teebe", name: "teebe")
+    private let repo = Repository(path: "/Users/dev/code/teebe", name: "teebe")
 
     private let branches = [
         Branch(name: "main", isCurrent: true),
@@ -21,10 +21,13 @@ struct NewWorktreeModelTests {
     private func model(
         comparison: String? = nil,
         primary: String? = "main",
+        parent: String = "/Users/dev/code",
+        registered: Set<String> = [],
         folderExists: @escaping @Sendable (String) -> Bool = { _ in false }
     ) -> NewWorktreeModel {
         NewWorktreeModel(repo: repo, branches: branches, comparisonBranch: comparison,
-                         primaryBranch: primary, folderExists: folderExists)
+                         primaryBranch: primary, parentFolder: parent, registeredPaths: registered,
+                         folderExists: folderExists)
     }
 
     // MARK: - Default location
@@ -33,34 +36,55 @@ struct NewWorktreeModelTests {
     func defaultLocation() {
         let form = model()
         form.branch = "row-hover"
-        #expect(form.location == "/Users/k/code/teebe-row-hover")
+        #expect(form.location == "/Users/dev/code/teebe-row-hover")
     }
 
-    @Test("slashes in the branch flatten into dashes")
-    func defaultLocationFlattensSlashes() {
-        #expect(NewWorktreeModel.defaultLocation(repoPath: "/Users/k/code/teebe", branch: "feat/row/hover")
-            == "/Users/k/code/teebe-feat-row-hover")
-        #expect(NewWorktreeModel.defaultLocation(repoPath: "/Users/k/code/teebe", branch: "").isEmpty)
+    @Test("slashes in the branch flatten into dashes, live as it's typed")
+    func locationFollowsBranch() {
+        let form = model()
+        form.branch = "feat"
+        #expect(form.location == "/Users/dev/code/teebe-feat")
+        form.branch = "feat/row/hover"
+        #expect(form.location == "/Users/dev/code/teebe-feat-row-hover")
+        form.branch = ""
+        #expect(form.location.isEmpty)
     }
 
-    @Test("location tracks the branch until it's chosen by hand")
-    func customLocationSticks() {
+    @Test("the pre-filled parent folder is used")
+    func usesParentFolder() {
+        let form = model(parent: "/Users/dev/trees")
+        form.branch = "x"
+        #expect(form.location == "/Users/dev/trees/teebe-x")
+    }
+
+    @Test("choosing a folder moves the worktree there; the name keeps following the branch")
+    func chosenParentFolder() {
         let form = model()
         form.branch = "one"
-        #expect(form.location == "/Users/k/code/teebe-one")
-        form.setLocation("/tmp/elsewhere")
+        form.setParentFolder("/tmp/elsewhere")
+        #expect(form.location == "/tmp/elsewhere/teebe-one")
         form.branch = "two"
-        #expect(form.location == "/tmp/elsewhere")
+        #expect(form.location == "/tmp/elsewhere/teebe-two")
     }
 
-    @Test("an existing folder blocks Create")
-    func existingFolderBlocks() {
-        let form = model(folderExists: { $0 == "/Users/k/code/teebe-taken" })
-        form.branch = "taken"
-        #expect(form.locationProblem == "Folder already exists.")
-        #expect(form.canCreate == false)
-        form.branch = "free"
-        #expect(form.locationProblem == nil)
+    @Test("a folder that exists, or a path git already registered, gets a -2 suffix")
+    func collisionsGetSuffixed() {
+        let onDisk = model(folderExists: { $0 == "/Users/dev/code/teebe-taken" })
+        onDisk.branch = "taken"
+        #expect(onDisk.location == "/Users/dev/code/teebe-taken-2")
+        #expect(onDisk.locationProblem == nil)
+        let registered = model(registered: ["/Users/dev/code/teebe-gone"])
+        registered.branch = "gone"
+        #expect(registered.location == "/Users/dev/code/teebe-gone-2")
+    }
+
+    @Test("a repository with no remote still gets a location")
+    func noRemote() {
+        let form = NewWorktreeModel(repo: repo, branches: [Branch(name: "main", isCurrent: true)],
+                                    comparisonBranch: nil, primaryBranch: "main",
+                                    parentFolder: "/Users/dev/code", folderExists: { _ in false })
+        form.branch = "feat/local"
+        #expect(form.location == "/Users/dev/code/teebe-feat-local")
         #expect(form.canCreate)
     }
 
@@ -191,5 +215,43 @@ struct NewWorktreeFlowTests {
 
         #expect(git.addedWorktrees == [FakeGitClient.AddedWorktree(
             path: "/repo-dev", branch: "dev", createBranch: false, startPoint: nil)])
+    }
+
+    @Test("the sheet pre-fills the folder the other linked worktrees share")
+    func prefillsSharedParent() async throws {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/code/repo", branch: "main", isPrimary: true),
+                               Worktree(path: "/trees/repo-a", branch: "a")]
+        git.branchesResult = [Branch(name: "main", isCurrent: true)]
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+        await app.selector.selectRepo(Repository(path: "/code/repo"))
+        app.presentNewWorktree()
+        let form = try #require(app.newWorktree)
+        form.branch = "feat/b"
+        #expect(form.location == "/trees/repo-feat-b")
+    }
+
+    @Test("a chosen folder is remembered for the repository and pre-filled next time")
+    func remembersChosenParent() async throws {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/code/repo", branch: "main", isPrimary: true)]
+        git.branchesResult = [Branch(name: "main", isCurrent: true)]
+        let env = makeTestEnvironment(git: git)
+        let app = AppModel(environment: env)
+        await app.selector.selectRepo(Repository(path: "/code/repo"))
+        app.presentNewWorktree()
+        let first = try #require(app.newWorktree)
+        #expect(first.parentFolder == "/code")
+        app.setWorktreeParent("/chosen", for: first)
+        #expect(first.parentFolder == "/chosen")
+        app.newWorktree = nil
+
+        // A fresh app over the same saved state.
+        let relaunched = AppModel(environment: env)
+        await relaunched.selector.selectRepo(Repository(path: "/code/repo"))
+        relaunched.presentNewWorktree()
+        let second = try #require(relaunched.newWorktree)
+        second.branch = "x"
+        #expect(second.location == "/chosen/repo-x")
     }
 }

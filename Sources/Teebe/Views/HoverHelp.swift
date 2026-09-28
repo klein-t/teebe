@@ -6,7 +6,6 @@ import SwiftUI
 /// Controls with their own hover chrome pass `highlight: false`.
 enum HelpStyle {
     static let delay: Duration = .milliseconds(350)
-    static let fontSize: CGFloat = 12
     static let horizontalPadding: CGFloat = 10
     static let verticalPadding: CGFloat = 7
     static let maximumWidth: CGFloat = 300
@@ -21,7 +20,7 @@ struct HelpInfo: View {
 
     var body: some View {
         Image(systemName: "info.circle")
-            .font(.system(size: HelpStyle.fontSize))
+            .font(Typography.body)
             .foregroundStyle(.secondary)
             .frame(width: 22, height: 22)
             .hoverHelp(explanation)
@@ -35,11 +34,20 @@ extension View {
         background(HoverHelpAnchor(text: text, highlight: highlight))
             .accessibilityHint(text)
     }
+
+    /// The same surface with rich content: shown after the same delay, but at the
+    /// card's own size and starting at the view's leading edge. `summary` is the
+    /// plain-text version, for accessibility and to notice when the card changes.
+    func hoverCard<Card: View>(_ summary: String, @ViewBuilder card: () -> Card) -> some View {
+        background(HoverHelpAnchor(text: summary, highlight: false, card: AnyView(card())))
+            .accessibilityHint(summary)
+    }
 }
 
 private struct HoverHelpAnchor: NSViewRepresentable {
     let text: String
     let highlight: Bool
+    var card: AnyView?
     @Environment(\.isEnabled) private var isEnabled
 
     func makeNSView(context: Context) -> HoverHelpView { HoverHelpView() }
@@ -49,6 +57,7 @@ private struct HoverHelpAnchor: NSViewRepresentable {
             HoverHelpPresenter.shared.dismiss(owner: view)
         }
         view.text = text
+        view.card = card
         view.enabled = isEnabled
         view.showsHighlight = highlight
         if !isEnabled { view.highlighted = false }
@@ -61,6 +70,8 @@ private struct HoverHelpAnchor: NSViewRepresentable {
 
 final class HoverHelpView: NSView {
     var text = ""
+    /// Rich content shown instead of `text` (see `hoverCard`).
+    var card: AnyView?
     var enabled = true
     var showsHighlight = true
     var highlighted = false {
@@ -160,23 +171,27 @@ final class HoverHelpPresenter {
         observers.removeAll()
     }
 
-    static func frame(size: NSSize, anchor: NSRect, screen: NSRect) -> NSRect {
-        let x = min(max(anchor.midX - size.width / 2, screen.minX + 6), screen.maxX - size.width - 6)
+    /// Below the anchor (above when there is no room), centred on it, or starting
+    /// `leadingInset` in from its leading edge.
+    static func frame(size: NSSize, anchor: NSRect, screen: NSRect, leadingInset: CGFloat? = nil) -> NSRect {
+        let preferredX = leadingInset.map { anchor.minX + $0 } ?? anchor.midX - size.width / 2
+        let x = min(max(preferredX, screen.minX + 6), screen.maxX - size.width - 6)
         let below = anchor.minY - size.height - 6
         let y = below >= screen.minY + 6 ? below : min(anchor.maxY + 6, screen.maxY - size.height - 6)
         return NSRect(origin: NSPoint(x: x, y: max(screen.minY + 6, y)), size: size)
     }
 
     func show(owner: HoverHelpView, window: NSWindow) {
-        let content = NSHostingView(rootView:
+        let root = owner.card.map { AnyView($0.fixedSize(horizontal: false, vertical: true)) } ?? AnyView(
             Text(owner.text)
-                .font(.system(size: HelpStyle.fontSize))
+                .font(Typography.body)
                 .foregroundStyle(.primary)
                 .padding(.horizontal, HelpStyle.horizontalPadding).padding(.vertical, HelpStyle.verticalPadding)
                 .frame(maxWidth: HelpStyle.maximumWidth)
                 .fixedSize(horizontal: false, vertical: true)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: HelpStyle.cornerRadius))
         )
+        let content = NSHostingView(rootView: root)
         let size = content.fittingSize
         // A tooltip has a measured, fixed size. NSHostingView's automatic window
         // sizing can otherwise grow the panel after orderFront, moving its bottom
@@ -185,7 +200,8 @@ final class HoverHelpPresenter {
         content.frame = NSRect(origin: .zero, size: size)
         let anchor = window.convertToScreen(owner.convert(owner.bounds, to: nil))
         let screen = window.screen?.visibleFrame ?? anchor
-        let popup = NSPanel(contentRect: Self.frame(size: size, anchor: anchor, screen: screen),
+        let frame = Self.frame(size: size, anchor: anchor, screen: screen, leadingInset: owner.card == nil ? nil : 0)
+        let popup = NSPanel(contentRect: frame,
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         popup.isReleasedWhenClosed = false
         popup.isOpaque = false
@@ -195,8 +211,10 @@ final class HoverHelpPresenter {
         popup.level = .popUpMenu
         popup.hidesOnDeactivate = true
         popup.contentView = content
-        popup.setFrame(Self.frame(size: size, anchor: anchor, screen: screen), display: false)
+        popup.setFrame(frame, display: false)
         popup.orderFront(nil)
+        // The shadow follows the content's rounded corners once it has drawn.
+        popup.invalidateShadow()
         panel = popup
     }
 }
