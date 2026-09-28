@@ -101,16 +101,42 @@ struct WorktreeListPresentationTests {
         #expect(flat.visibleWorktrees == trees)
     }
 
-    @Test("group tooltips name every branch worktrees are checked against")
-    func groupExplanations() {
-        #expect(WorktreeGroup.merged.explanation(targets: ["dev", "main"])
-            == "Merged into dev or main with nothing uncommitted. Removing the folder loses no work.")
-        #expect(WorktreeGroup.localChanges.explanation(targets: ["dev"])
-            == "Edited or new files in the folder that are not committed yet.")
-        #expect(WorktreeGroup.notMerged.explanation(targets: ["dev", "develop", "main"])
-            == "Committed work not found in dev, develop or main yet, merged but kept for a reason the row's card gives, "
-            + "or Git couldn't check.")
-        #expect(WorktreeGroup.notMerged.explanation(targets: []).contains("a merge target"))
+    @Test("a group card sums up its rows: state title, one sentence, the count, activity and remote work")
+    func groupCards() {
+        func merged(_ path: String) -> CleanupEntry {
+            var entry = CleanupEntry(worktree: Worktree(path: path, branch: String(path.dropFirst())))
+            entry.mergeStatus = .merged
+            return entry
+        }
+        let ahead = SelectorModel.WorktreeInfo(remote: .sameBranch(remote: "origin/a", ahead: 2, behind: 0))
+        let behind = SelectorModel.WorktreeInfo(remote: .sameBranch(remote: "origin/b", ahead: 0, behind: 1))
+        let both = SelectorModel.WorktreeInfo(remote: .sameBranch(remote: "origin/c", ahead: 1, behind: 3))
+        let safe = WorktreeGroup.merged.card(
+            statuses: [status(merged("/a"), info: ahead), status(merged("/b"), info: behind),
+                       status(merged("/c"), info: both), status(merged("/d"), info: .init(agentState: .working))],
+            targets: ["dev", "main"])
+        #expect(safe == WorktreeCard(title: "Safe to delete", subtitle: "All their work is in dev or main. You can remove them.",
+                                     facts: [WorktreeCardFact(icon: .merge, text: "4 worktrees merged", tone: .positive),
+                                             WorktreeCardFact(icon: .warning, text: "Agent or command active in 1",
+                                                              tone: .warn),
+                                             WorktreeCardFact(icon: .cloud, text: "2 with work to push · 2 to pull",
+                                                              tone: .normal)]))
+
+        // One worktree reads in the singular; nothing to push or pull says nothing.
+        var dirty = merged("/e")
+        dirty.hasLocalChanges = true
+        #expect(WorktreeGroup.localChanges.card(statuses: [status(dirty)], targets: ["dev"])
+            == WorktreeCard(title: "Uncommitted changes", subtitle: "Work in this worktree isn’t committed yet.",
+                            facts: [WorktreeCardFact(icon: .pencil, text: "1 worktree with changes", tone: .warn)]))
+
+        let open = CleanupEntry(worktree: Worktree(path: "/f", branch: "f"))
+        let notMerged = WorktreeGroup.notMerged.card(statuses: [status(open, info: behind), status(open)], targets: [])
+        #expect(notMerged.title == "Not merged")
+        #expect(notMerged.subtitle == "Their work isn’t in a merge target yet, or something keeps them.")
+        #expect(notMerged.facts == [WorktreeCardFact(icon: .merge, text: "2 worktrees not safe to delete", tone: .muted),
+                                    WorktreeCardFact(icon: .cloud, text: "1 with work to pull", tone: .muted)])
+        #expect(WorktreeGroup.merged.card(statuses: [status(merged("/g"))], targets: ["main"]).subtitle
+            == "All its work is in main. You can remove it.")
     }
 
     @Test("groups read in a fixed order and their rows sort by branch name")

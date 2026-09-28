@@ -203,20 +203,30 @@ struct WorktreesSection: View {
 
     private func groupHeader(_ group: WorktreeListPresentation.Group) -> some View {
         let collapsed = collapsedGroups.contains(group.kind)
+        let card = app.groupCard(for: group)
         return HStack(spacing: 6) {
             Button {
                 if collapsed { collapsedGroups.remove(group.kind) } else { collapsedGroups.insert(group.kind) }
             } label: {
-                HStack(spacing: 7) {
+                HStack(spacing: 0) {
                     Image(systemName: collapsed ? "chevron.right" : "chevron.down")
                         .font(.system(size: 8, weight: .semibold)).frame(width: 8)
                         .foregroundStyle(Palette.secondaryText)
                     // System colors throughout: they are the only ones that follow light,
                     // dark and Increase Contrast, so the row of headings stays consistent.
-                    WorktreeMarkView(mark: headerMark(group.kind)).frame(width: 14, height: 15)
+                    // Hovered like a row's mark; the card sums the group up. The slot
+                    // keeps the title in line with the row names below.
+                    WorktreeMarkHoverTarget(isSelected: false, height: WorktreeListPresentation.groupHeight) {
+                        WorktreeMarkView(mark: headerMark(group.kind), paused: selector.isLowPower)
+                    }
+                    .hoverCard(cardSummary(card)) {
+                        WorktreeHoverCard(card: card, mark: headerMark(group.kind), paused: selector.isLowPower)
+                    }
+                    .padding(.horizontal, 3)
                     Text(group.kind.title).font(Typography.secondaryEmphasis)
                     Text("\(group.worktrees.count)").font(Typography.secondary).monospacedDigit()
                         .foregroundStyle(Palette.secondaryText)
+                        .padding(.leading, 7)
                     Spacer(minLength: 4)
                 }
                 .contentShape(Rectangle())
@@ -224,7 +234,6 @@ struct WorktreesSection: View {
             .buttonStyle(.plain)
             .accessibilityLabel("\(group.kind.title), \(group.worktrees.count) worktrees")
             .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
-            .hoverHelp(group.kind.explanation(targets: app.mergeStatus.snapshot?.targetNames ?? []), highlight: false)
             groupAction(group)
         }
         .padding(.horizontal, 12).frame(height: WorktreeListPresentation.groupHeight)
@@ -291,6 +300,11 @@ struct WorktreesSection: View {
         .padding(.horizontal, 11).frame(height: WorktreeListPresentation.repoHeight)
     }
 
+    /// A card as one line of text: for accessibility, and to notice when it changes.
+    private func cardSummary(_ card: WorktreeCard) -> String {
+        ([card.title + ".", card.subtitle] + card.facts.map { $0.text + "." }).joined(separator: " ")
+    }
+
     /// `grouped`: the row sits under a group heading, which carries its Git-state
     /// mark (see `WorktreeStatus.rowMark`).
     private func worktreeRow(_ worktree: Worktree, grouped: Bool) -> some View {
@@ -300,8 +314,7 @@ struct WorktreesSection: View {
         // The keyboard cursor (only while WORKTREES is the active section): an outline,
         // distinct from the filled accent of the committed worktree. Enter commits it.
         let isHighlighted = app.activeSection == .worktrees && selector.highlightedWorktree?.path == worktree.path
-        let summary = ([status.card.title + ".", status.card.subtitle] + status.card.facts.map { $0.text + "." })
-            .joined(separator: " ")
+        let summary = cardSummary(status.card)
         return HStack(spacing: 0) {
             if status.hasHoverCard(grouped: grouped) {
                 WorktreeMarkHoverTarget(isSelected: isActive) {
@@ -366,6 +379,8 @@ struct WorktreesSection: View {
 /// size straight away; the card itself follows after the hover-help delay.
 private struct WorktreeMarkHoverTarget<Mark: View>: View {
     let isSelected: Bool
+    /// The row's height, or the group header's.
+    var height = WorktreeListPresentation.rowHeight
     @ViewBuilder var mark: () -> Mark
     @State private var hovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -381,7 +396,7 @@ private struct WorktreeMarkHoverTarget<Mark: View>: View {
                     .opacity(hovered ? 1 : 0)
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovered)
-            .frame(width: 22, height: WorktreeListPresentation.rowHeight)
+            .frame(width: 22, height: height)
             .contentShape(Rectangle())
             .onHover { hovered = $0 }
     }

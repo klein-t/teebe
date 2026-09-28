@@ -14,17 +14,42 @@ enum WorktreeGroup: String, CaseIterable, Identifiable {
         case .merged: "Safe to delete"
         }
     }
-    /// The header tooltip: what put a checkout in this group, naming the branches
-    /// worktrees are checked against (e.g. ["dev", "main"]).
-    func explanation(targets: [String]) -> String {
+    /// The header mark's hover card: a summary of the rows, in the row card's
+    /// style. The title is the group; the facts count rows, never list them.
+    /// `targets` are the branches worktrees are checked against (e.g. ["dev", "main"]).
+    func card(statuses: [WorktreeStatus], targets: [String]) -> WorktreeCard {
+        let count = statuses.count
+        let one = count == 1
         let targetList = targets.isEmpty ? "a merge target" : WorktreeWording.list(targets, joiner: "or")
+        let subtitle: String
+        let countFact: WorktreeCardFact
         switch self {
-        case .localChanges: return "Edited or new files in the folder that are not committed yet."
+        case .localChanges:
+            subtitle = "Work in \(one ? "this worktree" : "these worktrees") isn’t committed yet."
+            countFact = WorktreeCardFact(icon: .pencil, text: WorktreeWording.plural(count, "worktree") + " with changes", tone: .warn)
         case .notMerged:
-            return "Committed work not found in \(targetList) yet, merged but kept for a reason the row's card gives, "
-                + "or Git couldn't check."
-        case .merged: return "Merged into \(targetList) with nothing uncommitted. Removing the folder loses no work."
+            subtitle = "\(one ? "Its" : "Their") work isn’t in \(targetList) yet, or something keeps \(one ? "it" : "them")."
+            countFact = WorktreeCardFact(icon: .merge, text: WorktreeWording.plural(count, "worktree") + " not safe to delete",
+                                         tone: .muted)
+        case .merged:
+            subtitle = "All \(one ? "its" : "their") work is in \(targetList). You can remove \(one ? "it" : "them")."
+            countFact = WorktreeCardFact(icon: .merge, text: WorktreeWording.plural(count, "worktree") + " merged",
+                                         tone: .positive)
         }
+        var facts = [countFact]
+        let active = statuses.filter { $0.activityWarning != nil }.count
+        if active > 0 {
+            facts.append(WorktreeCardFact(icon: .warning, text: "Agent or command active in \(active)", tone: .warn))
+        }
+        let toPush = statuses.filter { if case let .sameBranch(_, ahead, _) = $0.remote { ahead > 0 } else { false } }.count
+        let toPull = statuses.filter { if case let .sameBranch(_, _, behind) = $0.remote { behind > 0 } else { false } }.count
+        if toPush > 0 || toPull > 0 {
+            let parts = [toPush > 0 ? "\(toPush) with work to push" : nil,
+                         toPull > 0 ? "\(toPull) \(toPush > 0 ? "" : "with work ")to pull" : nil].compactMap { $0 }
+            facts.append(WorktreeCardFact(icon: .cloud, text: parts.joined(separator: " · "),
+                                          tone: toPush > 0 ? .normal : .muted))
+        }
+        return WorktreeCard(title: title, subtitle: subtitle, facts: facts)
     }
 }
 
@@ -86,6 +111,12 @@ extension AppModel {
     private func mergeEntry(for worktree: Worktree, info: SelectorModel.WorktreeInfo) -> WorktreeMergeEntry? {
         let local = selector.worktree.statusPath == worktree.path ? selector.worktree.status : nil
         return mergeStatus.entry(for: worktree.path, localStatus: local, localChangeCount: info.hasStatus ? info.changeCount : nil)
+    }
+
+    /// The group header's hover card, from the same statuses its rows show.
+    func groupCard(for group: WorktreeListPresentation.Group) -> WorktreeCard {
+        group.kind.card(statuses: group.worktrees.map(worktreeStatus(for:)),
+                        targets: mergeStatus.snapshot?.targetNames ?? [])
     }
 
     func worktreeList(collapsed: Set<WorktreeGroup>) -> WorktreeListPresentation {
