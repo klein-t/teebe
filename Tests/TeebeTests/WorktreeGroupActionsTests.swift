@@ -107,7 +107,7 @@ struct WorktreeGroupActionsTests {
         #expect(actions.eligibleEntries(for: git.worktreesResult).map(\.id) == ["/free"])
     }
 
-    @Test("the confirmation counts what it will remove and mentions ignored files, as a fact, only when there are some")
+    @Test("the confirmation counts what it will remove, lists each worktree, and mentions ignored files only when there are some")
     func confirmationCopy() async {
         var ignored = merged("/ignored", branch: "ignored")
         ignored.hasIgnoredFiles = true
@@ -117,15 +117,24 @@ struct WorktreeGroupActionsTests {
         let app = await app(FakeGitClient(), stub: stub)
         let actions = WorktreeGroupActions(app: app, service: stub)
 
-        #expect(actions.confirmationTitle([plain]) == "Remove 1 worktree folder?")
-        #expect(actions.confirmationTitle([plain, ignored]) == "Remove 2 worktree folders?")
+        #expect(actions.confirmationTitle([plain]) == "Remove 1 worktree?")
+        #expect(actions.confirmationTitle([plain, ignored]) == "Remove 2 worktrees?")
+        #expect(actions.confirmationItems([plain, ignored])
+                == [WorktreeRemovalItem(name: "plain", path: "/plain"), WorktreeRemovalItem(name: "ignored", path: "/ignored")])
+        // A detached checkout is named by its folder; a home path is shortened.
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let detached = CleanupEntry(worktree: Worktree(path: home + "/wt/loose", head: "abc", isDetached: true))
+        #expect(actions.confirmationItems([detached]) == [WorktreeRemovalItem(name: "loose", path: "~/wt/loose")])
         #expect(actions.confirmationMessage([plain], deleteBranch: false)
-                == "The folders will be deleted from your Mac. Branches will be kept.")
+                == "The folder will be deleted from your Mac. The branch will be kept.")
         #expect(actions.confirmationMessage([plain, ignored], deleteBranch: false)
                 == "The folders will be deleted from your Mac. Branches will be kept.")
         #expect(actions.confirmationFacts([plain]).isEmpty)
         #expect(actions.confirmationFacts([plain, ignored]).map { $0.text } == ["Ignored files will be deleted too (.build/)"])
         #expect(actions.confirmationMessage([plain], deleteBranch: true)
+                == "The folder will be deleted from your Mac. "
+                + "Its local branch will be deleted too; the remote branch is kept.")
+        #expect(actions.confirmationMessage([plain, ignored], deleteBranch: true)
                 == "The folders will be deleted from your Mac. "
                 + "Their local branches will be deleted too; remote branches are kept.")
     }
@@ -155,6 +164,28 @@ struct WorktreeGroupActionsTests {
         #expect(counter.count == 1)
         #expect(await stub.scans == 1)
         #expect(app.selector.worktrees.map(\.path) == ["/repo", "/a"])
+    }
+
+    @Test("removing all re-checks each worktree as it goes: ones that no longer qualify are skipped and every one is reported")
+    func bulkRemovalSkipsAndReportsEach() async {
+        let monitor = WorktreeActivityMonitor()
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+            + ["a", "busy", "changed", "b"].map { Worktree(path: "/" + $0, branch: $0, head: "abc") }
+        let entries = ["a", "busy", "changed", "b"].map { merged("/" + $0, branch: $0) }
+        // Git finds "changed" no longer qualifies when asked to remove it.
+        let stub = RemovalStub(snapshot: snapshot(entries), refuses: "/changed")
+        let app = await app(git, stub: stub, monitor: monitor)
+        let actions = WorktreeGroupActions(app: app, service: stub)
+        #expect(actions.eligibleEntries(for: git.worktreesResult).map(\.id) == ["/a", "/busy", "/changed", "/b"])
+
+        // Something started in "busy" after the sheet opened.
+        monitor.recordActivity(worktreePath: "/busy", at: Date())
+        await actions.remove(entries, deleteBranch: true)?.value
+
+        #expect(await stub.removed == ["/a", "/b"])
+        #expect(app.errorMessage == "Couldn't remove busy: files are changing or a command is running in it. "
+                + "Couldn't remove changed: " + (CleanupError.changed.errorDescription ?? ""))
     }
 
     @Test("an in-use worktree is left alone even though it was eligible when confirmed")

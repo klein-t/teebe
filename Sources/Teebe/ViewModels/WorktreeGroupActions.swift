@@ -2,6 +2,13 @@ import Foundation
 import Observation
 import TeebeCore
 
+/// One line of the remove-all confirmation: the worktree as its row names it, and
+/// where its folder is.
+struct WorktreeRemovalItem: Equatable {
+    let name: String
+    let path: String
+}
+
 /// The work behind the group-header action, the row trash and "Remove
 /// Worktree…": removing worktree folders (optionally deleting the local branches
 /// of merged ones). Every removal runs through `perform` / `remove`, which
@@ -53,11 +60,21 @@ final class WorktreeGroupActions {
     }
 
     func confirmationTitle(_ entries: [CleanupEntry]) -> String {
-        entries.count == 1 ? "Remove 1 worktree folder?" : "Remove \(entries.count) worktree folders?"
+        entries.count == 1 ? "Remove 1 worktree?" : "Remove \(entries.count) worktrees?"
+    }
+
+    /// Every worktree the remove-all sheet will remove, in list order.
+    func confirmationItems(_ entries: [CleanupEntry]) -> [WorktreeRemovalItem] {
+        entries.map { WorktreeRemovalItem(name: name($0), path: ($0.id as NSString).abbreviatingWithTildeInPath) }
     }
 
     func confirmationMessage(_ entries: [CleanupEntry], deleteBranch: Bool) -> String {
-        "The folders will be deleted from your Mac. "
+        if entries.count == 1 {
+            return "The folder will be deleted from your Mac. "
+                + (deleteBranch ? "Its local branch will be deleted too; the remote branch is kept."
+                    : "The branch will be kept.")
+        }
+        return "The folders will be deleted from your Mac. "
             + (deleteBranch ? "Their local branches will be deleted too; remote branches are kept."
                 : "Branches will be kept.")
     }
@@ -92,23 +109,26 @@ final class WorktreeGroupActions {
     }
 
     private func performRemoval(_ entries: [CleanupEntry], repo: Repository, deleteBranch: Bool, includingBrowsed: Bool) async {
-        // Await each removal: cleanup writes never run concurrently.
+        // Await each removal: cleanup writes never run concurrently. Every skip is
+        // reported, together, once the rest have run.
+        var problems: [String] = []
         for entry in entries {
             if let reason = await refusal(entry, includingBrowsed: includingBrowsed) {
-                app.setError("Couldn't remove \(name(entry)): \(reason)")
+                problems.append("Couldn't remove \(name(entry)): \(reason)")
                 continue
             }
             do {
                 let branch = try await service.remove(repoPath: repo.path, entry: entry,
                                                       includingIgnored: true, deleteBranch: deleteBranch)
                 if branch == .kept {
-                    app.setError("Removed \(name(entry)), but kept its branch: it changed or Git refused to delete it.")
+                    problems.append("Removed \(name(entry)), but kept its branch: it changed or Git refused to delete it.")
                 }
             } catch {
                 let reason = (error as? CleanupError)?.errorDescription ?? "Git refused removal; the worktree was kept."
-                app.setError("Couldn't remove \(name(entry)): \(reason)")
+                problems.append("Couldn't remove \(name(entry)): \(reason)")
             }
         }
+        if !problems.isEmpty { app.setError(problems.joined(separator: " ")) }
         isWorking = false
         await rescan(repo)
     }
