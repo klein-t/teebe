@@ -132,7 +132,7 @@ struct WorktreeListPresentationTests {
             statuses: [status(merged("/a"), info: ahead), status(merged("/b"), info: behind),
                        status(merged("/c"), info: both), status(merged("/d"), info: .init(agentState: .working))],
             targets: ["dev", "main"])
-        #expect(safe == WorktreeCard(title: "Safe to delete", subtitle: "All their work is in dev or main. You can remove them.",
+        #expect(safe == WorktreeCard(title: "Safe to delete", subtitle: "Their committed changes are in dev or main. You can remove them.",
                                      facts: [WorktreeCardFact(icon: .merge, text: "4 worktrees merged", tone: .positive),
                                              WorktreeCardFact(icon: .warning, text: "Agent or command active in 1",
                                                               tone: .warn),
@@ -153,7 +153,7 @@ struct WorktreeListPresentationTests {
         #expect(notMerged.facts == [WorktreeCardFact(icon: .merge, text: "2 worktrees not safe to delete", tone: .muted),
                                     WorktreeCardFact(icon: .cloud, text: "1 with work to pull", tone: .muted)])
         #expect(WorktreeGroup.merged.card(statuses: [status(merged("/g"))], targets: ["main"]).subtitle
-            == "All its work is in main. You can remove it.")
+            == "Its committed changes are in main. You can remove it.")
     }
 
     @Test("groups read in a fixed order and their rows sort by branch name")

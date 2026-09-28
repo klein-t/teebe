@@ -19,6 +19,8 @@ struct FreshBranchTests {
         fixture.addWorktree(name: "fresh", branch: "fresh")
         let entry = try #require(try await scan(fixture).entries.first { $0.worktree.branch == "fresh" })
         #expect(entry.hasNoCommits)
+        // Its own creation record proves it.
+        #expect(entry.hasNoCommitsConfirmed)
         #expect(entry.mergeStatus == .notConfirmed)
         #expect(entry.mergedTargets.isEmpty)
         #expect(!entry.canRemove(includingIgnored: true))
@@ -36,6 +38,7 @@ struct FreshBranchTests {
         fixture.git(["update-ref", "refs/remotes/origin/dev", "HEAD"])
         let entry = try #require(try await scan(fixture).entries.first { $0.worktree.branch == "feat/lens" })
         #expect(entry.hasNoCommits)
+        #expect(entry.hasNoCommitsConfirmed)
         #expect(entry.mergeStatus == .notConfirmed)
     }
 
@@ -83,6 +86,8 @@ struct FreshBranchTests {
         let atTip = try #require(entries.first { $0.worktree.branch == "atTip" })
         let merged = try #require(entries.first { $0.worktree.branch == "behind" })
         #expect(atTip.hasNoCommits)
+        // Inferred from where its tip sits, not proven.
+        #expect(!atTip.hasNoCommitsConfirmed)
         #expect(atTip.mergeStatus == .notConfirmed)
         #expect(!merged.hasNoCommits)
         #expect(merged.mergeStatus == .merged)
@@ -167,6 +172,7 @@ struct FreshBranchTests {
         let mergedEntry = try #require(entries.first { $0.worktree.branch == "merged" })
         // Its tip sits on main's own line: it may have been cut there, so no ✓.
         #expect(ffEntry.hasNoCommits)
+        #expect(!ffEntry.hasNoCommitsConfirmed)
         #expect(ffEntry.mergeStatus == .notConfirmed)
         // Its tip only reached main through a merge: that is merged work.
         #expect(!mergedEntry.hasNoCommits)
@@ -183,6 +189,7 @@ struct FreshBranchTests {
         fixture.commitFile("b.txt", "main moved on")
         let entry = try #require(try await scan(fixture).entries.first { $0.worktree.isDetached })
         #expect(entry.hasNoCommits)
+        #expect(!entry.hasNoCommitsConfirmed)
         #expect(entry.mergeStatus == .notConfirmed)
     }
 }

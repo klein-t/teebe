@@ -69,7 +69,7 @@ struct WorktreeMarkView: View {
         case .uncommitted: "Uncommitted changes"
         case .brokenLink: "Worktree link broken"
         case .merged: "Merged"
-        case .notMerged: "Not merged"
+        case .notMerged: WorktreeGroup.notMergedTitle
         case .none: ""
         }
     }

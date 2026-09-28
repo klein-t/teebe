@@ -7,10 +7,12 @@ import TeebeCore
 enum WorktreeGroup: String, CaseIterable, Identifiable {
     case localChanges, notMerged, merged
     var id: String { rawValue }
+    /// The Not merged group's name, also the title of a card in it: one place to rename it.
+    static let notMergedTitle = "Not merged"
     var title: String {
         switch self {
         case .localChanges: "Uncommitted changes"
-        case .notMerged: "Not merged"
+        case .notMerged: Self.notMergedTitle
         case .merged: "Safe to delete"
         }
     }
@@ -32,7 +34,7 @@ enum WorktreeGroup: String, CaseIterable, Identifiable {
             countFact = WorktreeCardFact(icon: .merge, text: WorktreeWording.plural(count, "worktree") + " not safe to delete",
                                          tone: .muted)
         case .merged:
-            subtitle = "All \(one ? "its" : "their") work is in \(targetList). You can remove \(one ? "it" : "them")."
+            subtitle = "\(one ? "Its" : "Their") committed changes are in \(targetList). You can remove \(one ? "it" : "them")."
             countFact = WorktreeCardFact(icon: .merge, text: WorktreeWording.plural(count, "worktree") + " merged",
                                          tone: .positive)
         }

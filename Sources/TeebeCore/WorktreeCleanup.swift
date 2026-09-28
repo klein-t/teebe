@@ -102,6 +102,10 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
     /// created from. Ancestry would call it merged, but there is no work of its
     /// own to be merged, so it is reported as not merged.
     public var hasNoCommits = false
+    /// `hasNoCommits` is proven by the branch's own record of where it was
+    /// created, rather than inferred from where its tip sits (which a branch
+    /// fast-forwarded into a target, with its reflogs gone, looks the same as).
+    public var hasNoCommitsConfirmed = false
     /// A rebase, merge, cherry-pick, revert or bisect left unfinished here. Its
     /// state is in the checkout's git directory, so the folder is never removed.
     public var operation: GitOperation?
@@ -329,11 +333,15 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             entry.mergedTargets = merge.targets
             entry.hasEquivalentContent = merge.byContent
             entry.mergeStatus = merge.targets.isEmpty ? .notConfirmed : .merged
-            if !merge.targets.isEmpty, !merge.byContent, !entry.isTarget,
-               await hasNoCommits(branch: worktree.branch, head: entry.worktree.head, targets: targets, in: worktree.path) {
-                entry.hasNoCommits = true
-                entry.mergedTargets = []
-                entry.mergeStatus = .notConfirmed
+            if !merge.targets.isEmpty, !merge.byContent, !entry.isTarget {
+                let fresh = await freshness(branch: worktree.branch, head: entry.worktree.head, targets: targets,
+                                            in: worktree.path)
+                if fresh.isFresh {
+                    entry.hasNoCommits = true
+                    entry.hasNoCommitsConfirmed = fresh.isConfirmed
+                    entry.mergedTargets = []
+                    entry.mergeStatus = .notConfirmed
+                }
             }
         } catch {
             entry.mergeStatus = .unknown
@@ -383,23 +391,29 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
     ///   into a target with every reflog gone looks the same and can't be told apart,
     ///   so it stays unconfirmed rather than risk a ✓ on a branch just started;
     /// - a tip that reached a target only through a merge commit is merged work.
-    private func hasNoCommits(branch: String?, head: String, targets: [CleanupBranch], in path: String) async -> Bool {
+    ///
+    /// Only the creation record confirms it (`isConfirmed`); the rest is a likely
+    /// reading.
+    private func freshness(
+        branch: String?, head: String, targets: [CleanupBranch], in path: String
+    ) async -> (isFresh: Bool, isConfirmed: Bool) {
         let branchLog = await reflog(branch.map { "refs/heads/" + $0 }, in: path)
         if let oldest = branchLog.last, oldest.subject.hasPrefix(Self.createdPrefix) {
-            guard oldest.sha == head else { return false }
+            guard oldest.sha == head else { return (false, false) }
             var start = String(oldest.subject.dropFirst(Self.createdPrefix.count))
             for refPrefix in ["refs/heads/", "refs/remotes/"] where start.hasPrefix(refPrefix) {
                 start = String(start.dropFirst(refPrefix.count))
             }
             let isCommitID = start.count >= 7 && start.allSatisfy(\.isHexDigit)
             let targetNames = Set(targets.flatMap { [$0.name, $0.shortName] } + CleanupTargets.integrationNames)
-            return start == "HEAD" || isCommitID || targetNames.contains(start)
+            let isFresh = start == "HEAD" || isCommitID || targetNames.contains(start)
+            return (isFresh, isFresh)
         }
         let logs = branchLog + (await reflog("HEAD", in: path))
-        if logs.contains(where: { $0.sha == head && $0.subject.hasPrefix("commit") }) { return false }
-        if targets.contains(where: { $0.sha == head }) { return true }
-        for target in targets where await isOnFirstParentLine(head, of: target, in: path) { return true }
-        return false
+        if logs.contains(where: { $0.sha == head && $0.subject.hasPrefix("commit") }) { return (false, false) }
+        if targets.contains(where: { $0.sha == head }) { return (true, false) }
+        for target in targets where await isOnFirstParentLine(head, of: target, in: path) { return (true, false) }
+        return (false, false)
     }
 
     private static let createdPrefix = "branch: Created from "

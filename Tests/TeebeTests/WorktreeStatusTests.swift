@@ -55,13 +55,17 @@ struct WorktreeStatusTests {
 
     @Test("a branch with no commits of its own gets the ring and says so, never the trash")
     func freshBranch() {
-        let fresh = status(entry { $0.hasNoCommits = true })
+        let fresh = status(entry { $0.hasNoCommits = true; $0.hasNoCommitsConfirmed = true })
         #expect(fresh.mark == .notMerged)
         #expect(fresh.group == .notMerged)
         #expect(!fresh.showsTrash)
         #expect(fresh.card.title == "Not merged")
-        #expect(fresh.card.subtitle == "No commits yet.")
+        #expect(fresh.card.subtitle == "No commits of its own yet.")
         #expect(facts(fresh) == ["No uncommitted changes", "No commits yet", "Not on remote"])
+        // Only proven from the branch's own record; otherwise it may have been merged.
+        let likely = status(entry { $0.hasNoCommits = true })
+        #expect(likely.card.subtitle == "Merge not confirmed.")
+        #expect(facts(likely)[1] == "Merge not confirmed")
         // Its first untracked file makes it uncommitted work, like any other row.
         #expect(status(entry { $0.hasNoCommits = true }, count: 1).mark == .uncommitted)
         let prompt = WorktreeRemovalPrompt(worktree: feature, status: fresh,
@@ -151,7 +155,7 @@ struct WorktreeStatusTests {
     func cards() {
         let merged = status(entry(merged: [main, dev]), info: .init(remote: .sameBranch(remote: "origin", ahead: 0, behind: 0)))
         #expect(merged.card.title == "Safe to delete")
-        #expect(merged.card.subtitle == "All its work is merged. You can remove it.")
+        #expect(merged.card.subtitle == "Its committed changes are merged. You can remove it.")
         #expect(merged.card.facts == [
             WorktreeCardFact(icon: .pencil, text: "No uncommitted changes", tone: .muted),
             WorktreeCardFact(icon: .merge, text: "Merged into main and dev", tone: .positive),
@@ -193,7 +197,7 @@ struct WorktreeStatusTests {
 
         let ring = status(entry())
         #expect(ring.card.title == "Not merged")
-        #expect(ring.card.subtitle == "Its commits aren’t merged yet.")
+        #expect(ring.card.subtitle == "Its commits aren’t in main or dev yet.")
         #expect(facts(ring) == ["No uncommitted changes", "Not in main or dev yet", "Not on remote"])
 
         let unknown = status(entry { $0.mergeStatus = .unknown; $0.problem = "Could not inspect this worktree"; $0.isInspected = false })
@@ -210,6 +214,39 @@ struct WorktreeStatusTests {
         #expect(unlinked.card.subtitle == "The folder’s .git link is missing, so Teebe leaves its files alone.")
         #expect(unlinked.card.facts.isEmpty)
         #expect(unlinked.group == .notMerged)
+    }
+
+    @Test("a Not merged card says the one specific reason, briefly")
+    func specificReasons() {
+        func subtitle(_ entry: CleanupEntry?, info: SelectorModel.WorktreeInfo = .init(), targets: [String] = ["main", "dev"])
+            -> String {
+            WorktreeStatus(worktree: entry?.worktree ?? feature, merge: entry.map { WorktreeMergeEntry(entry: $0) },
+                           info: info, targetNames: targets, isChecking: false).card.subtitle
+        }
+        let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
+        let detached = Worktree(path: "/d", head: "abc", isDetached: true)
+        #expect(subtitle(entry()) == "Its commits aren’t in main or dev yet.")
+        #expect(subtitle(entry { $0.hasNoCommits = true; $0.hasNoCommitsConfirmed = true }) == "No commits of its own yet.")
+        #expect(subtitle(entry { $0.hasNoCommits = true }) == "Merge not confirmed.")
+        // Its remote branch is gone, as after a merged pull request, but no merge was found.
+        #expect(subtitle(entry(), info: .init(remote: .remoteDeleted)) == "Merge not confirmed.")
+        #expect(subtitle(entry(locked) { $0.problem = "Locked worktree" }) == "Locked, so Teebe won’t remove it.")
+        #expect(subtitle(entry(detached) { $0.problem = "Detached HEAD" }) == "Detached HEAD, not on a branch.")
+        #expect(subtitle(entry { $0.operation = .rebase }) == "Rebase in progress.")
+        #expect(subtitle(entry(detached) { $0.operation = .rebase; $0.problem = "Detached HEAD" }) == "Rebase in progress.")
+        #expect(subtitle(entry { $0.hasSubmodules = true }) == "It contains a submodule, so Teebe won’t remove it.")
+        #expect(subtitle(entry { $0.hasUncheckedFiles = true })
+                == "Some files are marked unchanged in Git, so Teebe won’t remove it.")
+        #expect(subtitle(entry { $0.mergeStatus = .unknown; $0.isInspected = false }) == "Couldn’t check this worktree.")
+        #expect(subtitle(nil) == "Couldn’t check this worktree.")
+        // The files were read; only the comparison failed. What the files said still stands.
+        let comparisonFailed = entry { $0.mergeStatus = .unknown; $0.problem = "Could not inspect this worktree" }
+        #expect(subtitle(comparisonFailed) == "Couldn’t check if it’s merged.")
+        #expect(facts(status(comparisonFailed)) == ["No uncommitted changes", "Couldn’t check merge status", "Not on remote"])
+        #expect(subtitle(entry { $0.mergeStatus = .unknown }, targets: []) == "No branch to compare it against.")
+        // The card title is the group's, from one constant.
+        #expect(status(entry()).card.title == WorktreeGroup.notMergedTitle)
+        #expect(WorktreeGroup.notMerged.title == WorktreeGroup.notMergedTitle)
     }
 
     @Test("a row with no result yet reads as checking, then as unknown")
@@ -267,7 +304,7 @@ struct WorktreeStatusTests {
         #expect(status(entry(primary, merged: [dev])).card.subtitle == "The main checkout, so Teebe won’t remove it.")
         let detached = Worktree(path: "/d", head: "abc", isDetached: true)
         let detachedStatus = status(entry(detached, merged: [dev]) { $0.problem = "Detached HEAD" })
-        #expect(detachedStatus.card.subtitle == "Detached HEAD, so Teebe won’t remove it.")
+        #expect(detachedStatus.card.subtitle == "Detached HEAD, not on a branch.")
         #expect(detachedStatus.group == .notMerged)
         #expect(detachedStatus.mark == .notMerged)
         // Merged commits, but Git could be hiding local work: no ✓, and the sentence says why.

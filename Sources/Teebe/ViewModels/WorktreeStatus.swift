@@ -238,29 +238,46 @@ private struct Facts {
         case .brokenLink:
             return ("Broken link", "The folder’s .git link is missing, so Teebe leaves its files alone.")
         case .merged:
-            return isRemovable ? ("Safe to delete", "All its work is merged. You can remove it.")
-                : ("Merged", protectionReason + ", so Teebe won’t remove it.")
+            return isRemovable ? ("Safe to delete", "Its committed changes are merged. You can remove it.")
+                : ("Merged", WorktreeWording.reason(worktree, entry) ?? "Teebe won’t remove it right now.")
         case .notMerged: return notMergedHeadline
         }
     }
 
-    /// No ✓: not merged, not known (yet, or any more), or merged but protected.
+    /// No ✓, and the one specific reason why: still checking, couldn't check,
+    /// an operation or a protection, then what the merge check found.
     private var notMergedHeadline: (String, String) {
         if isRechecking || (entry == nil && isChecking) {
             let targets = targetNames.isEmpty ? "its merge targets" : WorktreeWording.list(targetNames, joiner: "or")
             return ("Checking…", "Looking for this branch in \(targets).")
         }
-        guard let entry else { return ("Couldn’t check", "Couldn’t check this worktree.") }
+        guard let entry, entry.isInspected else { return ("Couldn’t check", "Couldn’t check this worktree.") }
+        let title = switch entry.mergeStatus {
+        case .merged: "Merged"
+        case .notConfirmed: WorktreeGroup.notMergedTitle
+        case .unknown: "Couldn’t check"
+        }
+        if let reason = WorktreeWording.reason(worktree, entry) { return (title, reason) }
         switch entry.mergeStatus {
-        case .merged: return ("Merged", protectionReason + ", so Teebe won’t remove it.")
+        case .merged: return (title, "Teebe won’t remove it right now.")
         case .notConfirmed:
-            return ("Not merged", entry.hasNoCommits ? "No commits yet." : "Its commits aren’t merged yet.")
-        case .unknown: return ("Couldn’t check", "Couldn’t check this worktree.")
+            if isMergeUnconfirmed { return (title, "Merge not confirmed.") }
+            if entry.hasNoCommits { return (title, "No commits of its own yet.") }
+            let targets = targetNames.isEmpty ? "merged" : "in " + WorktreeWording.list(targetNames, joiner: "or")
+            return (title, "Its commits aren’t \(targets) yet.")
+        case .unknown:
+            // The files were checked; only the comparison with the targets failed.
+            return (title, targetNames.isEmpty ? "No branch to compare it against." : "Couldn’t check if it’s merged.")
         }
     }
 
-    /// Why a merged row stays, as the start of a sentence.
-    private var protectionReason: String { WorktreeWording.protection(worktree, entry) ?? "Protected" }
+    /// Not shown as merged, but it may well be: a branch that only looks unstarted
+    /// (nothing proves it has no commits of its own), or one whose remote branch
+    /// was deleted, as happens once a pull request is merged.
+    private var isMergeUnconfirmed: Bool {
+        guard let entry, entry.mergeStatus == .notConfirmed else { return false }
+        return entry.hasNoCommits ? !entry.hasNoCommitsConfirmed : info.remote == .remoteDeleted
+    }
 
     /// Clean is a fact only once the folder was fully inspected: a check that
     /// failed or hasn't finished says so rather than reading as clean.
@@ -284,6 +301,7 @@ private struct Facts {
         switch entry.mergeStatus {
         case .merged: return WorktreeCardFact(icon: .merge, text: WorktreeWording.mergedText(entry), tone: .positive)
         case .notConfirmed:
+            if isMergeUnconfirmed { return muted("Merge not confirmed") }
             if entry.hasNoCommits { return muted("No commits yet") }
             return muted(targetNames.isEmpty ? "Not merged yet" : "Not in \(WorktreeWording.list(targetNames, joiner: "or")) yet")
         case .unknown: return muted("Couldn’t check merge status")
@@ -327,11 +345,23 @@ enum WorktreeWording {
         if let operation = entry?.operation { return Self.inProgress(operation) }
         if worktree.isLocked { return "Locked" }
         if entry?.isBroken == true { return "Its .git link is missing" }
-        if worktree.isDetached { return "Detached HEAD" }
+        if worktree.isDetached { return detachedHead }
         if entry?.hasUncheckedFiles == true { return "Some files are marked unchanged in Git" }
         if entry?.hasSubmodules == true { return "It contains a submodule" }
         return nil
     }
+
+    /// Why the card's row can't be removed, as its one sentence: "Rebase in
+    /// progress.", "Locked, so Teebe won’t remove it.", "Detached HEAD, not on a
+    /// branch."; nil when nothing protects it.
+    static func reason(_ worktree: Worktree, _ entry: CleanupEntry?) -> String? {
+        guard let protection = protection(worktree, entry) else { return nil }
+        if let operation = entry?.operation { return inProgress(operation) + "." }
+        if protection == detachedHead { return "Detached HEAD, not on a branch." }
+        return protection + ", so Teebe won’t remove it."
+    }
+
+    private static let detachedHead = "Detached HEAD"
 
     /// "Rebase in progress": what a checkout is in the middle of.
     static func inProgress(_ operation: GitOperation) -> String {
