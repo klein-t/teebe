@@ -22,6 +22,8 @@ enum WorktreePreferences {
 final class AppModel {
     private(set) var repositories: [Repository] = []
     var groupWorktreesByMergeStatus: Bool { didSet { persist() } }
+    /// How the worktree list is ordered, within each group when grouped.
+    var worktreeSortOrder: WorktreeSortOrder { didSet { persist() } }
     /// Fetch remote refs in the background, so merge results reflect what was
     /// pushed rather than what was last pulled by hand.
     var fetchAutomatically: Bool { didSet { persist() } }
@@ -35,6 +37,14 @@ final class AppModel {
     private(set) var errorMessage: String?
     /// The New Worktree sheet's form while it is up; nil when it is closed.
     var newWorktree: NewWorktreeModel?
+    /// A worktree row's card asked for from the keyboard: the row, and a count
+    /// that changes on every request so asking again shows it again.
+    private(set) var worktreeCardReveal: (path: String, count: Int)?
+
+    /// Show this row's status card now, as hovering its mark would.
+    func revealWorktreeCard(for path: String) {
+        worktreeCardReveal = (path, (worktreeCardReveal?.count ?? 0) + 1)
+    }
 
     /// Which section the keyboard currently drives — arrows, Enter and Space act on
     /// it, and its header shows the active accent. Moved by ⌘1/⌘2/⌘3, Tab/⇧Tab, or by
@@ -83,6 +93,7 @@ final class AppModel {
         self.openWith = OpenWithModel(environment: environment, apps: self.state.openWithApps ?? [:])
         // Keep the legacy key so existing grouping choices survive the new default.
         self.groupWorktreesByMergeStatus = self.state.showMergeStatus ?? false
+        self.worktreeSortOrder = WorktreeSortOrder(rawValue: self.state.worktreeSortOrder ?? "") ?? .folder
         self.fetchAutomatically = self.state.fetchAutomatically ?? true
         self.deleteBranchOnRemove = self.state.deleteBranchOnRemove ?? true
         self.floatOnTop = false
@@ -466,6 +477,7 @@ final class AppModel {
         state.repositories = repositories.map { PersistedRepository(path: $0.path) }
         state.floatOnTop = floatOnTop
         state.showMergeStatus = groupWorktreesByMergeStatus
+        state.worktreeSortOrder = worktreeSortOrder == .folder ? nil : worktreeSortOrder.rawValue
         state.fetchAutomatically = fetchAutomatically
         state.deleteBranchOnRemove = deleteBranchOnRemove
         state.appearance = appearance == .system ? nil : appearance.rawValue

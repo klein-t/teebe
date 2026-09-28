@@ -7,10 +7,12 @@ import TeebeCore
 enum WorktreeGroup: String, CaseIterable, Identifiable {
     case localChanges, notMerged, merged
     var id: String { rawValue }
+    /// The Not merged group's name, also the title of a card in it: one place to rename it.
+    static let notMergedTitle = "Not merged"
     var title: String {
         switch self {
         case .localChanges: "Uncommitted changes"
-        case .notMerged: "Not merged"
+        case .notMerged: Self.notMergedTitle
         case .merged: "Safe to delete"
         }
     }
@@ -32,7 +34,7 @@ enum WorktreeGroup: String, CaseIterable, Identifiable {
             countFact = WorktreeCardFact(icon: .merge, text: WorktreeWording.plural(count, "worktree") + " not safe to delete",
                                          tone: .muted)
         case .merged:
-            subtitle = "All \(one ? "its" : "their") work is in \(targetList). You can remove \(one ? "it" : "them")."
+            subtitle = "\(one ? "Its" : "Their") committed changes are in \(targetList). You can remove \(one ? "it" : "them")."
             countFact = WorktreeCardFact(icon: .merge, text: WorktreeWording.plural(count, "worktree") + " merged",
                                          tone: .positive)
         }
@@ -53,6 +55,62 @@ enum WorktreeGroup: String, CaseIterable, Identifiable {
     }
 }
 
+/// How rows are ordered, within each group when grouped. The primary checkout
+/// (and, grouped, the base-branch checkouts) stay on top whatever the order. The
+/// raw values are persisted.
+enum WorktreeSortOrder: String, CaseIterable, Identifiable {
+    /// What each row shows first: agent working, agent waiting, uncommitted
+    /// changes, not merged, then safe to delete.
+    case status
+    /// By the name the row shows: its branch, or its folder for a detached HEAD.
+    case name
+    /// By folder name, the order the list has always had.
+    case folder
+
+    static let menuTitle = "Sort by"
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .status: "Status"
+        case .name: "Name"
+        case .folder: "Folder"
+        }
+    }
+
+    /// Whether `lhs` comes before `rhs`. Ties fall to the name, then the path, so
+    /// the order never depends on what Git listed first.
+    func areInOrder(_ lhs: Worktree, _ rhs: Worktree, statuses: [String: WorktreeStatus]) -> Bool {
+        switch self {
+        case .status:
+            let left = Self.rank(statuses[lhs.path]), right = Self.rank(statuses[rhs.path])
+            if left != right { return left < right }
+        case .name: break
+        case .folder:
+            // The comparison the list has always used, so the default keeps its order.
+            let order = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if order != .orderedSame { return order == .orderedAscending }
+        }
+        for key in [Self.label, \.path] as [(Worktree) -> String] {
+            let order = key(lhs).localizedStandardCompare(key(rhs))
+            if order != .orderedSame { return order == .orderedAscending }
+        }
+        return false
+    }
+
+    private static func label(_ worktree: Worktree) -> String { worktree.branch ?? worktree.name }
+
+    /// By the mark the row shows; a row with no result yet sorts with Not merged.
+    private static func rank(_ status: WorktreeStatus?) -> Int {
+        switch status?.mark {
+        case .working?: 0
+        case .waiting?: 1
+        case .uncommitted?: 2
+        case .merged?: 4
+        default: 3
+        }
+    }
+}
+
 struct WorktreeListPresentation {
     struct Group: Identifiable {
         let kind: WorktreeGroup
@@ -70,15 +128,17 @@ struct WorktreeListPresentation {
     static let verticalPadding: CGFloat = 8
 
     /// `statuses` is keyed by worktree path; a worktree without one is not pinned
-    /// (unless primary) and falls in Not merged.
+    /// (unless primary) and falls in Not merged. Flat, every row is listed in
+    /// `pinned`, the primary checkout first and the rest in `sort` order.
     init(worktrees: [Worktree], statuses: [String: WorktreeStatus], grouped: Bool,
-         collapsed: Set<WorktreeGroup>, hasRepository: Bool) {
-        pinned = grouped ? worktrees.filter { $0.isPrimary || statuses[$0.path]?.isPinned == true } : worktrees
+         collapsed: Set<WorktreeGroup>, hasRepository: Bool, sort: WorktreeSortOrder = .folder) {
+        func sorted(_ rows: [Worktree]) -> [Worktree] { rows.sorted { sort.areInOrder($0, $1, statuses: statuses) } }
+        pinned = grouped ? worktrees.filter { $0.isPrimary || statuses[$0.path]?.isPinned == true }
+            : worktrees.filter(\.isPrimary) + sorted(worktrees.filter { !$0.isPrimary })
         let pinnedPaths = Set(pinned.map(\.path))
         let remaining = grouped ? worktrees.filter { !pinnedPaths.contains($0.path) } : []
         groups = WorktreeGroup.allCases.compactMap { kind in
-            let rows = remaining.filter { (statuses[$0.path]?.group ?? .notMerged) == kind }
-                .sorted { Self.sortKey($0).localizedStandardCompare(Self.sortKey($1)) == .orderedAscending }
+            let rows = sorted(remaining.filter { (statuses[$0.path]?.group ?? .notMerged) == kind })
             return rows.isEmpty ? nil : Group(kind: kind, worktrees: rows)
         }
         visibleWorktrees = pinned + groups.filter { !collapsed.contains($0.kind) }.flatMap(\.worktrees)
@@ -86,9 +146,6 @@ struct WorktreeListPresentation {
             + CGFloat(max(visibleWorktrees.count, worktrees.isEmpty ? 1 : 0)) * Self.rowHeight
             + CGFloat(groups.count) * Self.groupHeight
     }
-
-    /// Sort worktrees by their displayed label: branch, or folder for detached HEAD.
-    private static func sortKey(_ worktree: Worktree) -> String { worktree.branch ?? worktree.name }
 }
 
 extension AppModel {
@@ -124,7 +181,7 @@ extension AppModel {
                                   uniquingKeysWith: { first, _ in first })
         return WorktreeListPresentation(worktrees: selector.worktrees, statuses: statuses,
                                        grouped: groupWorktreesByMergeStatus, collapsed: collapsed,
-                                       hasRepository: selector.selectedRepo != nil)
+                                       hasRepository: selector.selectedRepo != nil, sort: worktreeSortOrder)
     }
 
     /// What confirming "Remove Worktree…" on this row will do, captured when the

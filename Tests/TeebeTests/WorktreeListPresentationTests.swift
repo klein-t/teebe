@@ -10,6 +10,7 @@ struct WorktreeListPresentationTests {
     func classification() {
         var entry = CleanupEntry(worktree: Worktree(path: "/feature"))
         entry.mergeStatus = .merged
+        entry.isInspected = true
         #expect(status(entry).group == .merged)
         entry.hasIgnoredFiles = true
         #expect(status(entry).group == .merged)
@@ -26,11 +27,13 @@ struct WorktreeListPresentationTests {
     func unconfirmedFoldsIntoNotMerged() {
         var skipped = CleanupEntry(worktree: Worktree(path: "/skipped"))
         skipped.mergeStatus = .merged
+        skipped.isInspected = true
         skipped.hasUncheckedFiles = true
         #expect(status(skipped).group == .notMerged)
 
         var submodule = CleanupEntry(worktree: Worktree(path: "/submodule"))
         submodule.mergeStatus = .merged
+        submodule.isInspected = true
         submodule.hasSubmodules = true
         #expect(status(submodule).group == .notMerged)
 
@@ -50,6 +53,7 @@ struct WorktreeListPresentationTests {
                          Worktree(path: "/detached", head: "abc", isDetached: true)] {
             var entry = CleanupEntry(worktree: worktree)
             entry.mergeStatus = .merged
+            entry.isInspected = true
             entry.problem = worktree.isLocked ? "Locked worktree" : "Detached HEAD"
             let rowStatus = status(entry)
             #expect(rowStatus.group == .notMerged)
@@ -59,12 +63,23 @@ struct WorktreeListPresentationTests {
         }
     }
 
-    @Test("agent activity never moves a row between groups")
-    func agentDoesNotRegroup() {
+    @Test("a row something is working in is not Safe to delete: the group, the ✓ and the trash agree")
+    func activityKeepsRowOutOfSafeToDelete() {
         var entry = CleanupEntry(worktree: Worktree(path: "/feature", branch: "feature"))
         entry.mergeStatus = .merged
-        for agent in [AgentActivityState.idle, .working, .needsAttention] {
-            #expect(status(entry, info: .init(agentState: agent)).group == .merged)
+        entry.isInspected = true
+        entry.isInspected = true
+        let idle = status(entry)
+        #expect(idle.group == .merged)
+        #expect(idle.isSafeToDelete)
+        #expect(idle.mark == .merged)
+        #expect(idle.trashAction == .remove(entry))
+        for info in [SelectorModel.WorktreeInfo(agentState: .working), .init(agentState: .needsAttention), .init(isLive: true)] {
+            let active = status(entry, info: info)
+            #expect(active.group == .notMerged)
+            #expect(!active.isSafeToDelete)
+            #expect(active.mark != .merged)
+            #expect(active.trashAction == nil)
         }
     }
 
@@ -76,6 +91,7 @@ struct WorktreeListPresentationTests {
         let target = Worktree(path: "/dev")
         var cleanEntry = CleanupEntry(worktree: clean)
         cleanEntry.mergeStatus = .merged
+        cleanEntry.isInspected = true
         var dirtyEntry = CleanupEntry(worktree: dirty)
         dirtyEntry.hasLocalChanges = true
         var targetEntry = CleanupEntry(worktree: target)
@@ -98,7 +114,8 @@ struct WorktreeListPresentationTests {
         let flat = WorktreeListPresentation(worktrees: trees, statuses: entries, grouped: false,
                                            collapsed: [.merged], hasRepository: true)
         #expect(flat.groups.isEmpty)
-        #expect(flat.visibleWorktrees == trees)
+        // Flat, every row is listed: the primary first, the rest by folder.
+        #expect(flat.visibleWorktrees.map(\.path) == ["/primary", "/dev", "/dirty", "/merged"])
     }
 
     @Test("a group card sums up its rows: state title, one sentence, the count, activity and remote work")
@@ -106,6 +123,7 @@ struct WorktreeListPresentationTests {
         func merged(_ path: String) -> CleanupEntry {
             var entry = CleanupEntry(worktree: Worktree(path: path, branch: String(path.dropFirst())))
             entry.mergeStatus = .merged
+            entry.isInspected = true
             return entry
         }
         let ahead = SelectorModel.WorktreeInfo(remote: .sameBranch(remote: "origin/a", ahead: 2, behind: 0))
@@ -115,7 +133,7 @@ struct WorktreeListPresentationTests {
             statuses: [status(merged("/a"), info: ahead), status(merged("/b"), info: behind),
                        status(merged("/c"), info: both), status(merged("/d"), info: .init(agentState: .working))],
             targets: ["dev", "main"])
-        #expect(safe == WorktreeCard(title: "Safe to delete", subtitle: "All their work is in dev or main. You can remove them.",
+        #expect(safe == WorktreeCard(title: "Safe to delete", subtitle: "Their committed changes are in dev or main. You can remove them.",
                                      facts: [WorktreeCardFact(icon: .merge, text: "4 worktrees merged", tone: .positive),
                                              WorktreeCardFact(icon: .warning, text: "Agent or command active in 1",
                                                               tone: .warn),
@@ -136,7 +154,7 @@ struct WorktreeListPresentationTests {
         #expect(notMerged.facts == [WorktreeCardFact(icon: .merge, text: "2 worktrees not safe to delete", tone: .muted),
                                     WorktreeCardFact(icon: .cloud, text: "1 with work to pull", tone: .muted)])
         #expect(WorktreeGroup.merged.card(statuses: [status(merged("/g"))], targets: ["main"]).subtitle
-            == "All its work is in main. You can remove it.")
+            == "Its committed changes are in main. You can remove it.")
     }
 
     @Test("groups read in a fixed order and their rows sort by branch name")
@@ -154,12 +172,67 @@ struct WorktreeListPresentationTests {
         for tree in [zed, alpha, unnamed] {
             var entry = CleanupEntry(worktree: tree)
             entry.mergeStatus = .merged
+            entry.isInspected = true
             entries[tree.path] = status(entry)
         }
         let list = WorktreeListPresentation(worktrees: [zed, alpha, unnamed], statuses: entries,
-                                            grouped: true, collapsed: [], hasRepository: true)
+                                            grouped: true, collapsed: [], hasRepository: true, sort: .name)
         #expect(list.groups.map(\.kind) == [.merged])
         #expect(list.groups[0].worktrees.map { $0.branch ?? $0.name } == ["alpha", "mid", "zed"])
+    }
+
+    @Test("sort by status, name or folder; the primary stays on top and ties fall to name, then path")
+    func sortOrders() {
+        let primary = Worktree(path: "/repo", branch: "main", isPrimary: true)
+        func row(_ folder: String, _ branch: String) -> Worktree { Worktree(path: "/wt/" + folder, branch: branch) }
+        let safe = row("a-safe", "zz-safe"), notMerged = row("b-open", "yy-open"), dirty = row("c-dirty", "xx-dirty")
+        let waiting = row("d-wait", "ww-wait"), working = row("e-work", "vv-work")
+        // The same branch name in two folders: the path decides, whatever order Git listed them in.
+        let twinB = row("g-twin", "twin"), twinA = row("f-twin", "twin")
+        var statuses: [String: WorktreeStatus] = [:]
+        func add(_ tree: Worktree, merged: Bool = false, count: Int = 0, info: SelectorModel.WorktreeInfo = .init()) {
+            var entry = CleanupEntry(worktree: tree)
+            entry.mergeStatus = merged ? .merged : .notConfirmed
+            entry.isInspected = true
+            statuses[tree.path] = WorktreeStatus(worktree: tree, merge: WorktreeMergeEntry(entry: entry, localChangeCount: count),
+                                                 info: info, targetNames: ["main"], isChecking: false)
+        }
+        add(safe, merged: true)
+        add(notMerged)
+        add(dirty, count: 2)
+        add(waiting, merged: true, info: .init(agentState: .needsAttention))
+        add(working, info: .init(agentState: .working))
+        add(twinB)
+        add(twinA)
+        let trees = [twinB, working, primary, safe, waiting, notMerged, dirty, twinA]
+        func flat(_ sort: WorktreeSortOrder) -> [String] {
+            WorktreeListPresentation(worktrees: trees, statuses: statuses, grouped: false, collapsed: [],
+                                     hasRepository: true, sort: sort).pinned.map(\.path)
+        }
+        #expect(flat(.status) == [primary, working, waiting, dirty, twinA, twinB, notMerged, safe].map(\.path))
+        #expect(flat(.name) == [primary, twinA, twinB, working, waiting, dirty, notMerged, safe].map(\.path))
+        #expect(flat(.folder) == [primary, safe, notMerged, dirty, waiting, working, twinA, twinB].map(\.path))
+        // Grouped, the order applies within each group; the primary stays pinned above them.
+        let grouped = WorktreeListPresentation(worktrees: trees, statuses: statuses, grouped: true, collapsed: [],
+                                               hasRepository: true, sort: .status)
+        #expect(grouped.pinned.map(\.path) == [primary.path])
+        #expect(grouped.groups.map(\.kind) == [.localChanges, .notMerged, .merged])
+        #expect(grouped.groups[1].worktrees.map(\.path) == [working, waiting, twinA, twinB, notMerged].map(\.path))
+        let byFolder = WorktreeListPresentation(worktrees: trees, statuses: statuses, grouped: true, collapsed: [],
+                                                hasRepository: true)
+        #expect(byFolder.groups[1].worktrees.map(\.path) == [notMerged, waiting, working, twinA, twinB].map(\.path))
+    }
+
+    @Test("the sort order defaults to folder and is remembered")
+    func sortPreference() {
+        let env = makeTestEnvironment()
+        #expect(AppModel(environment: env).worktreeSortOrder == .folder)
+        AppModel(environment: env).worktreeSortOrder = .status
+        #expect(AppModel(environment: env).worktreeSortOrder == .status)
+        #expect(env.store.load().worktreeSortOrder == "status")
+        AppModel(environment: env).worktreeSortOrder = .folder
+        #expect(env.store.load().worktreeSortOrder == nil)
+        #expect(WorktreeSortOrder.allCases.map(\.title) == ["Status", "Name", "Folder"])
     }
 
     @Test("a worktree removed mid-scan leaves no row behind")
@@ -168,8 +241,10 @@ struct WorktreeListPresentationTests {
         let gone = Worktree(path: "/gone", branch: "gone")
         var keptEntry = CleanupEntry(worktree: kept)
         keptEntry.mergeStatus = .merged
+        keptEntry.isInspected = true
         var goneEntry = CleanupEntry(worktree: gone)
         goneEntry.mergeStatus = .merged
+        goneEntry.isInspected = true
         // The scan finished after the worktree was removed, so its result outlives it.
         let list = WorktreeListPresentation(worktrees: [kept],
                                             statuses: [kept.path: status(keptEntry), gone.path: status(goneEntry)],
@@ -187,6 +262,7 @@ struct WorktreeListPresentationTests {
         let dirty = Worktree(path: "/dirty", branch: "dirty")
         var mergedEntry = CleanupEntry(worktree: merged)
         mergedEntry.mergeStatus = .merged
+        mergedEntry.isInspected = true
         var dirtyEntry = CleanupEntry(worktree: dirty)
         dirtyEntry.hasLocalChanges = true
         let list = WorktreeListPresentation(
@@ -208,8 +284,10 @@ struct WorktreeListPresentationTests {
         let stale = Worktree(path: "/stale", branch: "stale")
         var mergedEntry = CleanupEntry(worktree: merged)
         mergedEntry.mergeStatus = .merged
+        mergedEntry.isInspected = true
         var staleEntry = CleanupEntry(worktree: stale)
         staleEntry.mergeStatus = .notConfirmed
+        staleEntry.isInspected = true
         let list = WorktreeListPresentation(
             worktrees: [merged, stale],
             statuses: [merged.path: status(mergedEntry), stale.path: status(staleEntry)],
@@ -233,6 +311,7 @@ struct WorktreeListPresentationTests {
         git.worktreesResult = [primary, clean, dirty, target]
         var cleanEntry = CleanupEntry(worktree: clean)
         cleanEntry.mergeStatus = .merged
+        cleanEntry.isInspected = true
         var dirtyEntry = CleanupEntry(worktree: dirty)
         dirtyEntry.hasLocalChanges = true
         var targetEntry = CleanupEntry(worktree: target)

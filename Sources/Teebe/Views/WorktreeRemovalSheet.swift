@@ -8,6 +8,8 @@ struct WorktreeRemovalSheet: View {
     /// Every worktree it will remove: one for a row, all of them for remove-all.
     let items: [WorktreeRemovalItem]
     let facts: [WorktreeCardFact]
+    /// Gitignored files that go for good: one notice per worktree that has some.
+    var ignored: [WorktreeIgnoredNotice] = []
     let explanation: String
     /// The remembered "Also delete the branch" choice; nil hides the checkbox.
     var deleteBranch: Binding<Bool>?
@@ -32,9 +34,10 @@ struct WorktreeRemovalSheet: View {
                 .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
             if !items.isEmpty { itemList.padding(.top, 12) }
-            if !facts.isEmpty {
+            if !facts.isEmpty || !ignored.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(facts.enumerated()), id: \.offset) { WorktreeFactRow(fact: $0.element, font: Typography.body) }
+                    ForEach(Array(ignored.enumerated()), id: \.offset) { IgnoredFilesNotice(notice: $0.element) }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -103,6 +106,53 @@ struct WorktreeRemovalSheet: View {
         .padding(.horizontal, 10)
         .frame(height: Self.rowHeight)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// One worktree's gitignored files: how many go for good, the names worth seeing
+/// first, and every file in a list that expands.
+private struct IgnoredFilesNotice: View {
+    let notice: WorktreeIgnoredNotice
+    @State private var isExpanded = false
+    /// Rows the expanded list draws before saying how many more there are.
+    private static let shownLimit = 200
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            WorktreeFactRow(fact: WorktreeCardFact(icon: .ignoredFiles, text: notice.summary, tone: .warn), font: Typography.body)
+            Group {
+                if let names = notice.names {
+                    Text(names).font(Typography.secondary).foregroundStyle(.secondary)
+                        .lineLimit(2).truncationMode(.middle)
+                }
+                if !notice.files.isEmpty {
+                    DisclosureGroup(isExpanded: $isExpanded) {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 1) {
+                                ForEach(notice.files.prefix(Self.shownLimit), id: \.self) { path in
+                                    Text(path).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                                        .lineLimit(1).truncationMode(.middle)
+                                }
+                                if let more {
+                                    Text(more).font(Typography.secondary).foregroundStyle(.secondary)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxHeight: 110)
+                    } label: {
+                        Text("Show files").font(Typography.secondary).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.leading, 21)
+        }
+    }
+
+    private var more: String? {
+        let hidden = notice.files.count - min(notice.files.count, Self.shownLimit)
+        guard hidden > 0 || notice.isTruncated else { return nil }
+        return notice.isTruncated ? "and more" : "and \(hidden.formatted(.number)) more"
     }
 }
 

@@ -14,13 +14,30 @@ struct RemoteSyncTests {
         #expect(RemoteSync(status: same) == .sameBranch(remote: "origin", ahead: 2, behind: 3))
         #expect(RemoteSync(status: same).ahead == 2)
         let other = parse(["# branch.head feat/x", "# branch.upstream origin/dev", "# branch.ab +5 -1"])
-        #expect(RemoteSync(status: other) == .notOnRemote)
+        #expect(RemoteSync(status: other) == .otherUpstream("origin/dev", isGone: false))
         #expect(RemoteSync(status: other).ahead == 0)
-        #expect(RemoteSync(status: parse(["# branch.head feat/x"])) == .notOnRemote)
-        #expect(RemoteSync(status: parse(["# branch.head (detached)"])) == .notOnRemote)
+        #expect(RemoteSync(status: parse(["# branch.head feat/x"])) == .noUpstream)
+        #expect(RemoteSync(status: parse(["# branch.head (detached)"])) == .noUpstream)
         // A suffix match is not a name match.
         let suffix = parse(["# branch.head x", "# branch.upstream origin/feat/x", "# branch.ab +0 -0"])
-        #expect(RemoteSync(status: suffix) == .notOnRemote)
+        #expect(RemoteSync(status: suffix) == .otherUpstream("origin/feat/x", isGone: false))
+    }
+
+    @Test("with no upstream, it is not on the remote only when that remote has no branch of its name")
+    func noUpstream() {
+        let unset = parse(["# branch.head feat/x"])
+        // The remote has other branches but not this one.
+        #expect(RemoteSync(status: unset, remoteBranches: ["origin/main"]) == .notOnRemote("origin"))
+        // It is there, only no upstream is set.
+        #expect(RemoteSync(status: unset, remoteBranches: ["origin/main", "origin/feat/x"]) == .noUpstream)
+        // Origin is the one named; another remote's copy doesn't count for it.
+        #expect(RemoteSync(status: unset, remoteBranches: ["origin/main", "fork/feat/x"]) == .notOnRemote("origin"))
+        #expect(RemoteSync(status: unset, remoteBranches: ["fork/main"]) == .notOnRemote("fork"))
+        // Several remotes, none of them origin: which one would it be on?
+        #expect(RemoteSync(status: unset, remoteBranches: ["a/main", "b/main"]) == .noUpstream)
+        // No remote branches known at all.
+        #expect(RemoteSync(status: unset, remoteBranches: []) == .noUpstream)
+        #expect(RemoteSync(status: unset) == .noUpstream)
     }
 
     @Test("an upstream without ahead/behind is gone")
@@ -29,7 +46,7 @@ struct RemoteSyncTests {
         #expect(gone.isUpstreamGone)
         #expect(RemoteSync(status: gone) == .remoteDeleted)
         let goneOther = parse(["# branch.head feat/x", "# branch.upstream origin/dev"])
-        #expect(RemoteSync(status: goneOther) == .notOnRemote)
+        #expect(RemoteSync(status: goneOther) == .otherUpstream("origin/dev", isGone: true))
         #expect(!parse(["# branch.head feat/x"]).isUpstreamGone)
     }
 
@@ -58,6 +75,6 @@ struct RemoteSyncTests {
         fixture.git(["push", "-q", "origin", "main"])
         fixture.git(["fetch", "-q", "origin"])
         fixture.git(["branch", "--set-upstream-to=origin/main", "feat/x"], in: folder)
-        #expect(RemoteSync(status: try await git.status(worktreePath: folder.path)) == .notOnRemote)
+        #expect(RemoteSync(status: try await git.status(worktreePath: folder.path)) == .otherUpstream("origin/main", isGone: false))
     }
 }

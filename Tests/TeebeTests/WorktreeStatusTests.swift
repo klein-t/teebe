@@ -14,6 +14,7 @@ struct WorktreeStatusTests {
     private func entry(_ worktree: Worktree? = nil, merged into: [CleanupBranch] = [],
                        squashed: Bool = false, _ tweak: (inout CleanupEntry) -> Void = { _ in }) -> CleanupEntry {
         var entry = CleanupEntry(worktree: worktree ?? feature)
+        entry.isInspected = true
         entry.mergeStatus = into.isEmpty ? .notConfirmed : .merged
         entry.mergedTargets = into
         entry.hasEquivalentContent = squashed
@@ -54,13 +55,17 @@ struct WorktreeStatusTests {
 
     @Test("a branch with no commits of its own gets the ring and says so, never the trash")
     func freshBranch() {
-        let fresh = status(entry { $0.hasNoCommits = true })
+        let fresh = status(entry { $0.hasNoCommits = true; $0.hasNoCommitsConfirmed = true })
         #expect(fresh.mark == .notMerged)
         #expect(fresh.group == .notMerged)
         #expect(!fresh.showsTrash)
         #expect(fresh.card.title == "Not merged")
-        #expect(fresh.card.subtitle == "No commits yet.")
-        #expect(facts(fresh) == ["No uncommitted changes", "No commits yet", "Not on remote"])
+        #expect(fresh.card.subtitle == "No commits of its own yet.")
+        #expect(facts(fresh) == ["No uncommitted changes", "No commits yet", "Couldn’t check remote"])
+        // Only proven from the branch's own record; otherwise it may have been merged.
+        let likely = status(entry { $0.hasNoCommits = true })
+        #expect(likely.card.subtitle == "Merge not confirmed.")
+        #expect(facts(likely)[1] == "Merge not confirmed")
         // Its first untracked file makes it uncommitted work, like any other row.
         #expect(status(entry { $0.hasNoCommits = true }, count: 1).mark == .uncommitted)
         let prompt = WorktreeRemovalPrompt(worktree: feature, status: fresh,
@@ -84,10 +89,10 @@ struct WorktreeStatusTests {
         // A target can't be removed, so its edits are not a removal blocker.
         #expect(status(target, count: 1).card.subtitle == "Work here isn’t committed yet.")
         #expect(status(target, info: .init(agentState: .working)).mark == .working)
-        #expect(facts(status(target, count: 1)) == ["1 uncommitted change", "Merge target", "Not on remote"])
+        #expect(facts(status(target, count: 1)) == ["1 uncommitted change", "Merge target", "Couldn’t check remote"])
         #expect(status(target).card.title == "Base branch")
         #expect(status(target).card.subtitle == "Other worktrees are compared to it.")
-        #expect(facts(status(target)) == ["No uncommitted changes", "Merge target", "Not on remote"])
+        #expect(facts(status(target)) == ["No uncommitted changes", "Merge target", "Couldn’t check remote"])
     }
 
     @Test("the trash shows on removable ✓ rows only, never on a broken link")
@@ -146,11 +151,37 @@ struct WorktreeStatusTests {
         #expect(status(target, count: 1).hasHoverCard(grouped: true))
     }
 
+    @Test("a grouped row with no mark of its own opens its card from an info icon; rows that keep a mark don't need one")
+    func infoIcon() {
+        let merged = status(entry(merged: [dev]))
+        #expect(merged.showsInfoIcon(grouped: true))
+        #expect(!merged.showsInfoIcon(grouped: false))
+        #expect(status(entry()).showsInfoIcon(grouped: true))
+        #expect(status(entry(), count: 2).showsInfoIcon(grouped: true))
+        // An orb, the broken link and a result being rechecked keep their mark, which opens the card.
+        #expect(!status(entry(), info: .init(agentState: .working)).showsInfoIcon(grouped: true))
+        #expect(!status(entry { $0.isBroken = true }).showsInfoIcon(grouped: true))
+        let rechecking = WorktreeStatus(worktree: feature, merge: WorktreeMergeEntry(entry: entry(merged: [dev]), isRechecking: true),
+                                        info: .init(), targetNames: ["dev"], isChecking: false)
+        #expect(!rechecking.showsInfoIcon(grouped: true))
+        #expect(rechecking.hasHoverCard(grouped: true))
+        // Pinned rows sit above the groups and keep their own mark, or have no card at all.
+        let devTree = Worktree(path: "/dev", branch: "dev")
+        #expect(!status(entry(devTree, merged: [dev]) { $0.isTarget = true }).showsInfoIcon(grouped: true))
+        let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
+        #expect(!status(entry(primary)).showsInfoIcon(grouped: true))
+        // Every grouped row can reach its card one way or the other.
+        for row in [merged, status(entry()), status(entry(), count: 1), rechecking,
+                    status(entry(), info: .init(agentState: .needsAttention))] {
+            #expect(row.hasHoverCard(grouped: true) != row.showsInfoIcon(grouped: true))
+        }
+    }
+
     @Test("every card has a fixed state title, one short sentence, and the same three facts")
     func cards() {
         let merged = status(entry(merged: [main, dev]), info: .init(remote: .sameBranch(remote: "origin", ahead: 0, behind: 0)))
         #expect(merged.card.title == "Safe to delete")
-        #expect(merged.card.subtitle == "All its work is merged. You can remove it.")
+        #expect(merged.card.subtitle == "Its committed changes are merged. You can remove it.")
         #expect(merged.card.facts == [
             WorktreeCardFact(icon: .pencil, text: "No uncommitted changes", tone: .muted),
             WorktreeCardFact(icon: .merge, text: "Merged into main and dev", tone: .positive),
@@ -165,7 +196,7 @@ struct WorktreeStatusTests {
         #expect(dirty.card.title == "Uncommitted changes")
         #expect(dirty.card.subtitle == "Commit or discard them before removing.")
         #expect(dirty.card.facts.first == WorktreeCardFact(icon: .pencil, text: "8 uncommitted changes", tone: .warn))
-        #expect(facts(dirty) == ["8 uncommitted changes", "Merged into dev (squashed)", "Not on remote"])
+        #expect(facts(dirty) == ["8 uncommitted changes", "Merged into dev (squashed)", "Couldn’t check remote"])
 
         let unmerged = status(entry(), count: 1, info: .init(remote: .sameBranch(remote: "origin", ahead: 4, behind: 0)))
         #expect(unmerged.card.title == "Uncommitted changes")
@@ -192,13 +223,14 @@ struct WorktreeStatusTests {
 
         let ring = status(entry())
         #expect(ring.card.title == "Not merged")
-        #expect(ring.card.subtitle == "Its commits aren’t merged yet.")
-        #expect(facts(ring) == ["No uncommitted changes", "Not in main or dev yet", "Not on remote"])
+        #expect(ring.card.subtitle == "Its commits aren’t in main or dev yet.")
+        #expect(facts(ring) == ["No uncommitted changes", "Not in main or dev yet", "Couldn’t check remote"])
 
-        let unknown = status(entry { $0.mergeStatus = .unknown; $0.problem = "Could not inspect this worktree" })
+        let unknown = status(entry { $0.mergeStatus = .unknown; $0.problem = "Could not inspect this worktree"; $0.isInspected = false })
         #expect(unknown.card.title == "Couldn’t check")
-        #expect(unknown.card.subtitle == "Git couldn’t compare this branch.")
-        #expect(facts(unknown)[1] == "Couldn’t check merge status")
+        #expect(unknown.card.subtitle == "Couldn’t check this worktree.")
+        // Not inspected is not clean.
+        #expect(facts(unknown) == ["Couldn’t check for changes", "Couldn’t check merge status", "Couldn’t check remote"])
 
         let unlinked = status(entry {
             $0.isBroken = true
@@ -210,14 +242,50 @@ struct WorktreeStatusTests {
         #expect(unlinked.group == .notMerged)
     }
 
+    @Test("a Not merged card says the one specific reason, briefly")
+    func specificReasons() {
+        func subtitle(_ entry: CleanupEntry?, info: SelectorModel.WorktreeInfo = .init(), targets: [String] = ["main", "dev"])
+            -> String {
+            WorktreeStatus(worktree: entry?.worktree ?? feature, merge: entry.map { WorktreeMergeEntry(entry: $0) },
+                           info: info, targetNames: targets, isChecking: false).card.subtitle
+        }
+        let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
+        let detached = Worktree(path: "/d", head: "abc", isDetached: true)
+        #expect(subtitle(entry()) == "Its commits aren’t in main or dev yet.")
+        #expect(subtitle(entry { $0.hasNoCommits = true; $0.hasNoCommitsConfirmed = true }) == "No commits of its own yet.")
+        #expect(subtitle(entry { $0.hasNoCommits = true }) == "Merge not confirmed.")
+        // Its remote branch is gone, as after a merged pull request, but no merge was found.
+        #expect(subtitle(entry(), info: .init(remote: .remoteDeleted)) == "Merge not confirmed.")
+        #expect(subtitle(entry(locked) { $0.problem = "Locked worktree" }) == "Locked, so Teebe won’t remove it.")
+        #expect(subtitle(entry(detached) { $0.problem = "Detached HEAD" }) == "Detached HEAD, not on a branch.")
+        #expect(subtitle(entry { $0.operation = .rebase }) == "Rebase in progress.")
+        #expect(subtitle(entry(detached) { $0.operation = .rebase; $0.problem = "Detached HEAD" }) == "Rebase in progress.")
+        #expect(subtitle(entry { $0.hasSubmodules = true }) == "It contains a submodule, so Teebe won’t remove it.")
+        #expect(subtitle(entry { $0.hasUncheckedFiles = true })
+                == "Some files are marked unchanged in Git, so Teebe won’t remove it.")
+        #expect(subtitle(entry { $0.mergeStatus = .unknown; $0.isInspected = false }) == "Couldn’t check this worktree.")
+        #expect(subtitle(nil) == "Couldn’t check this worktree.")
+        // The files were read; only the comparison failed. What the files said still stands.
+        let comparisonFailed = entry { $0.mergeStatus = .unknown; $0.problem = "Could not inspect this worktree" }
+        #expect(subtitle(comparisonFailed) == "Couldn’t check if it’s merged.")
+        #expect(facts(status(comparisonFailed)) == ["No uncommitted changes", "Couldn’t check merge status", "Couldn’t check remote"])
+        #expect(subtitle(entry { $0.mergeStatus = .unknown }, targets: []) == "No branch to compare it against.")
+        // The card title is the group's, from one constant.
+        #expect(status(entry()).card.title == WorktreeGroup.notMergedTitle)
+        #expect(WorktreeGroup.notMerged.title == WorktreeGroup.notMergedTitle)
+    }
+
     @Test("a row with no result yet reads as checking, then as unknown")
     func noResultYet() {
         let checking = status(nil, isChecking: true)
         #expect(checking.card.title == "Checking…")
         #expect(checking.card.subtitle == "Looking for this branch in main or dev.")
-        #expect(facts(checking) == ["No uncommitted changes", "Checking merge status…", "Not on remote"])
+        #expect(facts(checking) == ["Checking for changes…", "Checking merge status…", "Couldn’t check remote"])
         #expect(status(nil).card.title == "Couldn’t check")
-        #expect(facts(status(nil))[1] == "Couldn’t check merge status")
+        #expect(status(nil).card.subtitle == "Couldn’t check this worktree.")
+        #expect(facts(status(nil)) == ["Couldn’t check for changes", "Couldn’t check merge status", "Couldn’t check remote"])
+        // What the live read already counted still shows.
+        #expect(facts(status(nil, info: .init(changeCount: 2), isChecking: true))[0] == "2 uncommitted changes")
     }
 
     @Test("a result known to be stale shows checking, never Safe to delete, and the row keeps its group")
@@ -229,12 +297,14 @@ struct WorktreeStatusTests {
         let headMoved = status(merged, worktree: Worktree(path: "/feature", branch: "feature", head: "def"))
         for stale in [rechecking, headMoved] {
             #expect(stale.mark == .notMerged)
-            #expect(stale.group == .merged)
+            // Not Safe to delete while the result is out of date: nothing offers it for removal.
+            #expect(stale.group == .notMerged)
+            #expect(!stale.isSafeToDelete)
             #expect(!stale.showsTrash)
             #expect(stale.card.title == "Checking…")
             #expect(stale.card.subtitle == "Looking for this branch in main or dev.")
             #expect(facts(stale)[1] == "Checking merge status…")
-            // Inside the group the ring stays, so the row says why it has no trash.
+            // Inside its group the ring stays, so the row says it is being checked.
             #expect(stale.rowMark(grouped: true) == .notMerged)
             #expect(stale.hasHoverCard(grouped: true))
         }
@@ -245,7 +315,7 @@ struct WorktreeStatusTests {
         #expect(facts(dirty)[1] == "Checking merge status…")
     }
 
-    @Test("merged but protected keeps its title and says why in the sentence, not as extra facts")
+    @Test("merged but kept says plainly that it is merged, and why it isn't safe to delete")
     func mergedButProtected() {
         let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
         let lockedStatus = status(entry(locked, merged: [dev]) { $0.problem = "Locked worktree" })
@@ -253,26 +323,79 @@ struct WorktreeStatusTests {
         #expect(lockedStatus.mark == .notMerged)
         #expect(lockedStatus.group == .notMerged)
         let card = lockedStatus.card
-        #expect(card.title == "Merged")
-        #expect(card.subtitle == "Locked, so Teebe won’t remove it.")
-        #expect(card.facts.map(\.text) == ["No uncommitted changes", "Merged into dev", "Not on remote"])
+        #expect(card.title == "Not safe to delete")
+        #expect(card.subtitle == "Merged, but locked.")
+        #expect(card.facts.map(\.text) == ["No uncommitted changes", "Merged into dev", "Couldn’t check remote"])
         let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
-        #expect(status(entry(primary, merged: [dev])).card.subtitle == "The main checkout, so Teebe won’t remove it.")
+        #expect(status(entry(primary, merged: [dev])).card.subtitle == "Merged, but it’s the main checkout.")
         let detached = Worktree(path: "/d", head: "abc", isDetached: true)
         let detachedStatus = status(entry(detached, merged: [dev]) { $0.problem = "Detached HEAD" })
-        #expect(detachedStatus.card.subtitle == "Detached HEAD, so Teebe won’t remove it.")
+        #expect(detachedStatus.card.subtitle == "Merged, but on a detached HEAD.")
         #expect(detachedStatus.group == .notMerged)
         #expect(detachedStatus.mark == .notMerged)
+        #expect(status(entry(merged: [dev]) { $0.operation = .rebase }).card.subtitle == "Merged, rebase in progress.")
         // Merged commits, but Git could be hiding local work: no ✓, and the sentence says why.
         let skipped = status(entry(merged: [dev]) { $0.hasUncheckedFiles = true })
-        #expect(skipped.card.title == "Merged")
-        #expect(skipped.card.subtitle == "Some files are marked unchanged in Git, so Teebe won’t remove it.")
-        #expect(facts(skipped) == ["No uncommitted changes", "Merged into dev", "Not on remote"])
+        #expect(skipped.card.title == "Not safe to delete")
+        #expect(skipped.card.subtitle == "Merged, but couldn’t finish checking.")
+        #expect(facts(skipped) == ["No uncommitted changes", "Merged into dev", "Couldn’t check remote"])
         #expect(status(entry(merged: [dev]) { $0.hasSubmodules = true }).card.subtitle
-                == "It contains a submodule, so Teebe won’t remove it.")
+                == "Merged, but it contains a submodule.")
         // Ignored files are ordinary clutter on hover; they only matter at removal.
         let ignored = status(entry(merged: [dev]) { $0.hasIgnoredFiles = true; $0.ignoredPaths = [".build/"] })
-        #expect(facts(ignored) == ["No uncommitted changes", "Merged into dev", "Not on remote"])
+        #expect(facts(ignored) == ["No uncommitted changes", "Merged into dev", "Couldn’t check remote"])
+    }
+
+    @Test("one eligibility result: the ✓, the group, the trash and the prompt never disagree")
+    func sharedEligibility() {
+        let merged = entry(merged: [dev])
+        let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
+        func check(_ name: String, _ row: WorktreeStatus, scanned: CleanupEntry?) {
+            let prompt = WorktreeRemovalPrompt(worktree: scanned?.worktree ?? feature,
+                                               status: row, merge: scanned.map { WorktreeMergeEntry(entry: $0) })
+            let safe = name == "safe"
+            #expect(row.isSafeToDelete == safe, "\(name)")
+            #expect((row.group == .merged) == safe, "\(name)")
+            #expect((row.mark == .merged) == safe, "\(name)")
+            #expect(row.showsTrash == safe, "\(name)")
+            #expect(prompt.offersBranchDeletion == safe, "\(name)")
+            #expect(prompt.canRemove == row.removal.canRemoveFolder, "\(name)")
+            // Only these can have their folder removed: clean, checked, nothing protecting or working.
+            #expect(row.removal.canRemoveFolder == ["safe", "unmerged"].contains(name), "\(name)")
+        }
+        func scanned(_ tweak: (inout CleanupEntry) -> Void) -> CleanupEntry { entry(merged: [dev], tweak) }
+        check("safe", status(merged), scanned: merged)
+        check("agent", status(merged, info: .init(agentState: .working)), scanned: merged)
+        check("waiting", status(merged, info: .init(agentState: .needsAttention)), scanned: merged)
+        check("live", status(merged, info: .init(isLive: true)), scanned: merged)
+        check("rechecking", WorktreeStatus(worktree: feature, merge: WorktreeMergeEntry(entry: merged, isRechecking: true),
+                                           info: .init(), targetNames: ["dev"], isChecking: false), scanned: merged)
+        check("head moved", status(merged, worktree: Worktree(path: "/feature", branch: "feature", head: "def")), scanned: merged)
+        check("no result", status(nil, isChecking: true), scanned: nil)
+        for (name, entry) in [("not inspected", scanned { $0.isInspected = false }), ("broken", scanned { $0.isBroken = true }),
+                              ("locked", entry(locked, merged: [dev])), ("rebasing", scanned { $0.operation = .rebase })] {
+            check(name, status(entry), scanned: entry)
+        }
+        check("dirty", status(merged, count: 1), scanned: merged)
+        check("unmerged", status(entry()), scanned: entry())
+    }
+
+    @Test("an unfinished Git operation keeps a merged, clean row out of Safe to delete and blocks removal")
+    func operationInProgress() {
+        let rebasing = entry(merged: [dev]) { $0.operation = .rebase }
+        let rebasingStatus = status(rebasing)
+        #expect(rebasingStatus.mark == .notMerged)
+        #expect(rebasingStatus.group == .notMerged)
+        #expect(!rebasingStatus.showsTrash)
+        let prompt = WorktreeRemovalPrompt(worktree: feature, status: rebasingStatus, merge: WorktreeMergeEntry(entry: rebasing))
+        #expect(!prompt.canRemove)
+        #expect(!prompt.offersBranchDeletion)
+        #expect(prompt.facts.contains(WorktreeCardFact(icon: .warning, text: "Rebase in progress, so Teebe won’t remove it",
+                                                       tone: .warn)))
+        // An unmerged folder removal is refused the same way.
+        let merging = entry { $0.operation = .merge }
+        #expect(!WorktreeRemovalPrompt(worktree: feature, status: status(merging), merge: WorktreeMergeEntry(entry: merging)).canRemove)
+        #expect(WorktreeWording.inProgress(.cherryPick) == "Cherry-pick in progress")
     }
 
     @Test("the removal prompt offers branch deletion only when the work is already merged")
@@ -286,11 +409,19 @@ struct WorktreeStatusTests {
         #expect(safe.explanation == "The worktree folder is deleted. Its commits are already merged.")
         #expect(safe.offersBranchDeletion)
 
-        let cluttered = entry(merged: [dev]) { $0.hasIgnoredFiles = true; $0.ignoredPaths = [".DS_Store", ".cache/"] }
+        #expect(safe.ignored == nil)
+        let cluttered = entry(merged: [dev]) {
+            $0.hasIgnoredFiles = true
+            $0.ignoredPaths = [".DS_Store", ".cache/"]
+            $0.ignoredFiles = IgnoredFiles(paths: [".DS_Store", ".cache/a", ".cache/b"], isTruncated: false)
+        }
         let withIgnored = WorktreeRemovalPrompt(worktree: feature, status: status(cluttered),
                                                 merge: WorktreeMergeEntry(entry: cluttered))
-        #expect(withIgnored.facts.last == WorktreeCardFact(icon: .ignoredFiles,
-                                                           text: "Ignored files will be deleted too (.DS_Store)", tone: .muted))
+        #expect(withIgnored.ignored?.summary == "Also deletes 3 gitignored files. Git can’t restore these files.")
+        #expect(withIgnored.facts.map(\.text) == ["Merged into dev", "Nothing uncommitted"])
+        // Nothing is removed while something blocks it, so nothing is said about ignored files.
+        #expect(WorktreeRemovalPrompt(worktree: feature, status: status(cluttered, count: 1),
+                                      merge: WorktreeMergeEntry(entry: cluttered)).ignored == nil)
 
         let unmerged = entry()
         let risky = WorktreeRemovalPrompt(worktree: feature, status: status(unmerged, count: 2, info: .init(agentState: .working)),
@@ -309,7 +440,7 @@ struct WorktreeStatusTests {
         let unmergedClean = WorktreeRemovalPrompt(worktree: feature, status: status(unmerged),
                                                   merge: WorktreeMergeEntry(entry: unmerged))
         #expect(unmergedClean.facts.map { $0.text } == ["Not merged yet", "Nothing uncommitted"])
-        #expect(unmergedClean.explanation == "The worktree folder is deleted. The branch is kept.")
+        #expect(unmergedClean.explanation == "The worktree folder is deleted. The branch and its commits are kept.")
         #expect(unmergedClean.canRemove)
 
         let submodule = entry(merged: [dev]) { $0.hasSubmodules = true }
@@ -355,6 +486,13 @@ struct WorktreeStatusTests {
         #expect(hiddenPrompt.facts.last?.text == "Some files are marked unchanged in Git, so Teebe won’t remove it")
         #expect(!hiddenPrompt.canRemove)
 
+        // A check that failed says so and never offers Remove, merged or not.
+        let failed = entry { $0.mergeStatus = .unknown; $0.problem = "Could not inspect this worktree"; $0.isInspected = false }
+        let failedPrompt = WorktreeRemovalPrompt(worktree: feature, status: status(failed), merge: WorktreeMergeEntry(entry: failed))
+        #expect(failedPrompt.facts.map(\.text) == ["Couldn’t check if merged", "Couldn’t check for changes"])
+        #expect(!failedPrompt.canRemove)
+        #expect(failedPrompt.explanation == "Teebe couldn’t check this worktree, so it won’t remove it. Refresh and try again.")
+
         let checking = WorktreeRemovalPrompt(worktree: feature, status: status(nil, isChecking: true), merge: nil)
         #expect(checking.facts.first == WorktreeCardFact(icon: .merge, text: "Checking if merged…", tone: .muted))
         #expect(!checking.canRemove)
@@ -381,14 +519,55 @@ struct WorktreeStatusTests {
         #expect(prompt.explanation == "Teebe only removes a worktree Git can fully check and nothing protects.")
     }
 
-    @Test("the ignored-files fact names at most one short example")
-    func ignoredFact() {
-        func entryWith(_ paths: [String]) -> CleanupEntry { entry { $0.hasIgnoredFiles = !paths.isEmpty; $0.ignoredPaths = paths } }
-        #expect(WorktreeWording.ignoredFact([entryWith([])]) == nil)
-        #expect(WorktreeWording.ignoredFact([entryWith([]), entryWith([".build/"])])?.text
-                == "Ignored files will be deleted too (.build/)")
-        #expect(WorktreeWording.ignoredFact([entryWith(["a/very/long/path/to/some/cache/file.bin"])])?.text
-                == "Ignored files will be deleted too (a/very/l…file.bin)")
+    @Test("the ignored-files notice counts what goes for good and names what looks hard to get back first")
+    func ignoredNotice() {
+        func notice(_ entries: [String], files: [String]?, truncated: Bool = false, name: String? = nil) -> WorktreeIgnoredNotice? {
+            WorktreeIgnoredNotice(entry {
+                $0.hasIgnoredFiles = !entries.isEmpty
+                $0.ignoredPaths = entries
+                $0.ignoredFiles = files.map { IgnoredFiles(paths: $0, isTruncated: truncated) }
+            }, worktree: name)
+        }
+        #expect(notice([], files: nil) == nil)
+        let one = notice([".env"], files: [".env"])
+        #expect(one?.summary == "Also deletes 1 gitignored file. Git can’t restore these files.")
+        #expect(one?.names == ".env")
+        // Secrets, keys and local config are named first, however many other files there are.
+        let deps = (0..<210).map { "node_modules/p\($0).js" }
+        let mixed = notice([".env.local", "certs/", "id_ed25519", "node_modules/", "settings.local.json"],
+                           files: [".env.local", "certs/dev.pem", "id_ed25519", "settings.local.json"] + deps)
+        #expect(mixed?.summary == "Also deletes 214 gitignored files. Git can’t restore these files.")
+        #expect(mixed?.names == ".env.local, certs/dev.pem, id_ed25519 and 1 more")
+        #expect(mixed?.files.prefix(4) == [".env.local", "certs/dev.pem", "id_ed25519", "settings.local.json"])
+        #expect(mixed?.files.count == 214)
+        // Nothing looks special: the ignored folders are named instead, never called regenerable.
+        let build = notice([".build/", "node_modules/"], files: [".build/a", "node_modules/b"])
+        #expect(build?.names == ".build/ and node_modules/")
+        #expect(build?.summary.contains("regenerat") == false)
+        let huge = notice(["node_modules/"], files: deps, truncated: true, name: "feat/x")
+        #expect(huge?.summary == "“feat/x” also deletes 210+ gitignored files. Git can’t restore these files.")
+        #expect(huge?.isTruncated == true)
+        // Not counted (nothing else let it be removed when checked): still said, without a number.
+        #expect(notice([".cache/"], files: nil)?.summary == "Also deletes its gitignored files. Git can’t restore these files.")
+        #expect(notice(["a"], files: (0..<1_234).map { "f\($0)" })?.summary
+            == "Also deletes \(1_234.formatted(.number)) gitignored files. Git can’t restore these files.")
+    }
+
+    @Test("the remote fact says exactly what is known about the remote, briefly")
+    func remoteWording() {
+        func text(_ remote: RemoteSync) -> String { WorktreeWording.remoteFact(remote).text }
+        #expect(text(.sameBranch(remote: "origin", ahead: 0, behind: 0)) == "Up to date with origin")
+        #expect(text(.sameBranch(remote: "origin", ahead: 1, behind: 2)) == "1 to push · 2 to pull")
+        #expect(text(.remoteDeleted) == "Remote branch deleted")
+        #expect(text(.noUpstream) == "No upstream")
+        #expect(text(.notOnRemote("origin")) == "Not on origin")
+        #expect(text(.otherUpstream("origin/dev", isGone: false)) == "Tracks origin/dev")
+        #expect(text(.otherUpstream("origin/dev", isGone: true)) == "Upstream origin/dev deleted")
+        #expect(text(.unknown) == "Couldn’t check remote")
+        // It never changes what is safe: a row not on any remote can still be Safe to delete.
+        let merged = entry(merged: [dev])
+        #expect(status(merged, info: .init(remote: .notOnRemote("origin"))).isSafeToDelete)
+        #expect(status(merged, info: .init(remote: .unknown)).isSafeToDelete)
     }
 
     @Test("lists read naturally")

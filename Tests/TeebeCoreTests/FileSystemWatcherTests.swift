@@ -37,12 +37,23 @@ struct FileSystemWatcherTests {
         watcher.debounceInterval = 0.05
         watcher.handler = { collector.add($0) }
 
-        watcher.ingest(["/a"])
-        try await Task.sleep(nanoseconds: 150_000_000)
-        watcher.ingest(["/b"])
-        try await Task.sleep(nanoseconds: 150_000_000)
+        func waitForBatches(_ count: Int) async throws {
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(3))
+            while collector.batches.count < count, clock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            try #require(collector.batches.count == count)
+        }
 
-        #expect(collector.batches.count == 2)
+        // Elapsed time alone does not prove a utility-queue callback has run on
+        // a busy host. Observe the first flush before starting the next burst.
+        watcher.ingest(["/a"])
+        try await waitForBatches(1)
+        watcher.ingest(["/b"])
+        try await waitForBatches(2)
+
+        #expect(collector.batches == [["/a"], ["/b"]])
     }
 
     @Test("continuous events cannot starve the flush past the max coalesce interval")

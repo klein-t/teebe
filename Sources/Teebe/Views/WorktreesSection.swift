@@ -72,6 +72,9 @@ struct WorktreesSection: View {
                             .disabled(selector.selectedRepo == nil)
                             Divider()
                             Toggle(WorktreePreferences.groupingTitle, isOn: $app.groupWorktreesByMergeStatus)
+                            Picker(WorktreeSortOrder.menuTitle, selection: $app.worktreeSortOrder) {
+                                ForEach(WorktreeSortOrder.allCases) { Text($0.title).tag($0) }
+                            }
                             Toggle(WorktreePreferences.fetchTitle, isOn: $app.fetchAutomatically)
                         } label: {
                             Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
@@ -147,7 +150,8 @@ struct WorktreesSection: View {
         switch confirmation {
         case let .worktree(worktree, action):
             let prompt = app.removalPrompt(for: worktree)
-            WorktreeRemovalSheet(title: prompt.title, items: [prompt.item], facts: prompt.facts, explanation: prompt.explanation,
+            WorktreeRemovalSheet(title: prompt.title, items: [prompt.item], facts: prompt.facts,
+                                 ignored: prompt.ignored.map { [$0] } ?? [], explanation: prompt.explanation,
                                  deleteBranch: prompt.offersBranchDeletion ? $app.deleteBranchOnRemove : nil,
                                  canConfirm: prompt.canRemove && action != nil && !app.groupActions.isWorking) {
                 // Never anything but the captured action, through the guarded path.
@@ -158,7 +162,7 @@ struct WorktreesSection: View {
         case let .cleanup(entries, skipped):
             WorktreeRemovalSheet(title: app.groupActions.confirmationTitle(entries),
                                  items: app.groupActions.confirmationItems(entries),
-                                 facts: app.groupActions.confirmationFacts(entries) + skipped,
+                                 facts: skipped, ignored: app.groupActions.confirmationNotices(entries),
                                  explanation: app.groupActions.confirmationMessage(entries, deleteBranch: app.deleteBranchOnRemove),
                                  deleteBranch: $app.deleteBranchOnRemove,
                                  deleteBranchTitle: entries.count == 1 ? "Also delete the branch" : "Also delete the branches",
@@ -318,13 +322,25 @@ struct WorktreesSection: View {
         // distinct from the filled accent of the committed worktree. Enter commits it.
         let isHighlighted = app.activeSection == .worktrees && selector.highlightedWorktree?.path == worktree.path
         let summary = cardSummary(status.card)
+        // Space in WORKTREES shows the highlighted row's card, as hovering would.
+        let reveal = app.worktreeCardReveal.flatMap { $0.path == worktree.path ? $0.count : nil }
         return HStack(spacing: 0) {
             if status.hasHoverCard(grouped: grouped) {
                 WorktreeMarkHoverTarget(isSelected: isActive) {
                     WorktreeMarkView(mark: status.rowMark(grouped: grouped), isSelected: isActive,
                                      paused: selector.isLowPower, phaseKey: worktree.path)
                 }
-                .hoverCard(summary) {
+                .hoverCard(summary, reveal: reveal) {
+                    WorktreeHoverCard(card: status.card, mark: status.mark, paused: selector.isLowPower,
+                                      phaseKey: worktree.path)
+                }
+            } else if status.showsInfoIcon(grouped: grouped) {
+                // The heading carries the mark; this row's own card, with its specific
+                // reason, opens from an info icon that shows while the row is hovered.
+                WorktreeMarkHoverTarget(isSelected: isActive) {
+                    WorktreeInfoIcon(isSelected: isActive)
+                }
+                .hoverCard(summary, reveal: reveal) {
                     WorktreeHoverCard(card: status.card, mark: status.mark, paused: selector.isLowPower,
                                       phaseKey: worktree.path)
                 }
@@ -336,8 +352,8 @@ struct WorktreesSection: View {
                 .font(Typography.rowName)
                 .lineLimit(1).truncationMode(.middle)
                 .padding(.leading, 2)
-                // Without a mark there is no card to hover; the text is still read out.
-                .accessibilityHint(status.hasHoverCard(grouped: grouped) ? "" : summary)
+                // Without a mark or an info icon there is no card to hover; the text is still read out.
+                .accessibilityHint(status.hasHoverCard(grouped: grouped) || status.showsInfoIcon(grouped: grouped) ? "" : summary)
             if let action = status.trashAction {
                 WorktreeTrashButton(isSelected: isActive, label: "Remove worktree") {
                     confirmRemoval(worktree, action: action)
@@ -404,6 +420,22 @@ private struct WorktreeMarkHoverTarget<Mark: View>: View {
             .frame(width: 22, height: height)
             .contentShape(Rectangle())
             .pointerHover { hovered = $0 }
+    }
+}
+
+/// The grouped row's way to its own card, in the mark's slot and at a mark's size:
+/// there only while the row is hovered. It stays laid out (and hoverable) when
+/// hidden, so the pointer landing straight on it still opens the card.
+private struct WorktreeInfoIcon: View {
+    let isSelected: Bool
+    @Environment(\.rowHovered) private var rowHovered
+
+    var body: some View {
+        Image(systemName: "info.circle")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(isSelected ? Color.white.opacity(0.85) : Color.secondary)
+            .opacity(rowHovered ? 1 : 0)
+            .accessibilityLabel("Status")
     }
 }
 

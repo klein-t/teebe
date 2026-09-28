@@ -47,6 +47,38 @@ struct WorktreeCard: Equatable {
     let facts: [WorktreeCardFact]
 }
 
+/// What stands between a worktree and its removal, worked out once per row. The
+/// ✓, the Safe to delete group, the row trash, the group bin and the removal
+/// prompt all read it, so none of them offers a row another would refuse.
+/// Removal still re-checks everything as it runs.
+struct RemovalEligibility: Equatable {
+    enum Blocker: Equatable {
+        case uncommitted
+        case submodule
+        /// Something protects it, as the start of a sentence: "Locked", "Rebase in
+        /// progress", "The main checkout".
+        case protected(String)
+        /// Something is working in the folder, as the prompt says it.
+        case activity(String)
+        /// No result yet, or the one in hand is known to be out of date.
+        case checking
+        /// The folder couldn't be inspected, so nothing is known about its files.
+        case notInspected
+    }
+
+    /// Most important first; empty when the folder can be removed now.
+    let blockers: [Blocker]
+    /// Its commits are in a merge target and it is not one, so its local branch
+    /// may be deleted with the folder.
+    let isMerged: Bool
+
+    /// Remove the folder and keep the branch: also true for a clean, unmerged row.
+    var canRemoveFolder: Bool { blockers.isEmpty }
+    /// Safe to delete: the folder, and optionally its merged branch.
+    var isSafeToDelete: Bool { blockers.isEmpty && isMerged }
+    var canDeleteBranch: Bool { isSafeToDelete }
+}
+
 /// Everything a worktree row shows, resolved from the last merge scan, the live
 /// status and the agent state. Pure, so every rule is testable without a view.
 struct WorktreeStatus: Equatable {
@@ -57,29 +89,30 @@ struct WorktreeStatus: Equatable {
     }
 
     let mark: WorktreeMark
-    /// The group the row belongs to, from Git state only: agent activity never
-    /// moves a row. Pinned rows are listed above the groups instead.
+    /// Pinned rows are listed above the groups instead.
     let group: WorktreeGroup
     /// The primary checkout and merge-target checkouts sit above the groups.
     let isPinned: Bool
     let trashAction: TrashAction?
+    let removal: RemovalEligibility
     let card: WorktreeCard
     /// Uncommitted files (live count when known).
     let changeCount: Int
     let remote: RemoteSync
     /// The merge result is known to be out of date: the checkout committed since
-    /// it was scanned. The row keeps its group but shows no ✓ and no trash.
+    /// it was scanned. No ✓ and no trash until it is checked again.
     let isRechecking: Bool
     /// What is working in the folder right now, said where removal is confirmed;
     /// nil when nothing is.
     let activityWarning: String?
 
     var showsTrash: Bool { trashAction != nil }
+    var isSafeToDelete: Bool { removal.isSafeToDelete }
 
     /// The mark the row itself draws. Inside a group the heading already says the
     /// Git state, so a grouped row only keeps an agent orb, the broken link (its
-    /// heading can't say that), or the ring of a result being rechecked (its
-    /// heading is out of date); pinned rows sit above the groups and keep their mark.
+    /// heading can't say that), or the ring of a result being rechecked; pinned
+    /// rows sit above the groups and keep their mark.
     func rowMark(grouped: Bool) -> WorktreeMark {
         guard grouped, !isPinned, mark != .working, mark != .waiting, mark != .brokenLink,
               !(isRechecking && mark == .notMerged) else { return mark }
@@ -88,6 +121,10 @@ struct WorktreeStatus: Equatable {
 
     /// The hover card opens from the mark, so a row that draws none has no card.
     func hasHoverCard(grouped: Bool) -> Bool { rowMark(grouped: grouped) != .none }
+
+    /// A grouped row whose mark the heading carries instead: its slot holds an
+    /// info icon, shown while the row is hovered, that opens the row's own card.
+    func showsInfoIcon(grouped: Bool) -> Bool { grouped && !isPinned && rowMark(grouped: true) == .none && mark != .none }
 
     private static func group(_ facts: Facts, isMergedClean: Bool) -> WorktreeGroup {
         if facts.hasUncommitted { return .localChanges }
@@ -125,17 +162,13 @@ struct WorktreeStatus: Equatable {
         remote = info.remote
         isPinned = worktree.isPrimary || facts.isTarget
         activityWarning = facts.activityWarning
-        // Safe to delete means removable: a merged row something protects (locked,
-        // detached, files Git hides, a submodule) is not, and says why on its card.
-        let isSafeToDelete = entry.map { !facts.hasUncommitted && $0.canRemove(includingIgnored: true) } ?? false
-        group = Self.group(facts, isMergedClean: isSafeToDelete)
-        mark = Self.mark(facts, isMergedClean: isSafeToDelete && !isRechecking)
-
-        if mark == .merged, let entry, entry.canRemove(includingIgnored: true) {
-            trashAction = .remove(entry)
-        } else {
-            trashAction = nil
-        }
+        // Safe to delete means removable right now: a merged row something protects
+        // (locked, detached, files Git hides, a submodule) is not, nor one whose
+        // result is being rechecked or where something is working. Its card says why.
+        removal = facts.removal
+        group = Self.group(facts, isMergedClean: removal.isSafeToDelete)
+        mark = Self.mark(facts, isMergedClean: removal.isSafeToDelete)
+        trashAction = removal.isSafeToDelete ? entry.map { .remove($0) } : nil
         card = facts.card(mark: mark, isRemovable: trashAction != nil)
     }
 }
@@ -152,13 +185,33 @@ private struct Facts {
     let isRechecking: Bool
 
     var hasUncommitted: Bool { changes > 0 || entry?.hasLocalChanges == true }
-    var isBrokenLink: Bool { entry?.isBroken == true }
+    /// Git can't read the folder: its `.git` link is gone, or the folder itself is
+    /// and its record is kept because it holds work.
+    var isBrokenLink: Bool { entry?.isBroken == true || info.isKeptMissing }
     var isTarget: Bool { entry?.isTarget == true }
     /// Merged and unprotected: only the uncommitted work stands in the way.
     var isRemovableOnceClean: Bool {
         guard var clean = entry else { return false }
         clean.hasLocalChanges = false
         return clean.canRemove(includingIgnored: true)
+    }
+
+    var removal: RemovalEligibility {
+        var blockers: [RemovalEligibility.Blocker] = []
+        if hasUncommitted { blockers.append(.uncommitted) }
+        // Git itself refuses a submodule, so that is said instead of any protection.
+        if entry?.hasSubmodules == true {
+            blockers.append(.submodule)
+        } else if let protection = WorktreeWording.protection(worktree, entry) {
+            blockers.append(.protected(protection))
+        }
+        if let activityWarning { blockers.append(.activity(activityWarning)) }
+        if entry == nil || isRechecking {
+            blockers.append(.checking)
+        } else if entry?.isInspected != true {
+            blockers.append(.notInspected)
+        }
+        return RemovalEligibility(blockers: blockers, isMerged: entry?.canRemove(includingIgnored: true) == true)
     }
 
     var activityWarning: String? {
@@ -189,34 +242,63 @@ private struct Facts {
             return ("Uncommitted changes", isRemovableOnceClean ? "Commit or discard them before removing."
                         : "Work here isn’t committed yet.")
         case .brokenLink:
+            if info.isKeptMissing { return ("Folder missing", "It holds work no branch has, so Teebe keeps its record.") }
+            if entry?.isFolderMissing == true { return ("Folder missing", "Its folder was moved or deleted.") }
             return ("Broken link", "The folder’s .git link is missing, so Teebe leaves its files alone.")
         case .merged:
-            return isRemovable ? ("Safe to delete", "All its work is merged. You can remove it.")
-                : ("Merged", protectionReason + ", so Teebe won’t remove it.")
+            return isRemovable ? ("Safe to delete", "Its committed changes are merged. You can remove it.")
+                : (Self.blockedTitle, WorktreeWording.mergedReason(worktree, entry) ?? "Merged, but Teebe won’t remove it now.")
         case .notMerged: return notMergedHeadline
         }
     }
 
-    /// No ✓: not merged, not known (yet, or any more), or merged but protected.
+    /// No ✓, and the one specific reason why: still checking, couldn't check,
+    /// an operation or a protection, then what the merge check found.
     private var notMergedHeadline: (String, String) {
         if isRechecking || (entry == nil && isChecking) {
             let targets = targetNames.isEmpty ? "its merge targets" : WorktreeWording.list(targetNames, joiner: "or")
             return ("Checking…", "Looking for this branch in \(targets).")
         }
-        guard let entry else { return ("Couldn’t check", "Git couldn’t compare this branch.") }
+        guard let entry, entry.isInspected else { return ("Couldn’t check", "Couldn’t check this worktree.") }
+        if entry.mergeStatus == .merged {
+            // Merged, but something keeps it: say both, plainly.
+            return (Self.blockedTitle, WorktreeWording.mergedReason(worktree, entry) ?? "Merged, but Teebe won’t remove it now.")
+        }
+        let title = entry.mergeStatus == .notConfirmed ? WorktreeGroup.notMergedTitle : "Couldn’t check"
+        if let reason = WorktreeWording.reason(worktree, entry) { return (title, reason) }
         switch entry.mergeStatus {
-        case .merged: return ("Merged", protectionReason + ", so Teebe won’t remove it.")
+        case .merged: return (title, "Merged, but Teebe won’t remove it now.")
         case .notConfirmed:
-            return ("Not merged", entry.hasNoCommits ? "No commits yet." : "Its commits aren’t merged yet.")
-        case .unknown: return ("Couldn’t check", "Git couldn’t compare this branch.")
+            if isMergeUnconfirmed { return (title, "Merge not confirmed.") }
+            if entry.hasNoCommits { return (title, "No commits of its own yet.") }
+            let targets = targetNames.isEmpty ? "merged" : "in " + WorktreeWording.list(targetNames, joiner: "or")
+            return (title, "Its commits aren’t \(targets) yet.")
+        case .unknown:
+            // The files were checked; only the comparison with the targets failed.
+            return (title, targetNames.isEmpty ? "No branch to compare it against." : "Couldn’t check if it’s merged.")
         }
     }
 
-    /// Why a merged row stays, as the start of a sentence.
-    private var protectionReason: String { WorktreeWording.protection(worktree, entry) ?? "Protected" }
+    /// The title of a merged row something keeps: it sits in Not merged, so the
+    /// title says what matters, and the sentence says it is merged, and why not.
+    static let blockedTitle = "Not safe to delete"
 
+    /// Not shown as merged, but it may well be: a branch that only looks unstarted
+    /// (nothing proves it has no commits of its own), or one whose remote branch
+    /// was deleted, as happens once a pull request is merged.
+    private var isMergeUnconfirmed: Bool {
+        guard let entry, entry.mergeStatus == .notConfirmed else { return false }
+        return entry.hasNoCommits ? !entry.hasNoCommitsConfirmed : info.remote == .remoteDeleted
+    }
+
+    /// Clean is a fact only once the folder was fully inspected: a check that
+    /// failed or hasn't finished says so rather than reading as clean.
     var changesFact: WorktreeCardFact {
-        guard hasUncommitted else { return WorktreeCardFact(icon: .pencil, text: "No uncommitted changes", tone: .muted) }
+        guard hasUncommitted else {
+            let text = entry?.isInspected == true ? "No uncommitted changes"
+                : entry == nil && isChecking ? "Checking for changes…" : "Couldn’t check for changes"
+            return WorktreeCardFact(icon: .pencil, text: text, tone: .muted)
+        }
         return WorktreeCardFact(icon: .pencil,
                                 text: changes > 0 ? WorktreeWording.plural(changes, "uncommitted change") : "Uncommitted changes",
                                 tone: .warn)
@@ -230,6 +312,7 @@ private struct Facts {
         switch entry.mergeStatus {
         case .merged: return WorktreeCardFact(icon: .merge, text: WorktreeWording.mergedText(entry), tone: .positive)
         case .notConfirmed:
+            if isMergeUnconfirmed { return muted("Merge not confirmed") }
             if entry.hasNoCommits { return muted("No commits yet") }
             return muted(targetNames.isEmpty ? "Not merged yet" : "Not in \(WorktreeWording.list(targetNames, joiner: "or")) yet")
         case .unknown: return muted("Couldn’t check merge status")
@@ -256,7 +339,11 @@ enum WorktreeWording {
     static func remoteFact(_ remote: RemoteSync) -> WorktreeCardFact {
         switch remote {
         case .remoteDeleted: return WorktreeCardFact(icon: .cloud, text: "Remote branch deleted", tone: .muted)
-        case .notOnRemote: return WorktreeCardFact(icon: .cloud, text: "Not on remote", tone: .muted)
+        case .otherUpstream(let name, let isGone):
+            return WorktreeCardFact(icon: .cloud, text: isGone ? "Upstream \(name) deleted" : "Tracks \(name)", tone: .muted)
+        case .noUpstream: return WorktreeCardFact(icon: .cloud, text: "No upstream", tone: .muted)
+        case .notOnRemote(let remote): return WorktreeCardFact(icon: .cloud, text: "Not on \(remote)", tone: .muted)
+        case .unknown: return WorktreeCardFact(icon: .cloud, text: "Couldn’t check remote", tone: .muted)
         case let .sameBranch(name, ahead, behind):
             guard ahead > 0 || behind > 0 else {
                 return WorktreeCardFact(icon: .cloud, text: "Up to date with \(name)", tone: .muted)
@@ -270,24 +357,86 @@ enum WorktreeWording {
     /// start of a sentence; nil when nothing does.
     static func protection(_ worktree: Worktree, _ entry: CleanupEntry?) -> String? {
         if worktree.isPrimary { return "The main checkout" }
+        if let operation = entry?.operation { return Self.inProgress(operation) }
         if worktree.isLocked { return "Locked" }
+        if entry?.isFolderMissing == true { return "Its folder is missing" }
         if entry?.isBroken == true { return "Its .git link is missing" }
-        if worktree.isDetached { return "Detached HEAD" }
+        if worktree.isDetached { return detachedHead }
         if entry?.hasUncheckedFiles == true { return "Some files are marked unchanged in Git" }
         if entry?.hasSubmodules == true { return "It contains a submodule" }
         return nil
     }
 
-    /// Removal deletes ignored files with the folder. Said only where it matters,
-    /// with at most one short example; nil when none of the entries has any.
-    static func ignoredFact(_ entries: [CleanupEntry]) -> WorktreeCardFact? {
-        guard let entry = entries.first(where: \.hasIgnoredFiles) else { return nil }
-        var text = "Ignored files will be deleted too"
-        if let path = entry.ignoredPaths.first {
-            let short: String = path.count > 24 ? String(path.prefix(8)) + "…" + String(path.suffix(8)) : path
-            text += " (\(short))"
+    /// Why the card's row can't be removed, as its one sentence: "Rebase in
+    /// progress.", "Locked, so Teebe won’t remove it.", "Detached HEAD, not on a
+    /// branch."; nil when nothing protects it.
+    static func reason(_ worktree: Worktree, _ entry: CleanupEntry?) -> String? {
+        guard let protection = protection(worktree, entry) else { return nil }
+        if let operation = entry?.operation { return inProgress(operation) + "." }
+        if protection == detachedHead { return "Detached HEAD, not on a branch." }
+        return protection + ", so Teebe won’t remove it."
+    }
+
+    /// A merged row's sentence when something keeps it: "Merged, but locked.",
+    /// "Merged, rebase in progress."; nil when nothing protects it.
+    static func mergedReason(_ worktree: Worktree, _ entry: CleanupEntry?) -> String? {
+        guard let protection = protection(worktree, entry) else { return nil }
+        if let operation = entry?.operation { return "Merged, " + inProgress(operation).lowercased() + "." }
+        if worktree.isPrimary { return "Merged, but it’s the main checkout." }
+        if worktree.isLocked { return "Merged, but locked." }
+        if protection == detachedHead { return "Merged, but on a detached HEAD." }
+        // Git hides some files' edits, so the check can't see everything.
+        if entry?.hasUncheckedFiles == true { return "Merged, but couldn’t finish checking." }
+        if entry?.hasSubmodules == true { return "Merged, but it contains a submodule." }
+        return "Merged, but " + protection.prefix(1).lowercased() + protection.dropFirst() + "."
+    }
+
+    private static let detachedHead = "Detached HEAD"
+
+    /// "Rebase in progress": what a checkout is in the middle of.
+    static func inProgress(_ operation: GitOperation) -> String {
+        switch operation {
+        case .rebase: "Rebase in progress"
+        case .applyingPatches: "Patch apply in progress"
+        case .merge: "Merge in progress"
+        case .cherryPick: "Cherry-pick in progress"
+        case .revert: "Revert in progress"
+        case .bisect: "Bisect in progress"
         }
-        return WorktreeCardFact(icon: .ignoredFiles, text: text, tone: .muted)
+    }
+
+}
+
+/// The removal sheets' warning that a worktree's gitignored files go with its
+/// folder, for good: Git doesn't have them, so it can't restore them.
+struct WorktreeIgnoredNotice: Equatable {
+    /// "Also deletes 214 gitignored files. Git can’t restore these files."
+    let summary: String
+    /// The names to see first, those that look hard to get back (or else the
+    /// ignored folders): ".env.local, dev.pem and 2 more"; nil when none.
+    let names: String?
+    /// Every file counted, those that look hard to get back first, for the list
+    /// that expands.
+    let files: [String]
+    /// There are more files than `files` holds.
+    let isTruncated: Bool
+
+    /// nil when removing `entry` deletes no ignored files. `worktree` names it in
+    /// a sheet that removes several.
+    init?(_ entry: CleanupEntry, worktree: String? = nil) {
+        guard entry.hasIgnoredFiles else { return nil }
+        let inventory = entry.ignoredFiles
+        let count = inventory.map { files in
+            let number = files.paths.count.formatted(.number)
+            let amount = files.isTruncated ? number + "+" : number
+            return amount + " gitignored " + (files.paths.count == 1 && !files.isTruncated ? "file" : "files")
+        } ?? "its gitignored files"
+        summary = (worktree.map { "“\($0)” also deletes " } ?? "Also deletes ") + count + ". Git can’t restore these files."
+        let irreplaceable = inventory?.irreplaceable ?? []
+        let named = irreplaceable.isEmpty ? entry.ignoredPaths : irreplaceable
+        names = named.isEmpty ? nil : WorktreeWording.list(Array(named.prefix(3)) + (named.count > 3 ? ["\(named.count - 3) more"] : []))
+        files = irreplaceable + (inventory?.paths ?? entry.ignoredPaths).filter { !IgnoredFiles.looksIrreplaceable($0) }
+        isTruncated = inventory?.isTruncated ?? false
     }
 }
 
@@ -297,6 +446,9 @@ struct WorktreeRemovalPrompt: Equatable {
     /// The one worktree, as the sheet's list shows it.
     let item: WorktreeRemovalItem
     let facts: [WorktreeCardFact]
+    /// The gitignored files the removal deletes too; nil when there are none, or
+    /// when nothing is removed.
+    let ignored: WorktreeIgnoredNotice?
     let explanation: String
     /// Show the "Also delete the branch" checkbox: only for a merged row that is
     /// safe to remove, where the branch's work is already in a target.
@@ -305,56 +457,55 @@ struct WorktreeRemovalPrompt: Equatable {
     /// submodule. The prompt says why and does not offer Remove.
     let canRemove: Bool
 
-    /// Removing one existing worktree folder.
+    /// Removing one existing worktree folder, as the row's own eligibility allows.
     init(worktree: Worktree, status: WorktreeStatus, merge: WorktreeMergeEntry?) {
         title = "Remove “\(worktree.branch ?? worktree.name)”?"
         item = WorktreeRemovalItem(name: worktree.branch ?? worktree.name, path: worktree.path,
                                    isMerged: status.mark == .merged)
         let entry = merge?.entry
-        let isChecking = entry == nil || status.isRechecking
+        let removal = status.removal
+        let blockers = removal.blockers
+        let isChecking = blockers.contains(.checking)
         var facts = [Self.mergeFact(entry, isChecking: isChecking)]
-        let hasUncommitted = status.changeCount > 0 || entry?.hasLocalChanges == true
-        if hasUncommitted {
+        if blockers.contains(.uncommitted) {
             let changes = status.changeCount > 0 ? WorktreeWording.plural(status.changeCount, "uncommitted change")
                 : "Uncommitted changes"
             facts.append(WorktreeCardFact(icon: .pencil, text: changes + ": commit or discard them first", tone: .warn))
         } else {
-            facts.append(WorktreeCardFact(icon: .pencil, text: "Nothing uncommitted", tone: .muted))
+            let text = blockers.contains(.notInspected) ? "Couldn’t check for changes"
+                : isChecking && entry?.isInspected != true ? "Checking for changes…" : "Nothing uncommitted"
+            facts.append(WorktreeCardFact(icon: .pencil, text: text, tone: .muted))
         }
-        let hasSubmodules = entry?.hasSubmodules == true
-        if hasSubmodules {
-            facts.append(WorktreeCardFact(icon: .warning, text: "Contains a submodule: Git won’t remove it", tone: .warn))
-        }
-        let protection = hasSubmodules ? nil : WorktreeWording.protection(worktree, entry)
-        if let protection {
-            facts.append(WorktreeCardFact(icon: .warning, text: protection + ", so Teebe won’t remove it", tone: .warn))
-        }
-        if let activity = status.activityWarning {
-            facts.append(WorktreeCardFact(icon: .warning, text: activity, tone: .warn))
-        }
-        let isBlocked = hasUncommitted || hasSubmodules || protection != nil || status.activityWarning != nil || isChecking
+        self.facts = facts + blockers.compactMap(Self.warning)
         // A clean removal takes ignored files with the folder.
-        if !isBlocked, let entry, let ignored = WorktreeWording.ignoredFact([entry]) {
-            facts.append(ignored)
+        ignored = removal.canRemoveFolder ? entry.flatMap { WorktreeIgnoredNotice($0) } : nil
+        canRemove = removal.canRemoveFolder
+        explanation = Self.explanation(blockers.first, removal: removal)
+        offersBranchDeletion = removal.canDeleteBranch
+    }
+
+    /// The warning line a blocker adds; nil for those the other facts already say.
+    private static func warning(_ blocker: RemovalEligibility.Blocker) -> WorktreeCardFact? {
+        switch blocker {
+        case .submodule: WorktreeCardFact(icon: .warning, text: "Contains a submodule: Git won’t remove it", tone: .warn)
+        case .protected(let protection): WorktreeCardFact(icon: .warning, text: protection + ", so Teebe won’t remove it", tone: .warn)
+        case .activity(let activity): WorktreeCardFact(icon: .warning, text: activity, tone: .warn)
+        case .uncommitted, .checking, .notInspected: nil
         }
-        self.facts = facts
-        canRemove = !isBlocked
-        let safe = entry?.mergeStatus == .merged && !hasUncommitted
-        explanation = if hasUncommitted {
-            "Git only removes a worktree with nothing uncommitted. The branch is kept."
-        } else if hasSubmodules {
-            "Git won’t remove a worktree that contains a submodule without forcing it, and Teebe never forces."
-        } else if protection != nil {
-            "Teebe only removes a worktree Git can fully check and nothing protects."
-        } else if status.activityWarning != nil {
-            "Teebe won’t remove a worktree while something is working in it. Try again when it’s done."
-        } else if isChecking {
-            "Teebe is still checking this worktree. Try again in a moment."
-        } else {
-            safe ? "The worktree folder is deleted. Its commits are already merged."
-                : "The worktree folder is deleted. The branch is kept."
+    }
+
+    /// Why Remove is off, from the first blocker, or what removing does.
+    private static func explanation(_ blocker: RemovalEligibility.Blocker?, removal: RemovalEligibility) -> String {
+        switch blocker {
+        case .uncommitted?: "Git only removes a worktree with nothing uncommitted. The branch is kept."
+        case .submodule?: "Git won’t remove a worktree that contains a submodule without forcing it, and Teebe never forces."
+        case .protected?: "Teebe only removes a worktree Git can fully check and nothing protects."
+        case .activity?: "Teebe won’t remove a worktree while something is working in it. Try again when it’s done."
+        case .checking?: "Teebe is still checking this worktree. Try again in a moment."
+        case .notInspected?: "Teebe couldn’t check this worktree, so it won’t remove it. Refresh and try again."
+        case nil: removal.isSafeToDelete ? "The worktree folder is deleted. Its commits are already merged."
+            : "The worktree folder is deleted. The branch and its commits are kept."
         }
-        offersBranchDeletion = safe && canRemove && status.showsTrash
     }
 
     private static func mergeFact(_ entry: CleanupEntry?, isChecking: Bool) -> WorktreeCardFact {

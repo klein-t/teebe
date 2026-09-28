@@ -17,6 +17,7 @@ private actor MergeScanStub: WorktreeCleanupChecking {
         let targets = CleanupTargets.parse("refs/heads/dev\u{0}abc\u{0}\u{0}\nrefs/heads/main\u{0}def\u{0}\u{0}\n")
         var entry = CleanupEntry(worktree: Worktree(path: repoPath + "/feature", branch: "feature"))
         entry.mergeStatus = .merged
+        entry.isInspected = true
         return CleanupSnapshot(targets: targets, mergeTargets: targets.mergeTargets(extra: extraTarget), entries: [entry])
     }
     func remove(repoPath: String, entry: CleanupEntry, includingIgnored: Bool, deleteBranch: Bool) -> BranchDeletion {
@@ -50,6 +51,7 @@ private actor ScriptedScan: WorktreeCleanupChecking {
         let targets = CleanupTargets.parse("refs/heads/dev\u{0}\(dev)\u{0}\u{0}\n")
         var feature = CleanupEntry(worktree: Worktree(path: repoPath + "/feature", branch: "feature"))
         feature.mergeStatus = .merged
+        feature.isInspected = true
         feature.hasLocalChanges = dirty
         if stamps { feature.problem = "scan \(call)" }
         var other = CleanupEntry(worktree: Worktree(path: repoPath + "/other", branch: "other"))
@@ -212,7 +214,7 @@ struct WorktreeMergeModelTests {
         #expect(await service.calls == 1)
     }
 
-    @Test("a commit in one worktree keeps its group and rechecks only that row")
+    @Test("a commit in one worktree rechecks only that row, and it isn't Safe to delete meanwhile")
     func movedHeadStaysInItsGroup() async {
         let service = MergeScanStub()
         let model = makeModel(service)
@@ -221,11 +223,11 @@ struct WorktreeMergeModelTests {
         #expect(group(settled) == .merged)
 
         // The user commits in the worktree they are browsing: HEAD moves ahead of
-        // the scan. The row must not fall into the catch-all group and bounce back.
+        // the scan. The last result is kept, but nothing offers the row for removal.
         let committed = model.entry(for: "/repo/feature", localStatus: StatusResult(oid: "new-head"))
         #expect(committed?.isRechecking == true)
         #expect(committed?.entry.mergeStatus == .merged)
-        #expect(group(committed) == .merged)
+        #expect(group(committed) == .notMerged)
         // Known to be stale: the ring while it is rechecked, never a ✓ to act on.
         #expect(mark(committed) == .notMerged)
 
@@ -386,7 +388,9 @@ struct WorktreeMergeModelTests {
         git.statusResult = StatusResult()
         await app.selector.handleWorktreeFileEvents(["/repo/feature/new.txt"])
         #expect(app.selector.info(for: feature).changeCount == 0)
-        #expect(app.worktreeStatus(for: feature).group == .merged)
+        // No longer uncommitted; files just changed there, so it isn't Safe to delete yet.
+        #expect(app.worktreeStatus(for: feature).group == .notMerged)
+        #expect(app.worktreeStatus(for: feature).mark == .working)
     }
 
     private func status(_ merge: WorktreeMergeEntry?) -> WorktreeStatus {

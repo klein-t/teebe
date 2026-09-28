@@ -60,6 +60,7 @@ struct WorktreeGroupActionsTests {
     private func merged(_ path: String, branch: String) -> CleanupEntry {
         var entry = CleanupEntry(worktree: Worktree(path: path, branch: branch, head: "abc"))
         entry.mergeStatus = .merged
+        entry.isInspected = true
         return entry
     }
 
@@ -132,8 +133,10 @@ struct WorktreeGroupActionsTests {
                 == "The folder will be deleted from your Mac. The branch will be kept.")
         #expect(actions.confirmationMessage([plain, ignored], deleteBranch: false)
                 == "The folders will be deleted from your Mac. Branches will be kept.")
-        #expect(actions.confirmationFacts([plain]).isEmpty)
-        #expect(actions.confirmationFacts([plain, ignored]).map { $0.text } == ["Ignored files will be deleted too (.build/)"])
+        // Only the worktree that has gitignored files says so, by name.
+        #expect(actions.confirmationNotices([plain]).isEmpty)
+        #expect(actions.confirmationNotices([plain, ignored]).map(\.summary)
+                == ["“ignored” also deletes its gitignored files. Git can’t restore these files."])
         #expect(actions.confirmationMessage([plain], deleteBranch: true)
                 == "The folder will be deleted from your Mac. "
                 + "Its local branch will be deleted too; the remote branch is kept.")
@@ -259,6 +262,9 @@ struct WorktreeGroupActionsTests {
         let actions = WorktreeGroupActions(app: app, service: stub)
 
         #expect(actions.eligibleEntries(for: rows).map(\.id) == ["/free"])
+        // The group agrees with the bin: only the browsed row, removable from its own trash, is kept out of it.
+        #expect(rows.filter { app.worktreeStatus(for: $0).group == .merged }.map(\.path) == ["/free", "/browsed"])
+        #expect(rows.filter { app.worktreeStatus(for: $0).mark == .merged }.map(\.path) == ["/free", "/browsed"])
         #expect(actions.skippedFacts(for: rows).map(\.text) == [
             "“waiting” is skipped: an agent is waiting for you here",
             "“working” is skipped: an agent is working here",
@@ -383,6 +389,17 @@ struct WorktreeGroupActionsTests {
         let reopened = AppModel(environment: env)
         #expect(reopened.extraMergeTarget(for: repo.path) == nil)
         #expect(reopened.layout(forRepo: repo.path) == nil)
+    }
+
+    @Test("asking for a row's card from the keyboard names the row, and asking again asks anew")
+    func keyboardCardReveal() {
+        let app = AppModel(environment: makeTestEnvironment())
+        #expect(app.worktreeCardReveal == nil)
+        app.revealWorktreeCard(for: "/a")
+        #expect(app.worktreeCardReveal?.path == "/a")
+        let first = app.worktreeCardReveal?.count
+        app.revealWorktreeCard(for: "/a")
+        #expect(app.worktreeCardReveal?.count != first)
     }
 
     @Test("deleting the branch on removal defaults on and remembers the last choice")

@@ -83,6 +83,20 @@ struct ProcessGitClientTests {
         #expect(byPath["todelete.txt"]?.worktreeStatus == .deleted)
     }
 
+    @Test("status counts untracked files even when the repository is set to hide them")
+    func statusIgnoresHidingSettings() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("tracked.txt", "t\n")
+        fixture.git(["config", "status.showUntrackedFiles", "no"])
+        fixture.writeFile("untracked.txt", "u\n")
+        let status = try await git.status(worktreePath: fixture.repoPath)
+        #expect(status.changes.map(\.path) == ["untracked.txt"])
+        // The same options the removal check reads with.
+        #expect(ProcessGitClient.statusArguments.contains("--untracked-files=normal"))
+        #expect(ProcessGitClient.statusArguments.contains("--ignore-submodules=none"))
+    }
+
     // MARK: M4 — Diffs
 
     @Test("working diff produces hunks with line numbers")

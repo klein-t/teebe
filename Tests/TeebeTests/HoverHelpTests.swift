@@ -112,6 +112,28 @@ struct HoverHelpTests {
         #expect(abs(anchor.minY - panel.frame.maxY - 6) < 1)
     }
 
+    @Test func revealShowsTheCardAtOnceWithoutThePointer() throws {
+        guard CGMainDisplayID() != 0 else { return }
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 300, width: 440, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.orderFront(nil)
+        let owner = HoverHelpView(frame: NSRect(x: 24, y: 200, width: 22, height: 26))
+        owner.text = "Not merged. Locked, so Teebe won’t remove it."
+        owner.card = AnyView(Text("card"))
+        window.contentView?.addSubview(owner)
+        let presenter = HoverHelpPresenter()
+        defer { presenter.dismiss() }
+        presenter.reveal(owner: owner)
+        #expect(presenter.owner === owner)
+        #expect(presenter.panel != nil)
+        presenter.dismiss()
+        owner.enabled = false
+        presenter.reveal(owner: owner)
+        #expect(presenter.panel == nil)
+    }
+
     @Test func richCardWaitsForTheDelayAndLeavesWithThePointer() throws {
         let owner = HoverHelpView(frame: NSRect(x: 0, y: 0, width: 22, height: 26))
         owner.text = "Safe to delete. All its work is merged."

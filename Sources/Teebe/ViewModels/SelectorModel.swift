@@ -21,8 +21,12 @@ final class SelectorModel {
         /// What the coding agents working in this worktree are doing, from their
         /// own records (session logs, rollouts, session registry).
         var agentState: AgentActivityState = .idle
-        /// The branch against its same-named remote branch.
-        var remote: RemoteSync = .notOnRemote
+        /// The branch against its same-named remote branch; unknown until a status
+        /// read succeeds.
+        var remote: RemoteSync = .unknown
+        /// The folder is gone but Git's record of it still holds work no branch
+        /// has, so the row stays listed instead of being forgotten.
+        var isKeptMissing = false
 
         /// Whether there is anything to pull or push — rows hide the "↓ ↑"
         /// indicator entirely when both counts are zero.
@@ -32,8 +36,12 @@ final class SelectorModel {
     private(set) var repositories: [Repository] = []
     private(set) var selectedRepo: Repository?
     /// The worktrees Teebe shows. One whose folder is gone never is: a deleted one
-    /// is forgotten (`forgetDeleted`), one out of reach waits for its drive.
+    /// is forgotten (`forgetDeleted`), one out of reach waits for its drive. The
+    /// exception is a deleted one whose record still holds work: it stays listed.
     private(set) var worktrees: [Worktree] = []
+    /// Listed worktrees whose folder is gone, kept because their record holds
+    /// work no branch has (`MissingWorktrees.holdsUnsavedWork`).
+    private(set) var keptMissingPaths: Set<String> = []
     private(set) var selectedWorktree: Worktree?
     private(set) var branches: [Branch] = []
     /// Sync/activity info keyed by worktree path.
@@ -173,6 +181,7 @@ final class SelectorModel {
 
     func clearSelection() {
         cleanedUpCount = 0
+        keptMissingPaths = []
         forgetAttempts.removeAll()
         repoWatcher?.stop()
         repoWatcher = nil
@@ -202,7 +211,7 @@ final class SelectorModel {
         startAgentWatching()
         var deleted: [Worktree] = []
         do {
-            let found = sortMissing(try await environment.worktreeService.worktrees(for: repo))
+            let found = await sortMissing(try await environment.worktreeService.worktrees(for: repo), in: repo)
             deleted = found.deleted
             applyDiscovered(found.listed)
             branches = try await environment.branchService.branches(for: repo)
@@ -263,6 +272,10 @@ final class SelectorModel {
         if changedPaths.contains(where: { $0.hasPrefix(adminDir) }) {
             await refreshWorktrees()
         } else if refsChanged {
+            // A push or fetch can add or drop the remote branch a row is compared with.
+            if let repo = selectedRepo, let found = try? await environment.branchService.branches(for: repo) {
+                branches = found
+            }
             await refreshWorktreeInfo()
         }
     }
@@ -288,7 +301,7 @@ final class SelectorModel {
         let deleted: [Worktree]
         let discoveredBranches: [Branch]
         do {
-            (discovered, deleted) = sortMissing(try await environment.worktreeService.worktrees(for: repo))
+            (discovered, deleted) = await sortMissing(try await environment.worktreeService.worktrees(for: repo), in: repo)
             discoveredBranches = try await environment.branchService.branches(for: repo)
             errorMessage = nil
         } catch {
@@ -315,18 +328,27 @@ final class SelectorModel {
 
     /// Split what Git lists into the rows to show and the deleted ones to forget.
     /// A worktree out of reach (drive not mounted, or locked) is in neither: it is
-    /// hidden and left alone until its folder is back.
-    private func sortMissing(_ all: [Worktree]) -> (listed: [Worktree], deleted: [Worktree]) {
+    /// hidden and left alone until its folder is back. A deleted one whose record
+    /// still holds work is shown, so the user can see why it stays.
+    private func sortMissing(_ all: [Worktree], in repo: Repository) async -> (listed: [Worktree], deleted: [Worktree]) {
         let missing = environment.missingWorktrees
         var listed: [Worktree] = []
         var deleted: [Worktree] = []
+        var kept: Set<String> = []
         for worktree in all {
             switch missing.disposition(of: worktree) {
             case .present: listed.append(worktree)
-            case .deleted: deleted.append(worktree)
+            case .deleted:
+                if await missing.holdsUnsavedWork(worktree, repoPath: repo.path) {
+                    listed.append(worktree)
+                    kept.insert(worktree.path)
+                } else {
+                    deleted.append(worktree)
+                }
             case .unreachable: break
             }
         }
+        keptMissingPaths = kept
         return (listed, deleted)
     }
 
@@ -401,11 +423,12 @@ final class SelectorModel {
             return byPath
         }
         let agentStates = await agentTask.value
+        let remoteBranches = Set(branches.filter(\.isRemote).map(\.name))
         var info: [String: WorktreeInfo] = [:]
         for worktree in worktrees {
             let status = statuses[worktree.path] ?? nil
             let agent = agentStates[worktree.path] ?? .idle
-            let remote = status.map(RemoteSync.init(status:)) ?? .notOnRemote
+            let remote = status.map { RemoteSync(status: $0, remoteBranches: remoteBranches) } ?? .unknown
             info[worktree.path] = WorktreeInfo(
                 ahead: remote.ahead,
                 behind: remote.behind,
@@ -413,7 +436,8 @@ final class SelectorModel {
                 hasStatus: status != nil,
                 isLive: environment.activityMonitor.isBusy(worktreePath: worktree.path, within: liveWindow, now: now),
                 agentState: agent,
-                remote: remote
+                remote: remote,
+                isKeptMissing: keptMissingPaths.contains(worktree.path)
             )
         }
         notifyAgentTransitions(from: worktreeInfo, to: info)

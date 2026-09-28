@@ -38,8 +38,10 @@ extension View {
     /// The same surface with rich content: shown after the same delay, but at the
     /// card's own size and starting at the view's leading edge. `summary` is the
     /// plain-text version, for accessibility and to notice when the card changes.
-    func hoverCard<Card: View>(_ summary: String, @ViewBuilder card: () -> Card) -> some View {
-        background(HoverHelpAnchor(text: summary, highlight: false, card: AnyView(card())))
+    /// A new `reveal` value shows the card straight away, without the pointer (the
+    /// keyboard's way in); the next key, click or scroll puts it away.
+    func hoverCard<Card: View>(_ summary: String, reveal: Int? = nil, @ViewBuilder card: () -> Card) -> some View {
+        background(HoverHelpAnchor(text: summary, highlight: false, card: AnyView(card()), reveal: reveal))
             .accessibilityHint(summary)
     }
 }
@@ -48,6 +50,7 @@ private struct HoverHelpAnchor: NSViewRepresentable {
     let text: String
     let highlight: Bool
     var card: AnyView?
+    var reveal: Int?
     @Environment(\.isEnabled) private var isEnabled
 
     func makeNSView(context: Context) -> HoverHelpView { HoverHelpView() }
@@ -61,6 +64,14 @@ private struct HoverHelpAnchor: NSViewRepresentable {
         view.enabled = isEnabled
         view.showsHighlight = highlight
         if !isEnabled { view.highlighted = false }
+        if let reveal, reveal != view.revealed {
+            view.revealed = reveal
+            // After this update: the panel measures the view in its window.
+            DispatchQueue.main.async { [weak view] in
+                guard let view else { return }
+                HoverHelpPresenter.shared.reveal(owner: view)
+            }
+        }
     }
 
     static func dismantleNSView(_ view: HoverHelpView, coordinator: ()) {
@@ -74,6 +85,8 @@ final class HoverHelpView: NSView {
     var card: AnyView?
     var enabled = true
     var showsHighlight = true
+    /// The last `reveal` value acted on.
+    var revealed: Int?
     var highlighted = false {
         didSet { needsDisplay = true }
     }
@@ -130,6 +143,27 @@ final class HoverHelpPresenter {
     private var observers: [NSObjectProtocol] = []
 
     func schedule(owner: HoverHelpView) {
+        watch(owner)
+        pending = Task { [weak self, weak owner] in
+            do { try await Task.sleep(for: Self.delay) } catch { return }
+            guard let self, let owner, self.owner === owner, let window = owner.window else { return }
+            let point = owner.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            guard Self.canShow(owner: owner, window: window, pointerInside: owner.visibleRect.contains(point),
+                               buttonsDown: NSEvent.pressedMouseButtons != 0) else { self.dismiss(); return }
+            self.show(owner: owner, window: window)
+        }
+    }
+
+    /// Show `owner`'s help now, pointer or not, until the next key, click, scroll
+    /// or window change.
+    func reveal(owner: HoverHelpView) {
+        guard owner.enabled, !owner.text.isEmpty, let window = owner.window, window.isVisible else { return }
+        watch(owner)
+        show(owner: owner, window: window)
+    }
+
+    /// Take over from any other help and put it away on the events that end it.
+    private func watch(_ owner: HoverHelpView) {
         dismiss()
         self.owner = owner
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [
@@ -148,14 +182,6 @@ final class HoverHelpPresenter {
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.dismiss() }
             })
-        }
-        pending = Task { [weak self, weak owner] in
-            do { try await Task.sleep(for: Self.delay) } catch { return }
-            guard let self, let owner, self.owner === owner, let window = owner.window else { return }
-            let point = owner.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-            guard Self.canShow(owner: owner, window: window, pointerInside: owner.visibleRect.contains(point),
-                               buttonsDown: NSEvent.pressedMouseButtons != 0) else { self.dismiss(); return }
-            self.show(owner: owner, window: window)
         }
     }
 

@@ -91,9 +91,14 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
     /// (a squash merge), rather than the branch being an ancestor.
     public var hasEquivalentContent = false
     public var isBroken = false
+    /// Broken because the folder itself is gone, not only its `.git` link.
+    public var isFolderMissing = false
     public var hasLocalChanges = false
     public var hasIgnoredFiles = false
     public var ignoredPaths: [String] = []
+    /// The files inside `ignoredPaths`, read for a checkout nothing else keeps
+    /// from being removed; nil otherwise.
+    public var ignoredFiles: IgnoredFiles?
     public var hasSubmodules = false
     public var hasUncheckedFiles = false
     /// The checkout's branch is one of the merge targets.
@@ -102,6 +107,13 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
     /// created from. Ancestry would call it merged, but there is no work of its
     /// own to be merged, so it is reported as not merged.
     public var hasNoCommits = false
+    /// `hasNoCommits` is proven by the branch's own record of where it was
+    /// created, rather than inferred from where its tip sits (which a branch
+    /// fast-forwarded into a target, with its reflogs gone, looks the same as).
+    public var hasNoCommitsConfirmed = false
+    /// A rebase, merge, cherry-pick, revert or bisect left unfinished here. Its
+    /// state is in the checkout's git directory, so the folder is never removed.
+    public var operation: GitOperation?
     /// The folder's status and index were read, so the local-work flags above are
     /// facts rather than defaults.
     public var isInspected = false
@@ -129,6 +141,7 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
 
     private func isFolderRemovable(includingIgnored: Bool) -> Bool {
         !hasLocalChanges && !hasSubmodules && !hasUncheckedFiles && (!hasIgnoredFiles || includingIgnored) && !isTarget
+            && operation == nil
             && !worktree.isPrimary && !worktree.isLocked && !worktree.isBare && !worktree.isDetached
     }
 }
@@ -248,8 +261,10 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         let checked = await inspect(current, targets: isMerged ? unchanged : [], commonDirectory: commonDirectory)
         guard checked.worktree.head == entry.worktree.head else { throw CleanupError.changed }
         // Consent covers the ignored files that were reviewed, not any that showed
-        // up since. A new secrets file or nested repository voids the confirmation.
-        guard !includingIgnored || checked.ignoredPaths == entry.ignoredPaths else { throw CleanupError.changed }
+        // up since, even inside a folder that was already listed. A new secrets file
+        // or nested repository voids the confirmation.
+        guard !includingIgnored || (checked.ignoredPaths == entry.ignoredPaths && checked.ignoredFiles == entry.ignoredFiles)
+        else { throw CleanupError.changed }
         let isRemovable = isMerged ? checked.canRemove(includingIgnored: includingIgnored)
             : checked.canRemoveFolder(includingIgnored: includingIgnored)
         guard isRemovable, !isMerged || !Self.isTarget(current, among: catalog.mergeTargets(extra: nil)) else {
@@ -294,6 +309,7 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         entry.problem = Self.refusal(for: worktree)
         if let problem = Self.missingWorktreeProblem(worktree.path) {
             entry.isBroken = true
+            entry.isFolderMissing = problem == Self.missingFolder
             entry.problem = problem
             return entry
         }
@@ -317,17 +333,28 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             entry.hasUncheckedFiles = indexedFiles.contains { line in
                 line.first == "S" || line.first?.isLowercase == true
             }
+            let gitDirectory = try await checked(["rev-parse", "--path-format=absolute", "--git-dir"], in: worktree.path)
+            entry.operation = GitOperation.detect(gitDirectory: gitDirectory.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines))
             entry.isInspected = true
+            // Only where removal could go ahead: counting a large ignored folder costs a walk.
+            if entry.hasIgnoredFiles, !entry.hasLocalChanges, !entry.hasSubmodules, !entry.hasUncheckedFiles,
+               entry.operation == nil, !worktree.isPrimary, !worktree.isLocked, !worktree.isDetached {
+                entry.ignoredFiles = IgnoredFiles.inventory(in: worktree.path, entries: entry.ignoredPaths)
+            }
             guard !targets.isEmpty else { entry.problem = "No branch to compare against"; return entry }
             let merge = try await mergedTargets(of: entry.worktree.head, among: targets, in: worktree.path)
             entry.mergedTargets = merge.targets
             entry.hasEquivalentContent = merge.byContent
             entry.mergeStatus = merge.targets.isEmpty ? .notConfirmed : .merged
-            if !merge.targets.isEmpty, !merge.byContent, !entry.isTarget,
-               await hasNoCommits(branch: worktree.branch, head: entry.worktree.head, targets: targets, in: worktree.path) {
-                entry.hasNoCommits = true
-                entry.mergedTargets = []
-                entry.mergeStatus = .notConfirmed
+            if !merge.targets.isEmpty, !merge.byContent, !entry.isTarget {
+                let fresh = await freshness(branch: worktree.branch, head: entry.worktree.head, targets: targets,
+                                            in: worktree.path)
+                if fresh.isFresh {
+                    entry.hasNoCommits = true
+                    entry.hasNoCommitsConfirmed = fresh.isConfirmed
+                    entry.mergedTargets = []
+                    entry.mergeStatus = .notConfirmed
+                }
             }
         } catch {
             entry.mergeStatus = .unknown
@@ -377,23 +404,29 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
     ///   into a target with every reflog gone looks the same and can't be told apart,
     ///   so it stays unconfirmed rather than risk a ✓ on a branch just started;
     /// - a tip that reached a target only through a merge commit is merged work.
-    private func hasNoCommits(branch: String?, head: String, targets: [CleanupBranch], in path: String) async -> Bool {
+    ///
+    /// Only the creation record confirms it (`isConfirmed`); the rest is a likely
+    /// reading.
+    private func freshness(
+        branch: String?, head: String, targets: [CleanupBranch], in path: String
+    ) async -> (isFresh: Bool, isConfirmed: Bool) {
         let branchLog = await reflog(branch.map { "refs/heads/" + $0 }, in: path)
         if let oldest = branchLog.last, oldest.subject.hasPrefix(Self.createdPrefix) {
-            guard oldest.sha == head else { return false }
+            guard oldest.sha == head else { return (false, false) }
             var start = String(oldest.subject.dropFirst(Self.createdPrefix.count))
             for refPrefix in ["refs/heads/", "refs/remotes/"] where start.hasPrefix(refPrefix) {
                 start = String(start.dropFirst(refPrefix.count))
             }
             let isCommitID = start.count >= 7 && start.allSatisfy(\.isHexDigit)
             let targetNames = Set(targets.flatMap { [$0.name, $0.shortName] } + CleanupTargets.integrationNames)
-            return start == "HEAD" || isCommitID || targetNames.contains(start)
+            let isFresh = start == "HEAD" || isCommitID || targetNames.contains(start)
+            return (isFresh, isFresh)
         }
         let logs = branchLog + (await reflog("HEAD", in: path))
-        if logs.contains(where: { $0.sha == head && $0.subject.hasPrefix("commit") }) { return false }
-        if targets.contains(where: { $0.sha == head }) { return true }
-        for target in targets where await isOnFirstParentLine(head, of: target, in: path) { return true }
-        return false
+        if logs.contains(where: { $0.sha == head && $0.subject.hasPrefix("commit") }) { return (false, false) }
+        if targets.contains(where: { $0.sha == head }) { return (true, false) }
+        for target in targets where await isOnFirstParentLine(head, of: target, in: path) { return (true, false) }
+        return (false, false)
     }
 
     private static let createdPrefix = "branch: Created from "
@@ -439,9 +472,11 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         return nil
     }
 
+    private static let missingFolder = "Broken worktree: its folder is missing."
+
     private static func missingWorktreeProblem(_ path: String) -> String? {
         for (candidate, message) in [
-            (path, "Broken worktree: its folder is missing."),
+            (path, missingFolder),
             (path + "/.git", "Broken worktree: its .git link is missing. Remaining files were not changed.")
         ] {
             do { _ = try FileManager.default.attributesOfItem(atPath: candidate) } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {

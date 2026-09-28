@@ -84,9 +84,10 @@ final class WorktreeGroupActions {
                 : "Branches will be kept.")
     }
 
-    /// Only worth saying when it is true: ignored files go with the folders.
-    func confirmationFacts(_ entries: [CleanupEntry]) -> [WorktreeCardFact] {
-        [WorktreeWording.ignoredFact(entries)].compactMap { $0 }
+    /// Only worth saying where it is true: each worktree whose gitignored files go
+    /// with its folder, by name.
+    func confirmationNotices(_ entries: [CleanupEntry]) -> [WorktreeIgnoredNotice] {
+        entries.compactMap { WorktreeIgnoredNotice($0, worktree: name($0)) }
     }
 
     /// Remove the confirmed folders one at a time. A failure is reported and the

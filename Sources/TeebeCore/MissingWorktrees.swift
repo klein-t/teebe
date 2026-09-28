@@ -2,9 +2,10 @@ import Darwin
 import Foundation
 
 /// Registered worktrees whose folder is not on disk. One gone from a connected
-/// disk is deleted: it can't be browsed and holds nothing, so its record may be
-/// forgotten. One that is only out of reach (on a volume that isn't mounted, or
-/// locked) is left alone, so it comes back when its drive does.
+/// disk is deleted: it can't be browsed, so its record may be forgotten, unless
+/// that record is the last thing holding some work (`holdsUnsavedWork`). One
+/// that is only out of reach (on a volume that isn't mounted, or locked) is left
+/// alone, so it comes back when its drive does.
 public struct MissingWorktrees: Sendable {
     public enum Disposition: Equatable, Sendable {
         /// The folder is there (or it is the primary checkout): listed as usual.
@@ -18,13 +19,17 @@ public struct MissingWorktrees: Sendable {
     private let git: GitClient
     private let folderIsGone: @Sendable (String) -> Bool
     private let isVolumeMounted: @Sendable (String) -> Bool
+    private let holdsWork: (@Sendable (Worktree, String) async -> Bool)?
 
+    /// `holdsWork` stands in for `holdsUnsavedWork`'s Git reads, for tests.
     public init(git: GitClient,
                 folderIsGone: @escaping @Sendable (String) -> Bool = { MissingWorktrees.isGone($0) },
-                isVolumeMounted: @escaping @Sendable (String) -> Bool = { MissingWorktrees.isOnMountedVolume($0) }) {
+                isVolumeMounted: @escaping @Sendable (String) -> Bool = { MissingWorktrees.isOnMountedVolume($0) },
+                holdsWork: (@Sendable (Worktree, String) async -> Bool)? = nil) {
         self.git = git
         self.folderIsGone = folderIsGone
         self.isVolumeMounted = isVolumeMounted
+        self.holdsWork = holdsWork
     }
 
     public func disposition(of worktree: Worktree) -> Disposition {
@@ -35,15 +40,67 @@ public struct MissingWorktrees: Sendable {
     /// Forget one deleted worktree's record and nothing else. For a folder that is
     /// gone, `git worktree remove` only drops Git's record: the branch is kept, and
     /// Git itself refuses a locked worktree. The folder is checked again right
-    /// before, so one that came back is left alone. Returns whether it was forgotten.
+    /// before, so one that came back is left alone, and so is a record that still
+    /// holds work. Returns whether it was forgotten.
     public func forget(_ worktree: Worktree, repoPath: String) async -> Bool {
         guard disposition(of: worktree) == .deleted,
-              PathUtil.standardized(worktree.path) != PathUtil.standardized(repoPath) else { return false }
+              PathUtil.standardized(worktree.path) != PathUtil.standardized(repoPath),
+              !(await holdsUnsavedWork(worktree, repoPath: repoPath)) else { return false }
         do {
             try await git.removeWorktree(repoPath: repoPath, worktreePath: worktree.path, force: false)
             return true
         } catch {
             return false
+        }
+    }
+
+    /// Whether forgetting this worktree's record could lose work that only it still
+    /// holds: a commit its HEAD, or its HEAD's reflog, reached that no branch, tag
+    /// or remote branch contains (a detached HEAD's own commits, or ones a reset
+    /// left behind), or changes staged in its index. Anything that can't be
+    /// verified counts as holding work.
+    public func holdsUnsavedWork(_ worktree: Worktree, repoPath: String) async -> Bool {
+        if let holdsWork { return await holdsWork(worktree, repoPath) }
+        guard let common = try? await git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"], in: repoPath),
+              common.succeeded,
+              let admin = Self.adminDirectory(of: worktree.path,
+                                              commonDirectory: common.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return true }
+        let commits = Self.reflogCommits(at: admin.appendingPathComponent("logs/HEAD"))
+            + (worktree.head.isEmpty ? [] : [worktree.head])
+        guard !commits.isEmpty else { return true }
+        let unique = Array(Set(commits)).sorted()
+        guard let unreachable = try? await git.run(["rev-list", "-n", "1"] + unique + ["--not", "--branches", "--tags", "--remotes"],
+                                                   in: repoPath),
+              unreachable.succeeded,
+              unreachable.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
+        // Its index against its HEAD, read from the record: exit 1 means something is staged.
+        guard let staged = try? await git.run(["--git-dir=" + admin.path, "diff-index", "--cached", "--quiet", "HEAD", "--"],
+                                              in: repoPath) else { return true }
+        return staged.exitCode != 0
+    }
+
+    /// The worktree's record in `<common>/worktrees/`, found by the `gitdir` file
+    /// that points back at its folder.
+    static func adminDirectory(of path: String, commonDirectory: String) -> URL? {
+        let records = URL(fileURLWithPath: commonDirectory).appendingPathComponent("worktrees")
+        let target = PathUtil.standardized(path)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: records.path)) ?? []
+        return names.map { records.appendingPathComponent($0) }.first { record in
+            guard let gitdir = try? String(contentsOf: record.appendingPathComponent("gitdir"), encoding: .utf8) else { return false }
+            let folder = (gitdir.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).deletingLastPathComponent
+            return PathUtil.standardized(folder) == target
+        }
+    }
+
+    /// Every commit a reflog file moved to, oldest first; none when there is no file.
+    static func reflogCommits(at url: URL) -> [String] {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return text.split(separator: "\n").compactMap { line in
+            let fields = line.split(separator: " ", maxSplits: 2)
+            guard fields.count >= 2, [40, 64].contains(fields[1].count), fields[1].allSatisfy(\.isHexDigit),
+                  fields[1].contains(where: { $0 != "0" }) else { return nil }
+            return String(fields[1])
         }
     }
 

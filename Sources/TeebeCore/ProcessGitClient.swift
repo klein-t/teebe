@@ -27,10 +27,17 @@ public struct ProcessGitClient: GitClient {
 
     // MARK: - Status & changes
 
+    /// Untracked files and submodules are always counted, whatever the repository's
+    /// status settings, exactly as the removal check counts them: a setting that
+    /// hides them must not make a worktree read as clean.
     public func status(worktreePath: String) async throws -> StatusResult {
-        let result = try await runChecked(["status", "--porcelain=v2", "--branch", "-z"], in: worktreePath)
+        let result = try await runChecked(Self.statusArguments, in: worktreePath)
         return StatusParser.parse(result.stdoutString)
     }
+
+    static let statusArguments = [
+        "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal", "--ignore-submodules=none"
+    ]
 
     // MARK: - Diffs
 

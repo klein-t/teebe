@@ -79,6 +79,9 @@ public struct AppState: Codable, Equatable, Sendable {
     /// The app chosen to open each file type (a `FileTypeKey`), as the app's path.
     /// Optional so older state files decode; a missing entry means ask on open.
     public var openWithApps: [String: String]?
+    /// How the worktree list is ordered ("status", "name"). Optional so older state
+    /// files decode; nil means the default (by folder).
+    public var worktreeSortOrder: String?
 
     public init(
         repositories: [PersistedRepository] = [],
@@ -96,7 +99,8 @@ public struct AppState: Codable, Equatable, Sendable {
         fetchAutomatically: Bool? = nil,
         deleteBranchOnRemove: Bool? = nil,
         worktreeParentByRepo: [String: String]? = nil,
-        openWithApps: [String: String]? = nil
+        openWithApps: [String: String]? = nil,
+        worktreeSortOrder: String? = nil
     ) {
         self.repositories = repositories
         self.showChangedOnly = showChangedOnly
@@ -114,6 +118,7 @@ public struct AppState: Codable, Equatable, Sendable {
         self.deleteBranchOnRemove = deleteBranchOnRemove
         self.worktreeParentByRepo = worktreeParentByRepo
         self.openWithApps = openWithApps
+        self.worktreeSortOrder = worktreeSortOrder
     }
 }
 
