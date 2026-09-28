@@ -122,6 +122,10 @@ struct WorktreeStatus: Equatable {
     /// The hover card opens from the mark, so a row that draws none has no card.
     func hasHoverCard(grouped: Bool) -> Bool { rowMark(grouped: grouped) != .none }
 
+    /// A grouped row whose mark the heading carries instead: its slot holds an
+    /// info icon, shown while the row is hovered, that opens the row's own card.
+    func showsInfoIcon(grouped: Bool) -> Bool { grouped && !isPinned && rowMark(grouped: true) == .none && mark != .none }
+
     private static func group(_ facts: Facts, isMergedClean: Bool) -> WorktreeGroup {
         if facts.hasUncommitted { return .localChanges }
         // Git can't read a folder whose .git link is gone, so it can't be merged.

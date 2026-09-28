@@ -888,7 +888,9 @@ struct RootView: View {
         switch app.activeSection {
         case .changes:   toggleDiffPeek()
         case .files:     presentQuickLook()
-        case .worktrees: break
+        case .worktrees:
+            // Peek at the row's status card, the keyboard's way to what hovering shows.
+            if let row = selector.highlightedWorktree ?? selector.selectedWorktree { app.revealWorktreeCard(for: row.path) }
         }
     }
 

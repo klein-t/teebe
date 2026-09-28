@@ -389,6 +389,17 @@ struct WorktreeGroupActionsTests {
         #expect(reopened.layout(forRepo: repo.path) == nil)
     }
 
+    @Test("asking for a row's card from the keyboard names the row, and asking again asks anew")
+    func keyboardCardReveal() {
+        let app = AppModel(environment: makeTestEnvironment())
+        #expect(app.worktreeCardReveal == nil)
+        app.revealWorktreeCard(for: "/a")
+        #expect(app.worktreeCardReveal?.path == "/a")
+        let first = app.worktreeCardReveal?.count
+        app.revealWorktreeCard(for: "/a")
+        #expect(app.worktreeCardReveal?.count != first)
+    }
+
     @Test("deleting the branch on removal defaults on and remembers the last choice")
     func deleteBranchPreference() {
         let env = makeTestEnvironment()

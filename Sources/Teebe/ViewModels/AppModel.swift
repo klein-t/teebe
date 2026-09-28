@@ -37,6 +37,14 @@ final class AppModel {
     private(set) var errorMessage: String?
     /// The New Worktree sheet's form while it is up; nil when it is closed.
     var newWorktree: NewWorktreeModel?
+    /// A worktree row's card asked for from the keyboard: the row, and a count
+    /// that changes on every request so asking again shows it again.
+    private(set) var worktreeCardReveal: (path: String, count: Int)?
+
+    /// Show this row's status card now, as hovering its mark would.
+    func revealWorktreeCard(for path: String) {
+        worktreeCardReveal = (path, (worktreeCardReveal?.count ?? 0) + 1)
+    }
 
     /// Which section the keyboard currently drives — arrows, Enter and Space act on
     /// it, and its header shows the active accent. Moved by ⌘1/⌘2/⌘3, Tab/⇧Tab, or by

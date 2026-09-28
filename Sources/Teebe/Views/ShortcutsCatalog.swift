@@ -27,7 +27,7 @@ enum ShortcutsCatalog {
             ShortcutItem(keys: "→", action: "Expand folder / go to first child"),
             ShortcutItem(keys: "←", action: "Collapse folder / go to parent"),
             ShortcutItem(keys: "Return", action: "Open file · switch worktree · open change"),
-            ShortcutItem(keys: "Space", action: "Quick Look a file / peek a change's diff"),
+            ShortcutItem(keys: "Space", action: "Quick Look a file / peek a change's diff / show a worktree's status"),
             ShortcutItem(keys: "↑ / ↓ while previewing", action: "Preview the previous / next item")
         ]),
         ShortcutGroup(title: "Select files", items: [

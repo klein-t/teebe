@@ -151,6 +151,32 @@ struct WorktreeStatusTests {
         #expect(status(target, count: 1).hasHoverCard(grouped: true))
     }
 
+    @Test("a grouped row with no mark of its own opens its card from an info icon; rows that keep a mark don't need one")
+    func infoIcon() {
+        let merged = status(entry(merged: [dev]))
+        #expect(merged.showsInfoIcon(grouped: true))
+        #expect(!merged.showsInfoIcon(grouped: false))
+        #expect(status(entry()).showsInfoIcon(grouped: true))
+        #expect(status(entry(), count: 2).showsInfoIcon(grouped: true))
+        // An orb, the broken link and a result being rechecked keep their mark, which opens the card.
+        #expect(!status(entry(), info: .init(agentState: .working)).showsInfoIcon(grouped: true))
+        #expect(!status(entry { $0.isBroken = true }).showsInfoIcon(grouped: true))
+        let rechecking = WorktreeStatus(worktree: feature, merge: WorktreeMergeEntry(entry: entry(merged: [dev]), isRechecking: true),
+                                        info: .init(), targetNames: ["dev"], isChecking: false)
+        #expect(!rechecking.showsInfoIcon(grouped: true))
+        #expect(rechecking.hasHoverCard(grouped: true))
+        // Pinned rows sit above the groups and keep their own mark, or have no card at all.
+        let devTree = Worktree(path: "/dev", branch: "dev")
+        #expect(!status(entry(devTree, merged: [dev]) { $0.isTarget = true }).showsInfoIcon(grouped: true))
+        let primary = Worktree(path: "/repo", branch: "feature", isPrimary: true)
+        #expect(!status(entry(primary)).showsInfoIcon(grouped: true))
+        // Every grouped row can reach its card one way or the other.
+        for row in [merged, status(entry()), status(entry(), count: 1), rechecking,
+                    status(entry(), info: .init(agentState: .needsAttention))] {
+            #expect(row.hasHoverCard(grouped: true) != row.showsInfoIcon(grouped: true))
+        }
+    }
+
     @Test("every card has a fixed state title, one short sentence, and the same three facts")
     func cards() {
         let merged = status(entry(merged: [main, dev]), info: .init(remote: .sameBranch(remote: "origin", ahead: 0, behind: 0)))
