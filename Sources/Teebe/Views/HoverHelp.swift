@@ -79,6 +79,10 @@ final class HoverHelpView: NSView {
     }
     private var hoverArea: NSTrackingArea?
 
+    /// Always active, like system tooltips: a visible window reacts to the pointer
+    /// even while another app is frontmost.
+    static let trackingOptions: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -90,9 +94,7 @@ final class HoverHelpView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverArea { removeTrackingArea(hoverArea) }
-        let area = NSTrackingArea(rect: .zero,
-                                  options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-                                  owner: self, userInfo: nil)
+        let area = NSTrackingArea(rect: .zero, options: Self.trackingOptions, owner: self, userInfo: nil)
         addTrackingArea(area)
         hoverArea = area
     }
@@ -149,13 +151,18 @@ final class HoverHelpPresenter {
         }
         pending = Task { [weak self, weak owner] in
             do { try await Task.sleep(for: Self.delay) } catch { return }
-            guard let self, let owner, self.owner === owner,
-                  owner.enabled, let window = owner.window, window.isKeyWindow,
-                  NSApp.isActive, NSEvent.pressedMouseButtons == 0 else { return }
+            guard let self, let owner, self.owner === owner, let window = owner.window else { return }
             let point = owner.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-            guard owner.visibleRect.contains(point) else { self.dismiss(); return }
+            guard Self.canShow(owner: owner, window: window, pointerInside: owner.visibleRect.contains(point),
+                               buttonsDown: NSEvent.pressedMouseButtons != 0) else { self.dismiss(); return }
             self.show(owner: owner, window: window)
         }
+    }
+
+    /// Whether a pending help surface may appear. Deliberately ignores key and
+    /// active state: an inactive but visible window shows help too.
+    static func canShow(owner: HoverHelpView, window: NSWindow, pointerInside: Bool, buttonsDown: Bool) -> Bool {
+        owner.enabled && window.isVisible && pointerInside && !buttonsDown
     }
 
     func dismiss(owner: HoverHelpView? = nil) {
@@ -209,12 +216,66 @@ final class HoverHelpPresenter {
         popup.hasShadow = true
         popup.ignoresMouseEvents = true
         popup.level = .popUpMenu
-        popup.hidesOnDeactivate = true
+        // Help also shows over an inactive window, so it must not hide with the app.
+        popup.hidesOnDeactivate = false
         popup.contentView = content
         popup.setFrame(frame, display: false)
         popup.orderFront(nil)
         // The shadow follows the content's rounded corners once it has drawn.
         popup.invalidateShadow()
         panel = popup
+    }
+}
+
+extension View {
+    /// `onHover` that also fires while the window is inactive. SwiftUI's own
+    /// hover tracking only follows the pointer in the active app.
+    func pointerHover(_ action: @escaping (Bool) -> Void) -> some View {
+        background(PointerHoverAnchor(onHover: action))
+    }
+}
+
+private struct PointerHoverAnchor: NSViewRepresentable {
+    let onHover: (Bool) -> Void
+
+    func makeNSView(context: Context) -> PointerHoverView { PointerHoverView() }
+
+    func updateNSView(_ view: PointerHoverView, context: Context) {
+        view.onHover = onHover
+    }
+}
+
+/// Reports the pointer entering and leaving, whatever window or app is active.
+/// Invisible to clicks.
+final class PointerHoverView: NSView {
+    static let trackingOptions = HoverHelpView.trackingOptions
+    var onHover: (Bool) -> Void = { _ in }
+    private var hovered = false
+    private var hoverArea: NSTrackingArea?
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverArea { removeTrackingArea(hoverArea) }
+        let area = NSTrackingArea(rect: .zero, options: Self.trackingOptions, owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { set(true) }
+    override func mouseExited(with event: NSEvent) { set(false) }
+
+    /// Silent: the SwiftUI side resets itself as the view goes (`onDisappear`),
+    /// and reporting from inside a hierarchy change would edit state mid-update.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        hovered = false
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    private func set(_ value: Bool) {
+        guard value != hovered else { return }
+        hovered = value
+        onHover(value)
     }
 }
