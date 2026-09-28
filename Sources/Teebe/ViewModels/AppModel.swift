@@ -22,6 +22,8 @@ enum WorktreePreferences {
 final class AppModel {
     private(set) var repositories: [Repository] = []
     var groupWorktreesByMergeStatus: Bool { didSet { persist() } }
+    /// How the worktree list is ordered, within each group when grouped.
+    var worktreeSortOrder: WorktreeSortOrder { didSet { persist() } }
     /// Fetch remote refs in the background, so merge results reflect what was
     /// pushed rather than what was last pulled by hand.
     var fetchAutomatically: Bool { didSet { persist() } }
@@ -83,6 +85,7 @@ final class AppModel {
         self.openWith = OpenWithModel(environment: environment, apps: self.state.openWithApps ?? [:])
         // Keep the legacy key so existing grouping choices survive the new default.
         self.groupWorktreesByMergeStatus = self.state.showMergeStatus ?? false
+        self.worktreeSortOrder = WorktreeSortOrder(rawValue: self.state.worktreeSortOrder ?? "") ?? .folder
         self.fetchAutomatically = self.state.fetchAutomatically ?? true
         self.deleteBranchOnRemove = self.state.deleteBranchOnRemove ?? true
         self.floatOnTop = false
@@ -466,6 +469,7 @@ final class AppModel {
         state.repositories = repositories.map { PersistedRepository(path: $0.path) }
         state.floatOnTop = floatOnTop
         state.showMergeStatus = groupWorktreesByMergeStatus
+        state.worktreeSortOrder = worktreeSortOrder == .folder ? nil : worktreeSortOrder.rawValue
         state.fetchAutomatically = fetchAutomatically
         state.deleteBranchOnRemove = deleteBranchOnRemove
         state.appearance = appearance == .system ? nil : appearance.rawValue

@@ -114,7 +114,8 @@ struct WorktreeListPresentationTests {
         let flat = WorktreeListPresentation(worktrees: trees, statuses: entries, grouped: false,
                                            collapsed: [.merged], hasRepository: true)
         #expect(flat.groups.isEmpty)
-        #expect(flat.visibleWorktrees == trees)
+        // Flat, every row is listed: the primary first, the rest by folder.
+        #expect(flat.visibleWorktrees.map(\.path) == ["/primary", "/dev", "/dirty", "/merged"])
     }
 
     @Test("a group card sums up its rows: state title, one sentence, the count, activity and remote work")
@@ -175,9 +176,63 @@ struct WorktreeListPresentationTests {
             entries[tree.path] = status(entry)
         }
         let list = WorktreeListPresentation(worktrees: [zed, alpha, unnamed], statuses: entries,
-                                            grouped: true, collapsed: [], hasRepository: true)
+                                            grouped: true, collapsed: [], hasRepository: true, sort: .name)
         #expect(list.groups.map(\.kind) == [.merged])
         #expect(list.groups[0].worktrees.map { $0.branch ?? $0.name } == ["alpha", "mid", "zed"])
+    }
+
+    @Test("sort by status, name or folder; the primary stays on top and ties fall to name, then path")
+    func sortOrders() {
+        let primary = Worktree(path: "/repo", branch: "main", isPrimary: true)
+        func row(_ folder: String, _ branch: String) -> Worktree { Worktree(path: "/wt/" + folder, branch: branch) }
+        let safe = row("a-safe", "zz-safe"), notMerged = row("b-open", "yy-open"), dirty = row("c-dirty", "xx-dirty")
+        let waiting = row("d-wait", "ww-wait"), working = row("e-work", "vv-work")
+        // The same branch name in two folders: the path decides, whatever order Git listed them in.
+        let twinB = row("g-twin", "twin"), twinA = row("f-twin", "twin")
+        var statuses: [String: WorktreeStatus] = [:]
+        func add(_ tree: Worktree, merged: Bool = false, count: Int = 0, info: SelectorModel.WorktreeInfo = .init()) {
+            var entry = CleanupEntry(worktree: tree)
+            entry.mergeStatus = merged ? .merged : .notConfirmed
+            entry.isInspected = true
+            statuses[tree.path] = WorktreeStatus(worktree: tree, merge: WorktreeMergeEntry(entry: entry, localChangeCount: count),
+                                                 info: info, targetNames: ["main"], isChecking: false)
+        }
+        add(safe, merged: true)
+        add(notMerged)
+        add(dirty, count: 2)
+        add(waiting, merged: true, info: .init(agentState: .needsAttention))
+        add(working, info: .init(agentState: .working))
+        add(twinB)
+        add(twinA)
+        let trees = [twinB, working, primary, safe, waiting, notMerged, dirty, twinA]
+        func flat(_ sort: WorktreeSortOrder) -> [String] {
+            WorktreeListPresentation(worktrees: trees, statuses: statuses, grouped: false, collapsed: [],
+                                     hasRepository: true, sort: sort).pinned.map(\.path)
+        }
+        #expect(flat(.status) == [primary, working, waiting, dirty, twinA, twinB, notMerged, safe].map(\.path))
+        #expect(flat(.name) == [primary, twinA, twinB, working, waiting, dirty, notMerged, safe].map(\.path))
+        #expect(flat(.folder) == [primary, safe, notMerged, dirty, waiting, working, twinA, twinB].map(\.path))
+        // Grouped, the order applies within each group; the primary stays pinned above them.
+        let grouped = WorktreeListPresentation(worktrees: trees, statuses: statuses, grouped: true, collapsed: [],
+                                               hasRepository: true, sort: .status)
+        #expect(grouped.pinned.map(\.path) == [primary.path])
+        #expect(grouped.groups.map(\.kind) == [.localChanges, .notMerged, .merged])
+        #expect(grouped.groups[1].worktrees.map(\.path) == [working, waiting, twinA, twinB, notMerged].map(\.path))
+        let byFolder = WorktreeListPresentation(worktrees: trees, statuses: statuses, grouped: true, collapsed: [],
+                                                hasRepository: true)
+        #expect(byFolder.groups[1].worktrees.map(\.path) == [notMerged, waiting, working, twinA, twinB].map(\.path))
+    }
+
+    @Test("the sort order defaults to folder and is remembered")
+    func sortPreference() {
+        let env = makeTestEnvironment()
+        #expect(AppModel(environment: env).worktreeSortOrder == .folder)
+        AppModel(environment: env).worktreeSortOrder = .status
+        #expect(AppModel(environment: env).worktreeSortOrder == .status)
+        #expect(env.store.load().worktreeSortOrder == "status")
+        AppModel(environment: env).worktreeSortOrder = .folder
+        #expect(env.store.load().worktreeSortOrder == nil)
+        #expect(WorktreeSortOrder.allCases.map(\.title) == ["Status", "Name", "Folder"])
     }
 
     @Test("a worktree removed mid-scan leaves no row behind")

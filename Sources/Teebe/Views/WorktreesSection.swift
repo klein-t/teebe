@@ -72,6 +72,9 @@ struct WorktreesSection: View {
                             .disabled(selector.selectedRepo == nil)
                             Divider()
                             Toggle(WorktreePreferences.groupingTitle, isOn: $app.groupWorktreesByMergeStatus)
+                            Picker(WorktreeSortOrder.menuTitle, selection: $app.worktreeSortOrder) {
+                                ForEach(WorktreeSortOrder.allCases) { Text($0.title).tag($0) }
+                            }
                             Toggle(WorktreePreferences.fetchTitle, isOn: $app.fetchAutomatically)
                         } label: {
                             Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
