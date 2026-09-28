@@ -156,6 +156,7 @@ struct WorktreesSection: View {
             }
         case let .cleanup(entries, skipped):
             WorktreeRemovalSheet(title: app.groupActions.confirmationTitle(entries),
+                                 items: app.groupActions.confirmationItems(entries),
                                  facts: app.groupActions.confirmationFacts(entries) + skipped,
                                  explanation: app.groupActions.confirmationMessage(entries, deleteBranch: app.deleteBranchOnRemove),
                                  deleteBranch: $app.deleteBranchOnRemove,
@@ -231,20 +232,19 @@ struct WorktreesSection: View {
     }
 
     /// One action per group, where there is one: the rest of the header is just a
-    /// heading. Always visible — a cleanup you have to hover to find isn't offered.
+    /// heading. The row's bin, always visible here — a cleanup you have to hover to
+    /// find isn't offered.
     @ViewBuilder
     private func groupAction(_ group: WorktreeListPresentation.Group) -> some View {
         switch group.kind {
         case .merged:
             let eligible = app.groupActions.eligibleEntries(for: group.worktrees)
             if !eligible.isEmpty {
-                Button("Clean up…") {
+                WorktreeTrashButton(isSelected: false, label: "Remove all safe to delete worktrees", alwaysVisible: true) {
                     confirmation = .cleanup(eligible, skipped: app.groupActions.skippedFacts(for: group.worktrees))
                 }
-                    .buttonStyle(IconButtonStyle(size: CGSize(width: 22, height: 18))).font(.system(size: 11))
-                    .foregroundStyle(Palette.accent)
-                    .disabled(app.groupActions.isWorking)
-                    .hoverHelp("Remove the worktree folders that are safe to delete.")
+                .disabled(app.groupActions.isWorking)
+                .hoverHelp("Remove the worktrees that are safe to delete.", highlight: false)
             }
         case .localChanges, .notMerged:
             EmptyView()
@@ -388,10 +388,11 @@ private struct WorktreeMarkHoverTarget<Mark: View>: View {
 }
 
 /// The row's hover-only trash, right after the name. Muted, red under the pointer
-/// (white on the selected row).
+/// (white on the selected row). `alwaysVisible`: the Safe to delete header's.
 private struct WorktreeTrashButton: View {
     let isSelected: Bool
     let label: String
+    var alwaysVisible = false
     let action: () -> Void
     @Environment(\.rowHovered) private var rowHovered
     @State private var hovered = false
@@ -407,8 +408,8 @@ private struct WorktreeTrashButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
-        .opacity(rowHovered ? 1 : 0)
-        .allowsHitTesting(rowHovered)
+        .opacity(rowHovered || alwaysVisible ? 1 : 0)
+        .allowsHitTesting(rowHovered || alwaysVisible)
         .accessibilityLabel(label)
     }
 

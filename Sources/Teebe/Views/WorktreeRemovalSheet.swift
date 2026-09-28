@@ -1,10 +1,12 @@
 import SwiftUI
 
 /// The confirmation behind every worktree removal: a row's trash or "Remove
-/// Worktree…", and the Safe to delete clean-up. A
+/// Worktree…", and the Safe to delete group's remove-all. A
 /// sheet rather than a confirmation dialog, because it holds a checkbox.
 struct WorktreeRemovalSheet: View {
     let title: String
+    /// Remove-all only: every worktree it will remove.
+    var items: [WorktreeRemovalItem] = []
     let facts: [WorktreeCardFact]
     let explanation: String
     /// The remembered "Also delete the branch" choice; nil hides the checkbox.
@@ -20,6 +22,7 @@ struct WorktreeRemovalSheet: View {
             Text(title).font(Typography.heading)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.bottom, 10)
+            if !items.isEmpty { itemList.padding(.bottom, 10) }
             if !facts.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(facts.enumerated()), id: \.offset) { WorktreeFactRow(fact: $0.element, font: Typography.body) }
@@ -53,6 +56,25 @@ struct WorktreeRemovalSheet: View {
         }
         .padding(18)
         .frame(width: 340)
+    }
+
+    /// Branch and folder of each worktree, scrolling once the list gets long.
+    private var itemList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(items, id: \.path) { item in
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.name).font(Typography.bodyEmphasis)
+                        Text(item.path).font(Typography.secondary).foregroundStyle(.secondary)
+                    }
+                    .lineLimit(1).truncationMode(.middle)
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(maxHeight: CGFloat(min(items.count, 6)) * 36)
     }
 }
 
