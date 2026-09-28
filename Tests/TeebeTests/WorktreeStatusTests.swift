@@ -350,23 +350,7 @@ struct WorktreeStatusTests {
     func sharedEligibility() {
         let merged = entry(merged: [dev])
         let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
-        let rows: [(String, WorktreeStatus, CleanupEntry?)] = [
-            ("safe", status(merged), merged),
-            ("agent", status(merged, info: .init(agentState: .working)), merged),
-            ("waiting", status(merged, info: .init(agentState: .needsAttention)), merged),
-            ("live", status(merged, info: .init(isLive: true)), merged),
-            ("rechecking", WorktreeStatus(worktree: feature, merge: WorktreeMergeEntry(entry: merged, isRechecking: true),
-                                          info: .init(), targetNames: ["dev"], isChecking: false), merged),
-            ("head moved", status(merged, worktree: Worktree(path: "/feature", branch: "feature", head: "def")), merged),
-            ("no result", status(nil, isChecking: true), nil),
-            ("not inspected", status(entry(merged: [dev]) { $0.isInspected = false }), entry(merged: [dev]) { $0.isInspected = false }),
-            ("broken", status(entry(merged: [dev]) { $0.isBroken = true }), entry(merged: [dev]) { $0.isBroken = true }),
-            ("locked", status(entry(locked, merged: [dev])), entry(locked, merged: [dev])),
-            ("rebasing", status(entry(merged: [dev]) { $0.operation = .rebase }), entry(merged: [dev]) { $0.operation = .rebase }),
-            ("dirty", status(merged, count: 1), merged),
-            ("unmerged", status(entry()), entry())
-        ]
-        for (name, row, scanned) in rows {
+        func check(_ name: String, _ row: WorktreeStatus, scanned: CleanupEntry?) {
             let prompt = WorktreeRemovalPrompt(worktree: scanned?.worktree ?? feature,
                                                status: row, merge: scanned.map { WorktreeMergeEntry(entry: $0) })
             let safe = name == "safe"
@@ -379,6 +363,21 @@ struct WorktreeStatusTests {
             // Only these can have their folder removed: clean, checked, nothing protecting or working.
             #expect(row.removal.canRemoveFolder == ["safe", "unmerged"].contains(name), "\(name)")
         }
+        func scanned(_ tweak: (inout CleanupEntry) -> Void) -> CleanupEntry { entry(merged: [dev], tweak) }
+        check("safe", status(merged), scanned: merged)
+        check("agent", status(merged, info: .init(agentState: .working)), scanned: merged)
+        check("waiting", status(merged, info: .init(agentState: .needsAttention)), scanned: merged)
+        check("live", status(merged, info: .init(isLive: true)), scanned: merged)
+        check("rechecking", WorktreeStatus(worktree: feature, merge: WorktreeMergeEntry(entry: merged, isRechecking: true),
+                                           info: .init(), targetNames: ["dev"], isChecking: false), scanned: merged)
+        check("head moved", status(merged, worktree: Worktree(path: "/feature", branch: "feature", head: "def")), scanned: merged)
+        check("no result", status(nil, isChecking: true), scanned: nil)
+        for (name, entry) in [("not inspected", scanned { $0.isInspected = false }), ("broken", scanned { $0.isBroken = true }),
+                              ("locked", entry(locked, merged: [dev])), ("rebasing", scanned { $0.operation = .rebase })] {
+            check(name, status(entry), scanned: entry)
+        }
+        check("dirty", status(merged, count: 1), scanned: merged)
+        check("unmerged", status(entry()), scanned: entry())
     }
 
     @Test("an unfinished Git operation keeps a merged, clean row out of Safe to delete and blocks removal")
@@ -550,8 +549,7 @@ struct WorktreeStatusTests {
         #expect(huge?.isTruncated == true)
         // Not counted (nothing else let it be removed when checked): still said, without a number.
         #expect(notice([".cache/"], files: nil)?.summary == "Also deletes its gitignored files. Git can’t restore these files.")
-        #expect(WorktreeIgnoredNotice(entry { $0.hasIgnoredFiles = true; $0.ignoredPaths = ["a"];
-            $0.ignoredFiles = IgnoredFiles(paths: (0..<1_234).map { "f\($0)" }, isTruncated: false) })?.summary
+        #expect(notice(["a"], files: (0..<1_234).map { "f\($0)" })?.summary
             == "Also deletes \(1_234.formatted(.number)) gitignored files. Git can’t restore these files.")
     }
 

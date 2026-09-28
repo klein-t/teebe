@@ -295,9 +295,8 @@ private struct Facts {
     /// failed or hasn't finished says so rather than reading as clean.
     var changesFact: WorktreeCardFact {
         guard hasUncommitted else {
-            let text = if entry?.isInspected == true { "No uncommitted changes" }
-                else if entry == nil && isChecking { "Checking for changes…" }
-                else { "Couldn’t check for changes" }
+            let text = entry?.isInspected == true ? "No uncommitted changes"
+                : entry == nil && isChecking ? "Checking for changes…" : "Couldn’t check for changes"
             return WorktreeCardFact(icon: .pencil, text: text, tone: .muted)
         }
         return WorktreeCardFact(icon: .pencil,
@@ -477,22 +476,27 @@ struct WorktreeRemovalPrompt: Equatable {
                 : isChecking && entry?.isInspected != true ? "Checking for changes…" : "Nothing uncommitted"
             facts.append(WorktreeCardFact(icon: .pencil, text: text, tone: .muted))
         }
-        for blocker in blockers {
-            switch blocker {
-            case .submodule:
-                facts.append(WorktreeCardFact(icon: .warning, text: "Contains a submodule: Git won’t remove it", tone: .warn))
-            case .protected(let protection):
-                facts.append(WorktreeCardFact(icon: .warning, text: protection + ", so Teebe won’t remove it", tone: .warn))
-            case .activity(let activity):
-                facts.append(WorktreeCardFact(icon: .warning, text: activity, tone: .warn))
-            case .uncommitted, .checking, .notInspected: break
-            }
-        }
+        self.facts = facts + blockers.compactMap(Self.warning)
         // A clean removal takes ignored files with the folder.
         ignored = removal.canRemoveFolder ? entry.flatMap { WorktreeIgnoredNotice($0) } : nil
-        self.facts = facts
         canRemove = removal.canRemoveFolder
-        explanation = switch blockers.first {
+        explanation = Self.explanation(blockers.first, removal: removal)
+        offersBranchDeletion = removal.canDeleteBranch
+    }
+
+    /// The warning line a blocker adds; nil for those the other facts already say.
+    private static func warning(_ blocker: RemovalEligibility.Blocker) -> WorktreeCardFact? {
+        switch blocker {
+        case .submodule: WorktreeCardFact(icon: .warning, text: "Contains a submodule: Git won’t remove it", tone: .warn)
+        case .protected(let protection): WorktreeCardFact(icon: .warning, text: protection + ", so Teebe won’t remove it", tone: .warn)
+        case .activity(let activity): WorktreeCardFact(icon: .warning, text: activity, tone: .warn)
+        case .uncommitted, .checking, .notInspected: nil
+        }
+    }
+
+    /// Why Remove is off, from the first blocker, or what removing does.
+    private static func explanation(_ blocker: RemovalEligibility.Blocker?, removal: RemovalEligibility) -> String {
+        switch blocker {
         case .uncommitted?: "Git only removes a worktree with nothing uncommitted. The branch is kept."
         case .submodule?: "Git won’t remove a worktree that contains a submodule without forcing it, and Teebe never forces."
         case .protected?: "Teebe only removes a worktree Git can fully check and nothing protects."
@@ -502,7 +506,6 @@ struct WorktreeRemovalPrompt: Equatable {
         case nil: removal.isSafeToDelete ? "The worktree folder is deleted. Its commits are already merged."
             : "The worktree folder is deleted. The branch and its commits are kept."
         }
-        offersBranchDeletion = removal.canDeleteBranch
     }
 
     private static func mergeFact(_ entry: CleanupEntry?, isChecking: Bool) -> WorktreeCardFact {
