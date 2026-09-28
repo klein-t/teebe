@@ -8,6 +8,7 @@ on:
 jobs:
   build-test:
     name: Build & Test (macOS)
+    timeout-minutes: 15
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
@@ -24,7 +25,8 @@ jobs:
       # @testable view-model suites, so a separate `xcodebuild test` is not needed
       # at this stage.
       - name: Test (with coverage)
-        run: swift test -v --enable-code-coverage
+        # AppKit window suites share a process; isolate their window lifecycle.
+        run: swift test -v --enable-code-coverage --no-parallel
 
   lint:
     name: SwiftLint
