@@ -244,6 +244,7 @@ struct RootView: View {
         // by a change nobody wired up a handler for.
         .onChange(of: targetHeight()) { _, _ in reconcileWindowHeight() }
         .onChange(of: collapsedWorktreeGroups) { _, _ in persistLayout() }
+        .onChange(of: worktree.selectedPath) { _, _ in syncQuickLookToSelection() }
         .background(QuickLookBridge(controller: quickLook))
         #if DEBUG
         .onAppear { installTestHooks() }
@@ -925,15 +926,20 @@ struct RootView: View {
         }
     }
 
-    /// Spacebar → the native macOS Quick Look panel (Finder-style). Hands the panel
-    /// every visible file so its arrow keys page through them, starting on the
-    /// current selection.
+    /// Spacebar → the native macOS Quick Look panel (Finder-style) on the selected
+    /// row, file or folder. Arrow keys in the panel move the FILES selection and the
+    /// panel follows it (`syncQuickLookToSelection`).
     private func presentQuickLook() {
-        let files = worktree.visibleRows.filter { !$0.node.isDirectory }
-        guard !files.isEmpty else { return }
-        let urls = files.map { URL(fileURLWithPath: $0.node.path) }
-        let start = worktree.selectedPath.flatMap { sel in files.firstIndex { $0.node.path == sel } } ?? 0
-        quickLook.toggle(urls: urls, startIndex: start)
+        if worktree.selectedNode == nil, let first = worktree.visibleRows.first { worktree.select(first.node.path) }
+        guard let node = worktree.selectedNode else { return }
+        quickLook.onArrow = { _ = worktree.stepPeek($0, in: .files) }
+        quickLook.toggle(urls: [URL(fileURLWithPath: node.path)], startIndex: 0)
+    }
+
+    /// Keep the open Quick Look panel on the FILES selection as it moves.
+    private func syncQuickLookToSelection() {
+        guard app.activeSection == .files, let node = worktree.selectedNode else { return }
+        quickLook.show(URL(fileURLWithPath: node.path))
     }
 
     /// Enter, dispatched by active section: WORKTREES commits the highlighted worktree
