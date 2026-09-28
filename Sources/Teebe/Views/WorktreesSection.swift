@@ -150,7 +150,8 @@ struct WorktreesSection: View {
         switch confirmation {
         case let .worktree(worktree, action):
             let prompt = app.removalPrompt(for: worktree)
-            WorktreeRemovalSheet(title: prompt.title, items: [prompt.item], facts: prompt.facts, explanation: prompt.explanation,
+            WorktreeRemovalSheet(title: prompt.title, items: [prompt.item], facts: prompt.facts,
+                                 ignored: prompt.ignored.map { [$0] } ?? [], explanation: prompt.explanation,
                                  deleteBranch: prompt.offersBranchDeletion ? $app.deleteBranchOnRemove : nil,
                                  canConfirm: prompt.canRemove && action != nil && !app.groupActions.isWorking) {
                 // Never anything but the captured action, through the guarded path.
@@ -161,7 +162,7 @@ struct WorktreesSection: View {
         case let .cleanup(entries, skipped):
             WorktreeRemovalSheet(title: app.groupActions.confirmationTitle(entries),
                                  items: app.groupActions.confirmationItems(entries),
-                                 facts: app.groupActions.confirmationFacts(entries) + skipped,
+                                 facts: skipped, ignored: app.groupActions.confirmationNotices(entries),
                                  explanation: app.groupActions.confirmationMessage(entries, deleteBranch: app.deleteBranchOnRemove),
                                  deleteBranch: $app.deleteBranchOnRemove,
                                  deleteBranchTitle: entries.count == 1 ? "Also delete the branch" : "Also delete the branches",

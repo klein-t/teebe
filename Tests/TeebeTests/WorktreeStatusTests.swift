@@ -410,11 +410,19 @@ struct WorktreeStatusTests {
         #expect(safe.explanation == "The worktree folder is deleted. Its commits are already merged.")
         #expect(safe.offersBranchDeletion)
 
-        let cluttered = entry(merged: [dev]) { $0.hasIgnoredFiles = true; $0.ignoredPaths = [".DS_Store", ".cache/"] }
+        #expect(safe.ignored == nil)
+        let cluttered = entry(merged: [dev]) {
+            $0.hasIgnoredFiles = true
+            $0.ignoredPaths = [".DS_Store", ".cache/"]
+            $0.ignoredFiles = IgnoredFiles(paths: [".DS_Store", ".cache/a", ".cache/b"], isTruncated: false)
+        }
         let withIgnored = WorktreeRemovalPrompt(worktree: feature, status: status(cluttered),
                                                 merge: WorktreeMergeEntry(entry: cluttered))
-        #expect(withIgnored.facts.last == WorktreeCardFact(icon: .ignoredFiles,
-                                                           text: "Ignored files will be deleted too (.DS_Store)", tone: .muted))
+        #expect(withIgnored.ignored?.summary == "Also deletes 3 gitignored files. Git can’t restore these files.")
+        #expect(withIgnored.facts.map(\.text) == ["Merged into dev", "Nothing uncommitted"])
+        // Nothing is removed while something blocks it, so nothing is said about ignored files.
+        #expect(WorktreeRemovalPrompt(worktree: feature, status: status(cluttered, count: 1),
+                                      merge: WorktreeMergeEntry(entry: cluttered)).ignored == nil)
 
         let unmerged = entry()
         let risky = WorktreeRemovalPrompt(worktree: feature, status: status(unmerged, count: 2, info: .init(agentState: .working)),
@@ -512,14 +520,39 @@ struct WorktreeStatusTests {
         #expect(prompt.explanation == "Teebe only removes a worktree Git can fully check and nothing protects.")
     }
 
-    @Test("the ignored-files fact names at most one short example")
-    func ignoredFact() {
-        func entryWith(_ paths: [String]) -> CleanupEntry { entry { $0.hasIgnoredFiles = !paths.isEmpty; $0.ignoredPaths = paths } }
-        #expect(WorktreeWording.ignoredFact([entryWith([])]) == nil)
-        #expect(WorktreeWording.ignoredFact([entryWith([]), entryWith([".build/"])])?.text
-                == "Ignored files will be deleted too (.build/)")
-        #expect(WorktreeWording.ignoredFact([entryWith(["a/very/long/path/to/some/cache/file.bin"])])?.text
-                == "Ignored files will be deleted too (a/very/l…file.bin)")
+    @Test("the ignored-files notice counts what goes for good and names what looks hard to get back first")
+    func ignoredNotice() {
+        func notice(_ entries: [String], files: [String]?, truncated: Bool = false, name: String? = nil) -> WorktreeIgnoredNotice? {
+            WorktreeIgnoredNotice(entry {
+                $0.hasIgnoredFiles = !entries.isEmpty
+                $0.ignoredPaths = entries
+                $0.ignoredFiles = files.map { IgnoredFiles(paths: $0, isTruncated: truncated) }
+            }, worktree: name)
+        }
+        #expect(notice([], files: nil) == nil)
+        let one = notice([".env"], files: [".env"])
+        #expect(one?.summary == "Also deletes 1 gitignored file. Git can’t restore these files.")
+        #expect(one?.names == ".env")
+        // Secrets, keys and local config are named first, however many other files there are.
+        let deps = (0..<210).map { "node_modules/p\($0).js" }
+        let mixed = notice([".env.local", "certs/", "id_ed25519", "node_modules/", "settings.local.json"],
+                           files: [".env.local", "certs/dev.pem", "id_ed25519", "settings.local.json"] + deps)
+        #expect(mixed?.summary == "Also deletes 214 gitignored files. Git can’t restore these files.")
+        #expect(mixed?.names == ".env.local, certs/dev.pem, id_ed25519 and 1 more")
+        #expect(mixed?.files.prefix(4) == [".env.local", "certs/dev.pem", "id_ed25519", "settings.local.json"])
+        #expect(mixed?.files.count == 214)
+        // Nothing looks special: the ignored folders are named instead, never called regenerable.
+        let build = notice([".build/", "node_modules/"], files: [".build/a", "node_modules/b"])
+        #expect(build?.names == ".build/ and node_modules/")
+        #expect(build?.summary.contains("regenerat") == false)
+        let huge = notice(["node_modules/"], files: deps, truncated: true, name: "feat/x")
+        #expect(huge?.summary == "“feat/x” also deletes 210+ gitignored files. Git can’t restore these files.")
+        #expect(huge?.isTruncated == true)
+        // Not counted (nothing else let it be removed when checked): still said, without a number.
+        #expect(notice([".cache/"], files: nil)?.summary == "Also deletes its gitignored files. Git can’t restore these files.")
+        #expect(WorktreeIgnoredNotice(entry { $0.hasIgnoredFiles = true; $0.ignoredPaths = ["a"];
+            $0.ignoredFiles = IgnoredFiles(paths: (0..<1_234).map { "f\($0)" }, isTruncated: false) })?.summary
+            == "Also deletes \(1_234.formatted(.number)) gitignored files. Git can’t restore these files.")
     }
 
     @Test("the remote fact says exactly what is known about the remote, briefly")

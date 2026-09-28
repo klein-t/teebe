@@ -133,8 +133,10 @@ struct WorktreeGroupActionsTests {
                 == "The folder will be deleted from your Mac. The branch will be kept.")
         #expect(actions.confirmationMessage([plain, ignored], deleteBranch: false)
                 == "The folders will be deleted from your Mac. Branches will be kept.")
-        #expect(actions.confirmationFacts([plain]).isEmpty)
-        #expect(actions.confirmationFacts([plain, ignored]).map { $0.text } == ["Ignored files will be deleted too (.build/)"])
+        // Only the worktree that has gitignored files says so, by name.
+        #expect(actions.confirmationNotices([plain]).isEmpty)
+        #expect(actions.confirmationNotices([plain, ignored]).map(\.summary)
+                == ["“ignored” also deletes its gitignored files. Git can’t restore these files."])
         #expect(actions.confirmationMessage([plain], deleteBranch: true)
                 == "The folder will be deleted from your Mac. "
                 + "Its local branch will be deleted too; the remote branch is kept.")

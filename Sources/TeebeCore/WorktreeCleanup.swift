@@ -96,6 +96,9 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
     public var hasLocalChanges = false
     public var hasIgnoredFiles = false
     public var ignoredPaths: [String] = []
+    /// The files inside `ignoredPaths`, read for a checkout nothing else keeps
+    /// from being removed; nil otherwise.
+    public var ignoredFiles: IgnoredFiles?
     public var hasSubmodules = false
     public var hasUncheckedFiles = false
     /// The checkout's branch is one of the merge targets.
@@ -258,8 +261,10 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         let checked = await inspect(current, targets: isMerged ? unchanged : [], commonDirectory: commonDirectory)
         guard checked.worktree.head == entry.worktree.head else { throw CleanupError.changed }
         // Consent covers the ignored files that were reviewed, not any that showed
-        // up since. A new secrets file or nested repository voids the confirmation.
-        guard !includingIgnored || checked.ignoredPaths == entry.ignoredPaths else { throw CleanupError.changed }
+        // up since, even inside a folder that was already listed. A new secrets file
+        // or nested repository voids the confirmation.
+        guard !includingIgnored || (checked.ignoredPaths == entry.ignoredPaths && checked.ignoredFiles == entry.ignoredFiles)
+        else { throw CleanupError.changed }
         let isRemovable = isMerged ? checked.canRemove(includingIgnored: includingIgnored)
             : checked.canRemoveFolder(includingIgnored: includingIgnored)
         guard isRemovable, !isMerged || !Self.isTarget(current, among: catalog.mergeTargets(extra: nil)) else {
@@ -331,6 +336,11 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             let gitDirectory = try await checked(["rev-parse", "--path-format=absolute", "--git-dir"], in: worktree.path)
             entry.operation = GitOperation.detect(gitDirectory: gitDirectory.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines))
             entry.isInspected = true
+            // Only where removal could go ahead: counting a large ignored folder costs a walk.
+            if entry.hasIgnoredFiles, !entry.hasLocalChanges, !entry.hasSubmodules, !entry.hasUncheckedFiles,
+               entry.operation == nil, !worktree.isPrimary, !worktree.isLocked, !worktree.isDetached {
+                entry.ignoredFiles = IgnoredFiles.inventory(in: worktree.path, entries: entry.ignoredPaths)
+            }
             guard !targets.isEmpty else { entry.problem = "No branch to compare against"; return entry }
             let merge = try await mergedTargets(of: entry.worktree.head, among: targets, in: worktree.path)
             entry.mergedTargets = merge.targets

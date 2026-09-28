@@ -406,16 +406,38 @@ enum WorktreeWording {
         }
     }
 
-    /// Removal deletes ignored files with the folder. Said only where it matters,
-    /// with at most one short example; nil when none of the entries has any.
-    static func ignoredFact(_ entries: [CleanupEntry]) -> WorktreeCardFact? {
-        guard let entry = entries.first(where: \.hasIgnoredFiles) else { return nil }
-        var text = "Ignored files will be deleted too"
-        if let path = entry.ignoredPaths.first {
-            let short: String = path.count > 24 ? String(path.prefix(8)) + "…" + String(path.suffix(8)) : path
-            text += " (\(short))"
-        }
-        return WorktreeCardFact(icon: .ignoredFiles, text: text, tone: .muted)
+}
+
+/// The removal sheets' warning that a worktree's gitignored files go with its
+/// folder, for good: Git doesn't have them, so it can't restore them.
+struct WorktreeIgnoredNotice: Equatable {
+    /// "Also deletes 214 gitignored files. Git can’t restore these files."
+    let summary: String
+    /// The names to see first, those that look hard to get back (or else the
+    /// ignored folders): ".env.local, dev.pem and 2 more"; nil when none.
+    let names: String?
+    /// Every file counted, those that look hard to get back first, for the list
+    /// that expands.
+    let files: [String]
+    /// There are more files than `files` holds.
+    let isTruncated: Bool
+
+    /// nil when removing `entry` deletes no ignored files. `worktree` names it in
+    /// a sheet that removes several.
+    init?(_ entry: CleanupEntry, worktree: String? = nil) {
+        guard entry.hasIgnoredFiles else { return nil }
+        let inventory = entry.ignoredFiles
+        let count = inventory.map { files in
+            let number = files.paths.count.formatted(.number)
+            let amount = files.isTruncated ? number + "+" : number
+            return amount + " gitignored " + (files.paths.count == 1 && !files.isTruncated ? "file" : "files")
+        } ?? "its gitignored files"
+        summary = (worktree.map { "“\($0)” also deletes " } ?? "Also deletes ") + count + ". Git can’t restore these files."
+        let irreplaceable = inventory?.irreplaceable ?? []
+        let named = irreplaceable.isEmpty ? entry.ignoredPaths : irreplaceable
+        names = named.isEmpty ? nil : WorktreeWording.list(Array(named.prefix(3)) + (named.count > 3 ? ["\(named.count - 3) more"] : []))
+        files = irreplaceable + (inventory?.paths ?? entry.ignoredPaths).filter { !IgnoredFiles.looksIrreplaceable($0) }
+        isTruncated = inventory?.isTruncated ?? false
     }
 }
 
@@ -425,6 +447,9 @@ struct WorktreeRemovalPrompt: Equatable {
     /// The one worktree, as the sheet's list shows it.
     let item: WorktreeRemovalItem
     let facts: [WorktreeCardFact]
+    /// The gitignored files the removal deletes too; nil when there are none, or
+    /// when nothing is removed.
+    let ignored: WorktreeIgnoredNotice?
     let explanation: String
     /// Show the "Also delete the branch" checkbox: only for a merged row that is
     /// safe to remove, where the branch's work is already in a target.
@@ -464,9 +489,7 @@ struct WorktreeRemovalPrompt: Equatable {
             }
         }
         // A clean removal takes ignored files with the folder.
-        if removal.canRemoveFolder, let entry, let ignored = WorktreeWording.ignoredFact([entry]) {
-            facts.append(ignored)
-        }
+        ignored = removal.canRemoveFolder ? entry.flatMap { WorktreeIgnoredNotice($0) } : nil
         self.facts = facts
         canRemove = removal.canRemoveFolder
         explanation = switch blockers.first {
