@@ -275,6 +275,24 @@ struct WorktreeStatusTests {
         #expect(facts(ignored) == ["No uncommitted changes", "Merged into dev", "Not on remote"])
     }
 
+    @Test("an unfinished Git operation keeps a merged, clean row out of Safe to delete and blocks removal")
+    func operationInProgress() {
+        let rebasing = entry(merged: [dev]) { $0.operation = .rebase }
+        let rebasingStatus = status(rebasing)
+        #expect(rebasingStatus.mark == .notMerged)
+        #expect(rebasingStatus.group == .notMerged)
+        #expect(!rebasingStatus.showsTrash)
+        let prompt = WorktreeRemovalPrompt(worktree: feature, status: rebasingStatus, merge: WorktreeMergeEntry(entry: rebasing))
+        #expect(!prompt.canRemove)
+        #expect(!prompt.offersBranchDeletion)
+        #expect(prompt.facts.contains(WorktreeCardFact(icon: .warning, text: "Rebase in progress, so Teebe won’t remove it",
+                                                       tone: .warn)))
+        // An unmerged folder removal is refused the same way.
+        let merging = entry { $0.operation = .merge }
+        #expect(!WorktreeRemovalPrompt(worktree: feature, status: status(merging), merge: WorktreeMergeEntry(entry: merging)).canRemove)
+        #expect(WorktreeWording.inProgress(.cherryPick) == "Cherry-pick in progress")
+    }
+
     @Test("the removal prompt offers branch deletion only when the work is already merged")
     func removalPrompt() {
         let merged = entry(merged: [dev])

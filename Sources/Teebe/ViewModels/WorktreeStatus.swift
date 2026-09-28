@@ -270,12 +270,25 @@ enum WorktreeWording {
     /// start of a sentence; nil when nothing does.
     static func protection(_ worktree: Worktree, _ entry: CleanupEntry?) -> String? {
         if worktree.isPrimary { return "The main checkout" }
+        if let operation = entry?.operation { return Self.inProgress(operation) }
         if worktree.isLocked { return "Locked" }
         if entry?.isBroken == true { return "Its .git link is missing" }
         if worktree.isDetached { return "Detached HEAD" }
         if entry?.hasUncheckedFiles == true { return "Some files are marked unchanged in Git" }
         if entry?.hasSubmodules == true { return "It contains a submodule" }
         return nil
+    }
+
+    /// "Rebase in progress": what a checkout is in the middle of.
+    static func inProgress(_ operation: GitOperation) -> String {
+        switch operation {
+        case .rebase: "Rebase in progress"
+        case .applyingPatches: "Patch apply in progress"
+        case .merge: "Merge in progress"
+        case .cherryPick: "Cherry-pick in progress"
+        case .revert: "Revert in progress"
+        case .bisect: "Bisect in progress"
+        }
     }
 
     /// Removal deletes ignored files with the folder. Said only where it matters,

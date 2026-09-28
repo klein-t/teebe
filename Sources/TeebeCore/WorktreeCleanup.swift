@@ -102,6 +102,9 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
     /// created from. Ancestry would call it merged, but there is no work of its
     /// own to be merged, so it is reported as not merged.
     public var hasNoCommits = false
+    /// A rebase, merge, cherry-pick, revert or bisect left unfinished here. Its
+    /// state is in the checkout's git directory, so the folder is never removed.
+    public var operation: GitOperation?
     /// The folder's status and index were read, so the local-work flags above are
     /// facts rather than defaults.
     public var isInspected = false
@@ -129,6 +132,7 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
 
     private func isFolderRemovable(includingIgnored: Bool) -> Bool {
         !hasLocalChanges && !hasSubmodules && !hasUncheckedFiles && (!hasIgnoredFiles || includingIgnored) && !isTarget
+            && operation == nil
             && !worktree.isPrimary && !worktree.isLocked && !worktree.isBare && !worktree.isDetached
     }
 }
@@ -317,6 +321,8 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             entry.hasUncheckedFiles = indexedFiles.contains { line in
                 line.first == "S" || line.first?.isLowercase == true
             }
+            let gitDirectory = try await checked(["rev-parse", "--path-format=absolute", "--git-dir"], in: worktree.path)
+            entry.operation = GitOperation.detect(gitDirectory: gitDirectory.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines))
             entry.isInspected = true
             guard !targets.isEmpty else { entry.problem = "No branch to compare against"; return entry }
             let merge = try await mergedTargets(of: entry.worktree.head, among: targets, in: worktree.path)
