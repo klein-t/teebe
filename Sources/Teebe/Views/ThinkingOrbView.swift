@@ -19,7 +19,7 @@ import TeebeCore
 /// link, so an animating orb never touches the SwiftUI view graph (a
 /// `TimelineView` re-ran SwiftUI's update pass for the whole window every frame).
 /// Frames are capped at 30 fps and every instance reads one clock (wall time),
-/// so several orbs stay in phase. Reduce Motion shows the package's static
+/// shifted by its own `phase` so several orbs don't move in lockstep. Reduce Motion shows the package's static
 /// representative frame. The link stops while `paused` (low-power mode, the
 /// occluded window), while the orb's own window is occluded, and skips frames
 /// while the orb is scrolled out of sight.
@@ -29,6 +29,8 @@ struct ThinkingOrbView: NSViewRepresentable {
     var isDark: Bool
     var scale: Double = 1
     var paused = false
+    /// Geometry seconds added to the shared clock (`ThinkingOrbStyle.phaseOffset`).
+    var phase: Double = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -37,7 +39,7 @@ struct ThinkingOrbView: NSViewRepresentable {
     func updateNSView(_ view: ThinkingOrbNSView, context: Context) {
         view.configure(ThinkingOrbNSView.Configuration(
             state: state, tint: ThinkingOrbNSView.rgb(ink), isDark: isDark, scale: scale,
-            animates: !reduceMotion, paused: paused))
+            animates: !reduceMotion, paused: paused, phase: phase))
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: ThinkingOrbNSView, context: Context) -> CGSize? {
@@ -69,10 +71,11 @@ final class ThinkingOrbNSView: NSView {
         var scale: Double
         var animates: Bool
         var paused: Bool
+        var phase: Double
     }
 
     private var configuration = Configuration(state: .solving, tint: ThinkingOrbRGB(red: 0, green: 0, blue: 0),
-                                              isDark: false, scale: 1, animates: true, paused: false)
+                                              isDark: false, scale: 1, animates: true, paused: false, phase: 0)
     private var style = ThinkingOrbStyle(state: .solving)
     /// Retains this view until invalidated, which leaving the window does.
     private var link: CADisplayLink?
@@ -150,7 +153,7 @@ final class ThinkingOrbNSView: NSView {
     override func updateLayer() {
         guard let host = layer else { return }
         let time = configuration.animates
-            ? Date().timeIntervalSinceReferenceDate * style.speed : ThinkingOrbStyle.staticTime
+            ? Date().timeIntervalSinceReferenceDate * style.speed + configuration.phase : ThinkingOrbStyle.staticTime
         let dots = style.frame(at: time)
         CATransaction.begin()
         CATransaction.setDisableActions(true)

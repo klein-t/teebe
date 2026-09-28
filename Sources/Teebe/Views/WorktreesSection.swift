@@ -84,7 +84,8 @@ struct WorktreesSection: View {
                     HStack(spacing: 3) {
                         // The row's mark, so "working" and "needs you" stay visible
                         // even with the section folded.
-                        WorktreeMarkView(mark: app.worktreeStatus(for: active).mark, paused: selector.isLowPower)
+                        WorktreeMarkView(mark: app.worktreeStatus(for: active).mark, paused: selector.isLowPower,
+                                         phaseKey: active.path)
                             .frame(width: 18, height: 20)
                         // Same treatment as the collapsed FILES header's branch label;
                         // the accent colour (+ dot) marks this one as the active worktree.
@@ -217,10 +218,12 @@ struct WorktreesSection: View {
                     // Hovered like a row's mark; the card sums the group up. The slot
                     // keeps the title in line with the row names below.
                     WorktreeMarkHoverTarget(isSelected: false, height: WorktreeListPresentation.groupHeight) {
-                        WorktreeMarkView(mark: headerMark(group.kind), paused: selector.isLowPower)
+                        WorktreeMarkView(mark: headerMark(group.kind), paused: selector.isLowPower,
+                                         phaseKey: group.kind.title)
                     }
                     .hoverCard(cardSummary(card)) {
-                        WorktreeHoverCard(card: card, mark: headerMark(group.kind), paused: selector.isLowPower)
+                        WorktreeHoverCard(card: card, mark: headerMark(group.kind), paused: selector.isLowPower,
+                                          phaseKey: group.kind.title)
                     }
                     .padding(.horizontal, 3)
                     Text(group.kind.title).font(Typography.secondaryEmphasis)
@@ -318,10 +321,12 @@ struct WorktreesSection: View {
         return HStack(spacing: 0) {
             if status.hasHoverCard(grouped: grouped) {
                 WorktreeMarkHoverTarget(isSelected: isActive) {
-                    WorktreeMarkView(mark: status.rowMark(grouped: grouped), isSelected: isActive, paused: selector.isLowPower)
+                    WorktreeMarkView(mark: status.rowMark(grouped: grouped), isSelected: isActive,
+                                     paused: selector.isLowPower, phaseKey: worktree.path)
                 }
                 .hoverCard(summary) {
-                    WorktreeHoverCard(card: status.card, mark: status.mark, paused: selector.isLowPower)
+                    WorktreeHoverCard(card: status.card, mark: status.mark, paused: selector.isLowPower,
+                                      phaseKey: worktree.path)
                 }
             } else {
                 // No mark to hover: the slot stays so names line up.

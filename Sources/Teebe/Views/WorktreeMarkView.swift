@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TeebeCore
 
 /// The one status mark a worktree row shows, also used by the hover card and the
 /// group headers. On a selected (accent) row every mark reads white.
@@ -8,11 +9,15 @@ struct WorktreeMarkView: View {
     var isSelected = false
     /// Stops the orbs while the window is occluded (`SelectorModel.isLowPower`).
     var paused = false
+    /// What the orb's phase derives from, typically the worktree path, so orbs of
+    /// different worktrees move out of step and each keeps its own.
+    var phaseKey = ""
     @Environment(\.colorScheme) private var colorScheme
 
     static let uncommittedColor = Color(red: 0xF0 / 255, green: 0x8C / 255, blue: 0x1A / 255)
 
     private var isDark: Bool { colorScheme == .dark }
+    private var phase: Double { ThinkingOrbStyle.phaseOffset(for: phaseKey) }
 
     var body: some View {
         content
@@ -27,10 +32,10 @@ struct WorktreeMarkView: View {
         case .working:
             ThinkingOrbView(state: .solving,
                             ink: isDark || isSelected ? .white : Color(red: 0x14 / 255, green: 0x63 / 255, blue: 0xD6 / 255),
-                            isDark: isDark || isSelected, scale: 0.85, paused: paused)
+                            isDark: isDark || isSelected, scale: 0.85, paused: paused, phase: phase)
         case .waiting:
             ThinkingOrbView(state: .breathing, ink: waitingInk, isDark: isDark || isSelected, scale: 0.85,
-                            paused: paused)
+                            paused: paused, phase: phase)
         case .uncommitted:
             Circle().fill(isSelected ? Color.white : Self.uncommittedColor).frame(width: 8, height: 8)
         case .brokenLink:
@@ -164,11 +169,12 @@ struct WorktreeHoverCard: View {
     let card: WorktreeCard
     let mark: WorktreeMark
     var paused = false
+    var phaseKey = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 8) {
-                WorktreeMarkView(mark: mark, paused: paused)
+                WorktreeMarkView(mark: mark, paused: paused, phaseKey: phaseKey)
                     .frame(width: 22, height: 20)
                     .padding(.top, -1)
                 VStack(alignment: .leading, spacing: 1) {
