@@ -57,6 +57,27 @@ struct WorktreeLocationTests {
             == "/Users/dev/code")
     }
 
+    @Test("a temporary directory is never suggested: macOS clears it", arguments: [
+        "/tmp/trees", "/private/tmp/trees", "/var/folders/ab/xyz/T/trees", "/private/var/folders/ab/xyz/T/trees",
+        (NSTemporaryDirectory() as NSString).appendingPathComponent("trees")
+    ])
+    func temporaryParentIgnored(temporary: String) {
+        #expect(WorktreeLocation.parentFolder(repoPath: repo, remembered: temporary, worktrees: [primary])
+            == "/Users/dev/code")
+        let shared = WorktreeLocation.parentFolder(
+            repoPath: repo, remembered: nil,
+            worktrees: [primary, linked(temporary + "/teebe-a"), linked(temporary + "/teebe-b")])
+        #expect(shared == "/Users/dev/code")
+    }
+
+    @Test("a folder merely named like a temporary one is still honoured")
+    func lookalikeParentKept() {
+        #expect(WorktreeLocation.parentFolder(repoPath: repo, remembered: "/Users/dev/tmp", worktrees: [primary])
+            == "/Users/dev/tmp")
+        #expect(WorktreeLocation.parentFolder(repoPath: repo, remembered: "/tmpfiles/trees", worktrees: [primary])
+            == "/tmpfiles/trees")
+    }
+
     // MARK: - Folder name
 
     @Test("the folder is named <repo>-<branch>, slashes flattened")

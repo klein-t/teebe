@@ -7,12 +7,27 @@ public enum WorktreeLocation {
     /// for this repository, else the parent all its linked worktrees share, else
     /// the repository's own parent (a sibling). Linked worktrees in more than one
     /// folder don't agree on a place, so they fall through to the sibling.
+    /// A temporary directory is never proposed (macOS clears those, taking the
+    /// worktrees with it): it falls through to the sibling as well.
     public static func parentFolder(repoPath: String, remembered: String?, worktrees: [Worktree]) -> String {
-        if let remembered, !remembered.isEmpty { return remembered }
+        if let remembered, !remembered.isEmpty, !isTemporary(remembered) { return remembered }
         let parents = Set(worktrees.filter { !$0.isPrimary }
             .map { ($0.path as NSString).deletingLastPathComponent })
-        if parents.count == 1, let shared = parents.first { return shared }
+        if parents.count == 1, let shared = parents.first, !isTemporary(shared) { return shared }
         return (repoPath as NSString).deletingLastPathComponent
+    }
+
+    /// Folders the system empties on its own schedule.
+    static var temporaryRoots: [String] {
+        ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders", NSTemporaryDirectory()]
+    }
+
+    /// Whether `path` is one of `temporaryRoots` or inside one.
+    static func isTemporary(_ path: String) -> Bool {
+        temporaryRoots.contains { root in
+            let root = root.hasSuffix("/") ? String(root.dropLast()) : root
+            return path == root || path.hasPrefix(root + "/")
+        }
     }
 
     /// `<repo folder>-<branch>`, with the branch's slashes (and the few other
