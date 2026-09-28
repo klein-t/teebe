@@ -398,7 +398,7 @@ private struct WorktreeMarkHoverTarget<Mark: View>: View {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovered)
             .frame(width: 22, height: height)
             .contentShape(Rectangle())
-            .onHover { hovered = $0 }
+            .pointerHover { hovered = $0 }
     }
 }
 
@@ -422,7 +422,7 @@ private struct WorktreeTrashButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovered = $0 }
+        .pointerHover { hovered = $0 }
         .opacity(rowHovered || alwaysVisible ? 1 : 0)
         .allowsHitTesting(rowHovered || alwaysVisible)
         .accessibilityLabel(label)

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Whether the row a view sits in is under the pointer. Published by `rowHighlight`
-/// so a row's own controls can appear on hover without a second `onHover` per row.
+/// so a row's own controls can appear on hover without a second hover tracker per row.
 private struct RowHoveredKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -35,7 +35,7 @@ private struct RowHighlightModifier: ViewModifier {
                 .padding(.horizontal, RowHighlight.horizontalInset)
             }
             .contentShape(Rectangle())
-            .onHover { hovering in
+            .pointerHover { hovering in
                 isHovered = hovering
             }
             .onDisappear {
