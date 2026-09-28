@@ -85,6 +85,35 @@ struct AutoForgetTests {
         #expect(selector.cleanupNotice == nil)
     }
 
+    @Test("a deleted worktree whose record still holds work is listed with why, and never forgotten")
+    func heldWorkIsKeptAndShown() async {
+        let git = FakeGitClient()
+        let orphan = Worktree(path: "/orphan", head: "abc", isDetached: true)
+        git.worktreesResult = [primary, kept, gone, orphan]
+        let disk = Disk(gone: [gone.path, orphan.path])
+        let selector = SelectorModel(environment: makeTestEnvironment(
+            git: git, folderExists: { disk.exists($0) }, isVolumeMounted: { disk.isMounted($0) },
+            holdsUnsavedWork: { worktree, _ in worktree.path == "/orphan" }))
+        await selector.selectRepo(repo)
+
+        #expect(selector.worktrees.map(\.path) == [primary.path, kept.path, orphan.path])
+        #expect(git.removedWorktrees == [gone.path])
+        #expect(selector.keptMissingPaths == [orphan.path])
+        #expect(selector.info(for: orphan).isKeptMissing)
+        // Its row says why it stays, with the broken mark even inside a group.
+        let status = WorktreeStatus(worktree: orphan, merge: nil, info: selector.info(for: orphan),
+                                    targetNames: ["main"], isChecking: false)
+        #expect(status.mark == .brokenLink)
+        #expect(status.rowMark(grouped: true) == .brokenLink)
+        #expect(status.card.title == "Folder missing")
+        #expect(status.card.subtitle == "It holds work no branch has, so Teebe keeps its record.")
+        #expect(!status.removal.canRemoveFolder)
+        // Asking to forget it from its placeholder is refused too.
+        await selector.forgetMissingWorktree(orphan.path)
+        #expect(git.removedWorktrees == [gone.path])
+        #expect(selector.worktrees.contains { $0.path == orphan.path })
+    }
+
     @Test("the primary checkout is never forgotten or hidden")
     func primaryIsKept() async {
         let git = FakeGitClient()
@@ -206,7 +235,7 @@ struct AutoForgetTests {
 @MainActor
 @Suite("Auto-forget deleted worktrees (real git)")
 struct AutoForgetIntegrationTests {
-    @Test("on load, a deleted worktree is forgotten, its branch kept, and an unlinked folder stays listed")
+    @Test("on load, a deleted worktree is forgotten, its branch kept; an unlinked folder, and a deleted one holding a commit, stay listed")
     func realRepository() async throws {
         let root = URL(fileURLWithPath: PathUtil.standardized(FileManager.default.temporaryDirectory.path))
             .appendingPathComponent("teebe-autoforget-\(UUID().uuidString)", isDirectory: true)
@@ -221,6 +250,11 @@ struct AutoForgetIntegrationTests {
         for name in ["gone", "also-gone", "unlinked", "kept"] {
             git(["worktree", "add", "-q", "-b", name, root.appendingPathComponent(name).path], in: repo)
         }
+        // A detached checkout with a commit of its own: its record is the only thing holding that commit.
+        let orphan = root.appendingPathComponent("orphan")
+        git(["worktree", "add", "-q", "--detach", orphan.path], in: repo)
+        git(["commit", "-q", "--allow-empty", "-m", "only here"], in: orphan)
+        try FileManager.default.removeItem(at: orphan)
         try FileManager.default.removeItem(at: root.appendingPathComponent("gone"))
         try FileManager.default.removeItem(at: root.appendingPathComponent("also-gone"))
         try Data("draft".utf8).write(to: root.appendingPathComponent("unlinked/draft.txt"))
@@ -233,12 +267,14 @@ struct AutoForgetIntegrationTests {
         let selector = SelectorModel(environment: environment)
         await selector.selectRepo(Repository(path: repo.path))
 
-        #expect(selector.worktrees.map(\.name) == ["repo", "kept", "unlinked"])
+        #expect(selector.worktrees.map(\.name) == ["repo", "kept", "orphan", "unlinked"])
+        #expect(selector.keptMissingPaths.map { ($0 as NSString).lastPathComponent } == ["orphan"])
         #expect(selector.cleanupNotice == "Cleaned up 2 worktrees whose folders were deleted.")
         let listed = git(["worktree", "list", "--porcelain"], in: repo)
         #expect(!listed.contains("/gone\n"))
         #expect(!listed.contains("/also-gone\n"))
         #expect(listed.contains("/unlinked\n"))
+        #expect(listed.contains("/orphan\n"))
         #expect(git(["branch", "--list", "gone"], in: repo).contains("gone"))
         #expect(git(["branch", "--list", "also-gone"], in: repo).contains("also-gone"))
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("unlinked/draft.txt").path))

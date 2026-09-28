@@ -181,7 +181,9 @@ private struct Facts {
     let isRechecking: Bool
 
     var hasUncommitted: Bool { changes > 0 || entry?.hasLocalChanges == true }
-    var isBrokenLink: Bool { entry?.isBroken == true }
+    /// Git can't read the folder: its `.git` link is gone, or the folder itself is
+    /// and its record is kept because it holds work.
+    var isBrokenLink: Bool { entry?.isBroken == true || info.isKeptMissing }
     var isTarget: Bool { entry?.isTarget == true }
     /// Merged and unprotected: only the uncommitted work stands in the way.
     var isRemovableOnceClean: Bool {
@@ -236,6 +238,8 @@ private struct Facts {
             return ("Uncommitted changes", isRemovableOnceClean ? "Commit or discard them before removing."
                         : "Work here isn’t committed yet.")
         case .brokenLink:
+            if info.isKeptMissing { return ("Folder missing", "It holds work no branch has, so Teebe keeps its record.") }
+            if entry?.isFolderMissing == true { return ("Folder missing", "Its folder was moved or deleted.") }
             return ("Broken link", "The folder’s .git link is missing, so Teebe leaves its files alone.")
         case .merged:
             return isRemovable ? ("Safe to delete", "Its committed changes are merged. You can remove it.")
@@ -344,6 +348,7 @@ enum WorktreeWording {
         if worktree.isPrimary { return "The main checkout" }
         if let operation = entry?.operation { return Self.inProgress(operation) }
         if worktree.isLocked { return "Locked" }
+        if entry?.isFolderMissing == true { return "Its folder is missing" }
         if entry?.isBroken == true { return "Its .git link is missing" }
         if worktree.isDetached { return detachedHead }
         if entry?.hasUncheckedFiles == true { return "Some files are marked unchanged in Git" }

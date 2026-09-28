@@ -45,7 +45,7 @@ struct FilesSection: View {
             if isOpen {
                 VStack(spacing: 0) {
                     if worktree.isFolderMissing {
-                        MissingFolderPlaceholder {
+                        MissingFolderPlaceholder(isKept: worktree.worktreePath.map(app.selector.keptMissingPaths.contains) ?? false) {
                             guard let path = worktree.worktreePath else { return }
                             Task { await app.selector.forgetMissingWorktree(path) }
                         }
@@ -143,20 +143,26 @@ struct FilesSection: View {
 
 /// Stands in for the file list when the selected worktree's folder is gone, in the
 /// moment before Teebe cleans it up: a calm explanation and a way to forget just
-/// this worktree, instead of an empty tree and an error.
+/// this worktree, instead of an empty tree and an error. A record that still
+/// holds work (`isKept`) is never forgotten, so it has no Forget.
 struct MissingFolderPlaceholder: View {
+    var isKept = false
     let onForget: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label("This worktree's folder is gone.", systemImage: "folder.badge.questionmark")
                 .font(Typography.bodyEmphasis)
-            Text("It was moved or deleted. Forget clears Git’s record of it; the branch is kept.")
+            Text(isKept ? "Git’s record of it holds commits or staged changes no branch has, so Teebe keeps it. "
+                    + "Restore the folder, or put that work on a branch, to keep it."
+                    : "It was moved or deleted. Forget clears Git’s record of it; the branch is kept.")
                 .font(Typography.secondary).foregroundStyle(Palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Forget", action: onForget)
-                .controlSize(.small)
-                .padding(.top, 2)
+            if !isKept {
+                Button("Forget", action: onForget)
+                    .controlSize(.small)
+                    .padding(.top, 2)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 30).padding(.vertical, 12)

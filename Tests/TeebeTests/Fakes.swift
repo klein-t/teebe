@@ -264,6 +264,8 @@ func makeTestEnvironment(
     /// never on disk, so the real check would read every one as deleted.
     folderIsGone: (@Sendable (String) -> Bool)? = nil,
     isVolumeMounted: @escaping @Sendable (String) -> Bool = { _ in true },
+    /// Defaults to nothing held: fake paths have no record on disk to read.
+    holdsUnsavedWork: @escaping @Sendable (Worktree, String) async -> Bool = { _, _ in false },
     /// Defaults to picking a fake app, as if the user chose one every time.
     chooseApp: @escaping @MainActor (URL?, String, URL?) -> URL? = { _, _, _ in URL(fileURLWithPath: "/Applications/Editor.app") },
     appExists: @escaping @Sendable (URL) -> Bool = { _ in true }
@@ -288,6 +290,7 @@ func makeTestEnvironment(
         folderExists: folderExists,
         folderIsGone: folderIsGone ?? { !folderExists($0) },
         isVolumeMounted: isVolumeMounted,
+        holdsUnsavedWork: holdsUnsavedWork,
         chooseApp: chooseApp,
         appExists: appExists
     )

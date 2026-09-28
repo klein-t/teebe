@@ -131,6 +131,71 @@ struct MissingWorktreesTests {
         #expect(try await listed(fixture).contains { $0.path == target.path })
     }
 
+    @Test("a deleted detached worktree whose commit no ref contains is kept; one on a reachable commit is forgotten")
+    func detachedCommitsAreKept() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let orphan = fixture.root.appendingPathComponent("orphan", isDirectory: true)
+        fixture.git(["worktree", "add", "-q", "--detach", orphan.path, "HEAD"])
+        fixture.writeFile("o.txt", "only here", in: orphan)
+        fixture.stage(in: orphan)
+        fixture.commit("only here", in: orphan)
+        let reachable = fixture.root.appendingPathComponent("reachable", isDirectory: true)
+        fixture.git(["worktree", "add", "-q", "--detach", reachable.path, "HEAD"])
+        try FileManager.default.removeItem(at: orphan)
+        try FileManager.default.removeItem(at: reachable)
+
+        let missing = MissingWorktrees(git: git)
+        let kept = try await worktree("orphan", in: fixture)
+        #expect(await missing.holdsUnsavedWork(kept, repoPath: fixture.repoPath))
+        #expect(!(await missing.forget(kept, repoPath: fixture.repoPath)))
+        #expect(try await listed(fixture).contains { $0.path == kept.path })
+        // Its commit is still reachable through the record, so nothing was lost.
+        #expect(!fixture.git(["cat-file", "-t", kept.head]).isEmpty)
+
+        let plain = try await worktree("reachable", in: fixture)
+        #expect(!(await missing.holdsUnsavedWork(plain, repoPath: fixture.repoPath)))
+        #expect(await missing.forget(plain, repoPath: fixture.repoPath))
+        #expect(!(try await listed(fixture).contains { $0.path == plain.path }))
+    }
+
+    @Test("a deleted worktree is kept when its HEAD's history or its index holds work no branch has")
+    func reflogAndIndexAreKept() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        // A commit, then the branch reset back past it: only the worktree's HEAD history has it.
+        let reset = fixture.addWorktree(name: "reset", branch: "reset")
+        fixture.writeFile("r.txt", "dropped", in: reset)
+        fixture.stage(in: reset)
+        fixture.commit("dropped", in: reset)
+        fixture.git(["reset", "-q", "--hard", "HEAD~1"], in: reset)
+        fixture.git(["reflog", "expire", "--expire=now", "refs/heads/reset"])
+        // A file staged, never committed.
+        let staged = fixture.addWorktree(name: "staged", branch: "staged")
+        fixture.writeFile("s.txt", "staged only", in: staged)
+        fixture.stage(in: staged)
+        for folder in [reset, staged] { try FileManager.default.removeItem(at: folder) }
+
+        let missing = MissingWorktrees(git: git)
+        for name in ["reset", "staged"] {
+            let target = try await worktree(name, in: fixture)
+            #expect(await missing.holdsUnsavedWork(target, repoPath: fixture.repoPath), "\(name)")
+            #expect(!(await missing.forget(target, repoPath: fixture.repoPath)), "\(name)")
+        }
+        #expect(try await listed(fixture).count == 3)
+    }
+
+    @Test("a record that can't be checked counts as holding work")
+    func unverifiableIsKept() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let stray = Worktree(path: fixture.root.appendingPathComponent("never-registered").path, branch: "x", head: "abc")
+        #expect(await MissingWorktrees(git: git).holdsUnsavedWork(stray, repoPath: fixture.repoPath))
+    }
+
     @Test("only a real ENOENT counts as gone")
     func goneMeansNoSuchFile() throws {
         let fixture = try GitFixture()

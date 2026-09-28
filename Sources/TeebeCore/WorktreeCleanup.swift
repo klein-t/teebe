@@ -91,6 +91,8 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
     /// (a squash merge), rather than the branch being an ancestor.
     public var hasEquivalentContent = false
     public var isBroken = false
+    /// Broken because the folder itself is gone, not only its `.git` link.
+    public var isFolderMissing = false
     public var hasLocalChanges = false
     public var hasIgnoredFiles = false
     public var ignoredPaths: [String] = []
@@ -302,6 +304,7 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         entry.problem = Self.refusal(for: worktree)
         if let problem = Self.missingWorktreeProblem(worktree.path) {
             entry.isBroken = true
+            entry.isFolderMissing = problem == Self.missingFolder
             entry.problem = problem
             return entry
         }
@@ -459,9 +462,11 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         return nil
     }
 
+    private static let missingFolder = "Broken worktree: its folder is missing."
+
     private static func missingWorktreeProblem(_ path: String) -> String? {
         for (candidate, message) in [
-            (path, "Broken worktree: its folder is missing."),
+            (path, missingFolder),
             (path + "/.git", "Broken worktree: its .git link is missing. Remaining files were not changed.")
         ] {
             do { _ = try FileManager.default.attributesOfItem(atPath: candidate) } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
