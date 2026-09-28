@@ -115,7 +115,9 @@ final class HoverHelpView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let hoverArea { removeTrackingArea(hoverArea) }
+        // inVisibleRect follows clipping and layout itself. Replacing an area
+        // while its pointer is inside can lose the corresponding exit event.
+        guard hoverArea == nil else { return }
         let area = NSTrackingArea(rect: .zero, options: Self.trackingOptions, owner: self, userInfo: nil)
         addTrackingArea(area)
         hoverArea = area
@@ -285,7 +287,6 @@ private struct PointerHoverAnchor: NSViewRepresentable {
 final class PointerHoverView: NSView {
     static let trackingOptions = HoverHelpView.trackingOptions
     var onHover: (Bool) -> Void = { _ in }
-    private var hovered = false
     private var hoverArea: NSTrackingArea?
 
     // AppKit can report visibleRect beyond bounds for an unclipped view. With
@@ -301,25 +302,16 @@ final class PointerHoverView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let hoverArea { removeTrackingArea(hoverArea) }
+        // inVisibleRect follows clipping and layout itself. Replacing an area
+        // while its pointer is inside can lose the corresponding exit event.
+        guard hoverArea == nil else { return }
         let area = NSTrackingArea(rect: .zero, options: Self.trackingOptions, owner: self, userInfo: nil)
         addTrackingArea(area)
         hoverArea = area
     }
 
-    override func mouseEntered(with event: NSEvent) { set(true) }
-    override func mouseExited(with event: NSEvent) { set(false) }
-
-    /// Silent: the SwiftUI side resets itself as the view goes (`onDisappear`),
-    /// and reporting from inside a hierarchy change would edit state mid-update.
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        hovered = false
-        super.viewWillMove(toWindow: newWindow)
-    }
-
-    private func set(_ value: Bool) {
-        guard value != hovered else { return }
-        hovered = value
-        onHover(value)
-    }
+    // Forward every event. A separate native hover flag can get reset when
+    // SwiftUI reparents the anchor while the row's own state remains alive.
+    override func mouseEntered(with event: NSEvent) { onHover(true) }
+    override func mouseExited(with event: NSEvent) { onHover(false) }
 }
