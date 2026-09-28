@@ -203,20 +203,27 @@ private struct Facts {
             let targets = targetNames.isEmpty ? "its merge targets" : WorktreeWording.list(targetNames, joiner: "or")
             return ("Checking…", "Looking for this branch in \(targets).")
         }
-        guard let entry else { return ("Couldn’t check", "Git couldn’t compare this branch.") }
+        guard let entry else { return ("Couldn’t check", "Couldn’t check this worktree.") }
         switch entry.mergeStatus {
         case .merged: return ("Merged", protectionReason + ", so Teebe won’t remove it.")
         case .notConfirmed:
             return ("Not merged", entry.hasNoCommits ? "No commits yet." : "Its commits aren’t merged yet.")
-        case .unknown: return ("Couldn’t check", "Git couldn’t compare this branch.")
+        case .unknown: return ("Couldn’t check", "Couldn’t check this worktree.")
         }
     }
 
     /// Why a merged row stays, as the start of a sentence.
     private var protectionReason: String { WorktreeWording.protection(worktree, entry) ?? "Protected" }
 
+    /// Clean is a fact only once the folder was fully inspected: a check that
+    /// failed or hasn't finished says so rather than reading as clean.
     var changesFact: WorktreeCardFact {
-        guard hasUncommitted else { return WorktreeCardFact(icon: .pencil, text: "No uncommitted changes", tone: .muted) }
+        guard hasUncommitted else {
+            let text = if entry?.isInspected == true { "No uncommitted changes" }
+                else if entry == nil && isChecking { "Checking for changes…" }
+                else { "Couldn’t check for changes" }
+            return WorktreeCardFact(icon: .pencil, text: text, tone: .muted)
+        }
         return WorktreeCardFact(icon: .pencil,
                                 text: changes > 0 ? WorktreeWording.plural(changes, "uncommitted change") : "Uncommitted changes",
                                 tone: .warn)
@@ -325,6 +332,8 @@ struct WorktreeRemovalPrompt: Equatable {
                                    isMerged: status.mark == .merged)
         let entry = merge?.entry
         let isChecking = entry == nil || status.isRechecking
+        // Removal needs a completed inspection: a failed one knows nothing about the folder.
+        let isInspected = entry?.isInspected == true
         var facts = [Self.mergeFact(entry, isChecking: isChecking)]
         let hasUncommitted = status.changeCount > 0 || entry?.hasLocalChanges == true
         if hasUncommitted {
@@ -332,7 +341,8 @@ struct WorktreeRemovalPrompt: Equatable {
                 : "Uncommitted changes"
             facts.append(WorktreeCardFact(icon: .pencil, text: changes + ": commit or discard them first", tone: .warn))
         } else {
-            facts.append(WorktreeCardFact(icon: .pencil, text: "Nothing uncommitted", tone: .muted))
+            let text = isInspected ? "Nothing uncommitted" : isChecking ? "Checking for changes…" : "Couldn’t check for changes"
+            facts.append(WorktreeCardFact(icon: .pencil, text: text, tone: .muted))
         }
         let hasSubmodules = entry?.hasSubmodules == true
         if hasSubmodules {
@@ -346,6 +356,7 @@ struct WorktreeRemovalPrompt: Equatable {
             facts.append(WorktreeCardFact(icon: .warning, text: activity, tone: .warn))
         }
         let isBlocked = hasUncommitted || hasSubmodules || protection != nil || status.activityWarning != nil || isChecking
+            || !isInspected
         // A clean removal takes ignored files with the folder.
         if !isBlocked, let entry, let ignored = WorktreeWording.ignoredFact([entry]) {
             facts.append(ignored)
@@ -363,6 +374,8 @@ struct WorktreeRemovalPrompt: Equatable {
             "Teebe won’t remove a worktree while something is working in it. Try again when it’s done."
         } else if isChecking {
             "Teebe is still checking this worktree. Try again in a moment."
+        } else if !isInspected {
+            "Teebe couldn’t check this worktree, so it won’t remove it. Refresh and try again."
         } else {
             safe ? "The worktree folder is deleted. Its commits are already merged."
                 : "The worktree folder is deleted. The branch is kept."

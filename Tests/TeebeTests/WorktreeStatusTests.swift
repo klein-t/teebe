@@ -14,6 +14,7 @@ struct WorktreeStatusTests {
     private func entry(_ worktree: Worktree? = nil, merged into: [CleanupBranch] = [],
                        squashed: Bool = false, _ tweak: (inout CleanupEntry) -> Void = { _ in }) -> CleanupEntry {
         var entry = CleanupEntry(worktree: worktree ?? feature)
+        entry.isInspected = true
         entry.mergeStatus = into.isEmpty ? .notConfirmed : .merged
         entry.mergedTargets = into
         entry.hasEquivalentContent = squashed
@@ -195,10 +196,11 @@ struct WorktreeStatusTests {
         #expect(ring.card.subtitle == "Its commits aren’t merged yet.")
         #expect(facts(ring) == ["No uncommitted changes", "Not in main or dev yet", "Not on remote"])
 
-        let unknown = status(entry { $0.mergeStatus = .unknown; $0.problem = "Could not inspect this worktree" })
+        let unknown = status(entry { $0.mergeStatus = .unknown; $0.problem = "Could not inspect this worktree"; $0.isInspected = false })
         #expect(unknown.card.title == "Couldn’t check")
-        #expect(unknown.card.subtitle == "Git couldn’t compare this branch.")
-        #expect(facts(unknown)[1] == "Couldn’t check merge status")
+        #expect(unknown.card.subtitle == "Couldn’t check this worktree.")
+        // Not inspected is not clean.
+        #expect(facts(unknown) == ["Couldn’t check for changes", "Couldn’t check merge status", "Not on remote"])
 
         let unlinked = status(entry {
             $0.isBroken = true
@@ -215,9 +217,12 @@ struct WorktreeStatusTests {
         let checking = status(nil, isChecking: true)
         #expect(checking.card.title == "Checking…")
         #expect(checking.card.subtitle == "Looking for this branch in main or dev.")
-        #expect(facts(checking) == ["No uncommitted changes", "Checking merge status…", "Not on remote"])
+        #expect(facts(checking) == ["Checking for changes…", "Checking merge status…", "Not on remote"])
         #expect(status(nil).card.title == "Couldn’t check")
-        #expect(facts(status(nil))[1] == "Couldn’t check merge status")
+        #expect(status(nil).card.subtitle == "Couldn’t check this worktree.")
+        #expect(facts(status(nil)) == ["Couldn’t check for changes", "Couldn’t check merge status", "Not on remote"])
+        // What the live read already counted still shows.
+        #expect(facts(status(nil, info: .init(changeCount: 2), isChecking: true))[0] == "2 uncommitted changes")
     }
 
     @Test("a result known to be stale shows checking, never Safe to delete, and the row keeps its group")
@@ -372,6 +377,13 @@ struct WorktreeStatusTests {
         let hiddenPrompt = WorktreeRemovalPrompt(worktree: feature, status: status(hidden), merge: WorktreeMergeEntry(entry: hidden))
         #expect(hiddenPrompt.facts.last?.text == "Some files are marked unchanged in Git, so Teebe won’t remove it")
         #expect(!hiddenPrompt.canRemove)
+
+        // A check that failed says so and never offers Remove, merged or not.
+        let failed = entry { $0.mergeStatus = .unknown; $0.problem = "Could not inspect this worktree"; $0.isInspected = false }
+        let failedPrompt = WorktreeRemovalPrompt(worktree: feature, status: status(failed), merge: WorktreeMergeEntry(entry: failed))
+        #expect(failedPrompt.facts.map(\.text) == ["Couldn’t check if merged", "Couldn’t check for changes"])
+        #expect(!failedPrompt.canRemove)
+        #expect(failedPrompt.explanation == "Teebe couldn’t check this worktree, so it won’t remove it. Refresh and try again.")
 
         let checking = WorktreeRemovalPrompt(worktree: feature, status: status(nil, isChecking: true), merge: nil)
         #expect(checking.facts.first == WorktreeCardFact(icon: .merge, text: "Checking if merged…", tone: .muted))
