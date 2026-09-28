@@ -20,13 +20,11 @@ struct WorktreesSection: View {
     enum RemovalConfirmation: Identifiable {
         /// nil action: nothing current to act on yet (the row is being checked).
         case worktree(Worktree, WorktreeStatus.TrashAction?)
-        case prune
         case cleanup([CleanupEntry], skipped: [WorktreeCardFact])
 
         var id: String {
             switch self {
             case .worktree(let worktree, _): "worktree:" + worktree.path
-            case .prune: "prune"
             case .cleanup(let entries, _): "cleanup:" + entries.map(\.id).joined(separator: "\n")
             }
         }
@@ -135,11 +133,6 @@ struct WorktreesSection: View {
             Task { await app.mergeStatus.recheck(path: path) }
         }
         .sheet(item: $confirmation) { confirmationSheet($0) }
-        .onChange(of: app.isForgetMissingRequested, initial: true) { _, requested in
-            guard requested else { return }
-            app.isForgetMissingRequested = false
-            confirmation = .prune
-        }
         .sheet(isPresented: Binding(
             get: { app.newWorktree != nil },
             set: { if !$0 { app.newWorktree = nil } }
@@ -161,13 +154,6 @@ struct WorktreesSection: View {
                     app.groupActions.perform(action, deleteBranch: prompt.offersBranchDeletion && app.deleteBranchOnRemove)
                 }
             }
-        case .prune:
-            let missing = selector.worktrees.filter { app.worktreeStatus(for: $0).group == .broken }.count
-            let prompt = WorktreeRemovalPrompt.prune(missingCount: missing)
-            WorktreeRemovalSheet(title: prompt.title, facts: prompt.facts, explanation: prompt.explanation,
-                                 actionTitle: "Forget", canConfirm: !app.groupActions.isWorking) {
-                app.groupActions.prune()
-            }
         case let .cleanup(entries, skipped):
             WorktreeRemovalSheet(title: app.groupActions.confirmationTitle(entries),
                                  facts: app.groupActions.confirmationFacts(entries) + skipped,
@@ -180,10 +166,8 @@ struct WorktreesSection: View {
         }
     }
 
-    /// Confirm removing a row: a missing one is forgotten with every other
-    /// missing record (its `.git` link may be gone, so only pruning works).
     private func confirmRemoval(_ worktree: Worktree, action: WorktreeStatus.TrashAction?) {
-        confirmation = action == .prune ? .prune : .worktree(worktree, action)
+        confirmation = .worktree(worktree, action)
     }
 
     private struct MergeRefreshKey: Equatable {
@@ -262,12 +246,6 @@ struct WorktreesSection: View {
                     .disabled(app.groupActions.isWorking)
                     .hoverHelp("Remove the worktree folders that are safe to delete.")
             }
-        case .broken:
-            Button("Forget…") { confirmation = .prune }
-                .buttonStyle(IconButtonStyle(size: CGSize(width: 22, height: 18))).font(.system(size: 11))
-                .foregroundStyle(Palette.accent)
-                .disabled(app.groupActions.isWorking)
-                .hoverHelp("Forget worktrees whose folders are gone.")
         case .localChanges, .notMerged:
             EmptyView()
         }
@@ -297,7 +275,6 @@ struct WorktreesSection: View {
         switch kind {
         case .merged: .merged
         case .localChanges: .uncommitted
-        case .broken: .missing
         case .notMerged: .notMerged
         }
     }
@@ -344,8 +321,7 @@ struct WorktreesSection: View {
                 // Without a mark there is no card to hover; the text is still read out.
                 .accessibilityHint(status.hasHoverCard(grouped: grouped) ? "" : summary)
             if let action = status.trashAction {
-                WorktreeTrashButton(isSelected: isActive,
-                                    label: action == .prune ? "Forget missing worktrees" : "Remove worktree") {
+                WorktreeTrashButton(isSelected: isActive, label: "Remove worktree") {
                     confirmRemoval(worktree, action: action)
                 }
                 .padding(.leading, 4)

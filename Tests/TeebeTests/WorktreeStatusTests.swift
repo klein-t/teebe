@@ -36,7 +36,7 @@ struct WorktreeStatusTests {
         #expect(status(merged).mark == .merged)
         #expect(status(entry()).mark == .notMerged)
         #expect(status(nil, isChecking: true).mark == .notMerged)
-        #expect(status(entry(merged: [dev]) { $0.isBroken = true }).mark == .missing)
+        #expect(status(entry(merged: [dev]) { $0.isBroken = true }).mark == .brokenLink)
         #expect(status(merged, count: 2).mark == .uncommitted)
         #expect(status(entry(merged: [dev]) { $0.hasLocalChanges = true }).mark == .uncommitted)
         #expect(status(merged, count: 2, info: .init(agentState: .needsAttention)).mark == .waiting)
@@ -86,11 +86,11 @@ struct WorktreeStatusTests {
         #expect(facts(status(target)) == ["No uncommitted changes", "Merge target", "Not on remote"])
     }
 
-    @Test("the trash shows on removable ✓ rows and missing rows only")
+    @Test("the trash shows on removable ✓ rows only, never on a broken link")
     func trash() {
         let merged = entry(merged: [dev])
         #expect(status(merged).trashAction == .remove(merged))
-        #expect(status(entry(merged: [dev]) { $0.isBroken = true }).trashAction == .prune)
+        #expect(!status(entry(merged: [dev]) { $0.isBroken = true }).showsTrash)
         #expect(!status(entry()).showsTrash)
         #expect(!status(merged, info: .init(agentState: .working)).showsTrash)
         let locked = Worktree(path: "/locked", branch: "locked", isLocked: true)
@@ -120,7 +120,8 @@ struct WorktreeStatusTests {
         #expect(merged.rowMark(grouped: true) == .none)
         #expect(status(entry(), count: 2).rowMark(grouped: true) == .none)
         #expect(status(entry()).rowMark(grouped: true) == .none)
-        #expect(status(entry { $0.isBroken = true }).rowMark(grouped: true) == .none)
+        // No heading says "broken link", so that row keeps its mark and card.
+        #expect(status(entry { $0.isBroken = true }).rowMark(grouped: true) == .brokenLink)
         #expect(status(entry(), info: .init(agentState: .working)).rowMark(grouped: true) == .working)
         #expect(status(entry(), info: .init(agentState: .needsAttention)).rowMark(grouped: true) == .waiting)
         let devTree = Worktree(path: "/dev", branch: "dev")
@@ -195,10 +196,14 @@ struct WorktreeStatusTests {
         #expect(unknown.card.subtitle == "Git couldn’t compare this branch.")
         #expect(facts(unknown)[1] == "Couldn’t check merge status")
 
-        let missing = status(entry { $0.isBroken = true; $0.problem = "Broken worktree: its folder is missing." })
-        #expect(missing.card.title == "Missing")
-        #expect(missing.card.subtitle == "The folder is gone. Remove it to clean up.")
-        #expect(missing.card.facts.isEmpty)
+        let unlinked = status(entry {
+            $0.isBroken = true
+            $0.problem = "Broken worktree: its .git link is missing. Remaining files were not changed."
+        })
+        #expect(unlinked.card.title == "Broken link")
+        #expect(unlinked.card.subtitle == "The folder’s .git link is missing, so Teebe leaves its files alone.")
+        #expect(unlinked.card.facts.isEmpty)
+        #expect(unlinked.group == .notMerged)
     }
 
     @Test("a row with no result yet reads as checking, then as unknown")
@@ -360,16 +365,16 @@ struct WorktreeStatusTests {
         #expect(!stale.offersBranchDeletion)
     }
 
-    @Test("the missing-row trash prunes every missing record, and its prompt says so")
-    func prunePrompt() {
-        let one = WorktreeRemovalPrompt.prune(missingCount: 1)
-        #expect(one.title == "Forget missing worktrees?")
-        #expect(one.facts.map { $0.text } == ["1 missing worktree"])
-        #expect(one.explanation == "Clears Git’s leftover records of every missing worktree, not only this one, "
-                + "including any on a drive that isn’t connected right now. Nothing on disk changes and branches are kept.")
-        #expect(one.canRemove)
-        #expect(!one.offersBranchDeletion)
-        #expect(WorktreeRemovalPrompt.prune(missingCount: 3).facts.map { $0.text } == ["3 missing worktrees"])
+    @Test("removing a folder whose .git link is missing is refused, and the prompt says why")
+    func brokenLinkPrompt() {
+        let unlinked = entry(feature) { $0.isBroken = true }
+        let prompt = WorktreeRemovalPrompt(worktree: feature, status: status(unlinked),
+                                           merge: WorktreeMergeEntry(entry: unlinked))
+        #expect(!prompt.canRemove)
+        #expect(!prompt.offersBranchDeletion)
+        #expect(prompt.facts.contains(WorktreeCardFact(icon: .warning, text: "Its .git link is missing, so Teebe won’t remove it",
+                                                       tone: .warn)))
+        #expect(prompt.explanation == "Teebe only removes a worktree Git can fully check and nothing protects.")
     }
 
     @Test("the ignored-files fact names at most one short example")

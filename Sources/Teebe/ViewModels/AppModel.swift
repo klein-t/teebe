@@ -6,7 +6,7 @@ import TeebeCore
 /// Shared wording for the checked menu items and Settings.
 enum WorktreePreferences {
     static let groupingTitle = "Group by status"
-    static let groupingHelp = "Group worktrees into Uncommitted changes, Not merged, Safe to delete and Missing. "
+    static let groupingHelp = "Group worktrees into Uncommitted changes, Not merged and Safe to delete. "
         + "When off, keep a flat list; each row still shows its status."
     static let fetchTitle = "Fetch automatically"
     static let fetchHelp = "Check remotes in the background. Your files stay unchanged; Refresh still works when off."
@@ -35,12 +35,6 @@ final class AppModel {
     private(set) var errorMessage: String?
     /// The New Worktree sheet's form while it is up; nil when it is closed.
     var newWorktree: NewWorktreeModel?
-    /// Set when something outside the worktree list (the missing-folder
-    /// placeholder) asks for the "Forget missing worktrees" confirmation; the list
-    /// presents it and clears the flag.
-    var isForgetMissingRequested = false
-
-    func requestForgetMissing() { isForgetMissingRequested = true }
 
     /// Which section the keyboard currently drives — arrows, Enter and Space act on
     /// it, and its header shows the active accent. Moved by ⌘1/⌘2/⌘3, Tab/⇧Tab, or by
@@ -97,6 +91,8 @@ final class AppModel {
             self?.persist()
             self?.setError(nil)
         }
+        // Deleted worktrees are never forgotten while a removal is running.
+        self.selector.isRemovalRunning = { [weak self] in self?.groupActionsStorage?.isWorking == true }
     }
 
     /// Single entry point for the global error banner. Replaces any existing

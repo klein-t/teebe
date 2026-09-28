@@ -96,10 +96,6 @@ public struct ProcessGitClient: GitClient {
         _ = try await runChecked(args, in: repoPath, interruptible: false)
     }
 
-    public func pruneWorktrees(repoPath: String) async throws {
-        _ = try await runChecked(["worktree", "prune"], in: repoPath, interruptible: false)
-    }
-
     // MARK: - Remotes
 
     public func fetchOrigin(repoPath: String) async throws {

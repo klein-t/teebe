@@ -25,7 +25,6 @@ private struct RemovalHookGit: GitClient {
         try await base.removeWorktree(repoPath: repoPath, worktreePath: worktreePath, force: force)
         afterRemove()
     }
-    func pruneWorktrees(repoPath: String) async throws {}
     func fetchOrigin(repoPath: String) async throws {}
     func run(_ arguments: [String], in directory: String) async throws -> GitInvocationResult {
         beforeRun(arguments)

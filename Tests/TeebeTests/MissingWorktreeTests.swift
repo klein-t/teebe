@@ -132,12 +132,4 @@ struct MissingWorktreeTests {
         #expect(missingFolder.contains("/repo-gone"))
         #expect(WorktreeModel.describe(GitError.executableNotFound) == "git executable not found.")
     }
-
-    @Test("the placeholder's Forget… asks the worktree list for the prune confirmation")
-    func forgetRequest() {
-        let app = AppModel(environment: makeTestEnvironment())
-        #expect(!app.isForgetMissingRequested)
-        app.requestForgetMissing()
-        #expect(app.isForgetMissingRequested)
-    }
 }

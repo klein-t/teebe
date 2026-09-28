@@ -38,6 +38,12 @@ struct AppEnvironment {
     /// Whether a worktree's folder is still on disk (a registered worktree's
     /// folder can be deleted behind Git's back). Overridable in tests.
     let folderExists: @Sendable (_ path: String) -> Bool
+    /// Whether a worktree's folder is gone for certain ("no such file"), the only
+    /// evidence Teebe forgets a record on. Overridable in tests.
+    let folderIsGone: @Sendable (_ path: String) -> Bool
+    /// Whether the volume a path lives on is mounted; a worktree on a drive that
+    /// isn't connected is hidden, never forgotten. Overridable in tests.
+    let isVolumeMounted: @Sendable (_ path: String) -> Bool
 
     init(
         git: GitClient,
@@ -53,7 +59,9 @@ struct AppEnvironment {
         worktreesInUse: @escaping @Sendable ([String], Date) -> Set<String> = { _, _ in [] },
         notify: @escaping @MainActor (String, String) -> Void = { _, _ in },
         makeAgentPingListener: @escaping @MainActor () -> AgentPingListening = { DarwinAgentPingListener() },
-        folderExists: @escaping @Sendable (String) -> Bool = { AppEnvironment.isDirectory($0) }
+        folderExists: @escaping @Sendable (String) -> Bool = { AppEnvironment.isDirectory($0) },
+        folderIsGone: @escaping @Sendable (String) -> Bool = { MissingWorktrees.isGone($0) },
+        isVolumeMounted: @escaping @Sendable (String) -> Bool = { MissingWorktrees.isOnMountedVolume($0) }
     ) {
         self.git = git
         self.opener = opener
@@ -69,6 +77,8 @@ struct AppEnvironment {
         self.notify = notify
         self.makeAgentPingListener = makeAgentPingListener
         self.folderExists = folderExists
+        self.folderIsGone = folderIsGone
+        self.isVolumeMounted = isVolumeMounted
     }
 
     nonisolated static func isDirectory(_ path: String) -> Bool {
@@ -77,6 +87,9 @@ struct AppEnvironment {
     }
 
     var worktreeService: WorktreeService { WorktreeService(git: git) }
+    var missingWorktrees: MissingWorktrees {
+        MissingWorktrees(git: git, folderIsGone: folderIsGone, isVolumeMounted: isVolumeMounted)
+    }
     var statusService: StatusService { StatusService(git: git) }
     var diffService: DiffService { DiffService(git: git) }
     var branchService: BranchService { BranchService(git: git) }

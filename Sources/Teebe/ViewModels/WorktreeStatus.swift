@@ -10,8 +10,9 @@ enum WorktreeMark: Equatable {
     /// The agent finished its turn and is waiting for the user.
     case waiting
     case uncommitted
-    /// Git lists the worktree but its folder or `.git` link is gone.
-    case missing
+    /// The folder is there but its `.git` link is gone, so Git can't read it. It
+    /// may still hold uncommitted files, so it stays listed and is never forgotten.
+    case brokenLink
     /// Merged into a target, nothing uncommitted, nothing Git could be hiding,
     /// nothing protecting it: safe to delete.
     case merged
@@ -23,11 +24,11 @@ enum WorktreeMark: Equatable {
 }
 
 /// Icons the hover card and removal prompt use. The view maps them to SF Symbols
-/// (pencil, icloud, eye.slash, exclamationmark.triangle) or its own drawings (the
-/// git-merge glyph, the broken link). The card footer uses one fixed icon per
-/// fact: pencil, merge, cloud.
+/// (pencil, icloud, eye.slash, exclamationmark.triangle) or its own drawing (the
+/// git-merge glyph). The card footer uses one fixed icon per fact: pencil, merge,
+/// cloud.
 enum WorktreeCardIcon: Equatable {
-    case pencil, merge, cloud, missing, ignoredFiles, warning
+    case pencil, merge, cloud, ignoredFiles, warning
 }
 
 struct WorktreeCardFact: Equatable {
@@ -53,8 +54,6 @@ struct WorktreeStatus: Equatable {
     enum TrashAction: Equatable {
         /// Remove the folder of a merged row (optionally deleting its local branch).
         case remove(CleanupEntry)
-        /// Forget missing worktrees (`git worktree prune`).
-        case prune
     }
 
     let mark: WorktreeMark
@@ -78,11 +77,12 @@ struct WorktreeStatus: Equatable {
     var showsTrash: Bool { trashAction != nil }
 
     /// The mark the row itself draws. Inside a group the heading already says the
-    /// Git state, so a grouped row only keeps an agent orb, or the ring of a result
-    /// being rechecked (its heading is out of date); pinned rows sit above the
-    /// groups and keep their mark.
+    /// Git state, so a grouped row only keeps an agent orb, the broken link (its
+    /// heading can't say that), or the ring of a result being rechecked (its
+    /// heading is out of date); pinned rows sit above the groups and keep their mark.
     func rowMark(grouped: Bool) -> WorktreeMark {
-        guard grouped, !isPinned, mark != .working, mark != .waiting, !(isRechecking && mark == .notMerged) else { return mark }
+        guard grouped, !isPinned, mark != .working, mark != .waiting, mark != .brokenLink,
+              !(isRechecking && mark == .notMerged) else { return mark }
         return .none
     }
 
@@ -91,7 +91,8 @@ struct WorktreeStatus: Equatable {
 
     private static func group(_ facts: Facts, isMergedClean: Bool) -> WorktreeGroup {
         if facts.hasUncommitted { return .localChanges }
-        if facts.isMissing { return .broken }
+        // Git can't read a folder whose .git link is gone, so it can't be merged.
+        if facts.isBrokenLink { return .notMerged }
         return isMergedClean ? .merged : .notMerged
     }
 
@@ -100,7 +101,7 @@ struct WorktreeStatus: Equatable {
         if agent == .working || (agent == .idle && facts.info.isLive) { return .working }
         if agent == .needsAttention { return .waiting }
         if facts.hasUncommitted { return .uncommitted }
-        if facts.isMissing { return .missing }
+        if facts.isBrokenLink { return .brokenLink }
         if facts.isTarget { return .none }
         return isMergedClean ? .merged : .notMerged
     }
@@ -130,9 +131,7 @@ struct WorktreeStatus: Equatable {
         group = Self.group(facts, isMergedClean: isSafeToDelete)
         mark = Self.mark(facts, isMergedClean: isSafeToDelete && !isRechecking)
 
-        if mark == .missing {
-            trashAction = .prune
-        } else if mark == .merged, let entry, entry.canRemove(includingIgnored: true) {
+        if mark == .merged, let entry, entry.canRemove(includingIgnored: true) {
             trashAction = .remove(entry)
         } else {
             trashAction = nil
@@ -153,7 +152,7 @@ private struct Facts {
     let isRechecking: Bool
 
     var hasUncommitted: Bool { changes > 0 || entry?.hasLocalChanges == true }
-    var isMissing: Bool { entry?.isBroken == true }
+    var isBrokenLink: Bool { entry?.isBroken == true }
     var isTarget: Bool { entry?.isTarget == true }
     /// Merged and unprotected: only the uncommitted work stands in the way.
     var isRemovableOnceClean: Bool {
@@ -171,11 +170,11 @@ private struct Facts {
     }
 
     /// Every card: a fixed state title, one short sentence, and the same three facts
-    /// (changes, merge, remote) in that order. Missing has no footer: there is no
-    /// folder left to describe.
+    /// (changes, merge, remote) in that order. A broken link has no footer: Git
+    /// can't read the folder, so there is nothing to report.
     func card(mark: WorktreeMark, isRemovable: Bool) -> WorktreeCard {
         let (title, subtitle) = headline(mark: mark, isRemovable: isRemovable)
-        let facts = mark == .missing ? [] : [changesFact, mergeFact, WorktreeWording.remoteFact(info.remote)]
+        let facts = mark == .brokenLink ? [] : [changesFact, mergeFact, WorktreeWording.remoteFact(info.remote)]
         return WorktreeCard(title: title, subtitle: subtitle, facts: facts)
     }
 
@@ -189,7 +188,8 @@ private struct Facts {
         case .uncommitted:
             return ("Uncommitted changes", isRemovableOnceClean ? "Commit or discard them before removing."
                         : "Work here isn’t committed yet.")
-        case .missing: return ("Missing", "The folder is gone. Remove it to clean up.")
+        case .brokenLink:
+            return ("Broken link", "The folder’s .git link is missing, so Teebe leaves its files alone.")
         case .merged:
             return isRemovable ? ("Safe to delete", "All its work is merged. You can remove it.")
                 : ("Merged", protectionReason + ", so Teebe won’t remove it.")
@@ -271,6 +271,7 @@ enum WorktreeWording {
     static func protection(_ worktree: Worktree, _ entry: CleanupEntry?) -> String? {
         if worktree.isPrimary { return "The main checkout" }
         if worktree.isLocked { return "Locked" }
+        if entry?.isBroken == true { return "Its .git link is missing" }
         if worktree.isDetached { return "Detached HEAD" }
         if entry?.hasUncheckedFiles == true { return "Some files are marked unchanged in Git" }
         if entry?.hasSubmodules == true { return "It contains a submodule" }
@@ -302,28 +303,7 @@ struct WorktreeRemovalPrompt: Equatable {
     /// submodule. The prompt says why and does not offer Remove.
     let canRemove: Bool
 
-    private init(title: String, facts: [WorktreeCardFact], explanation: String) {
-        self.title = title
-        self.facts = facts
-        self.explanation = explanation
-        offersBranchDeletion = false
-        canRemove = true
-    }
-
-    /// Forgetting missing worktrees: `git worktree prune` forgets every missing
-    /// worktree at once, so the prompt says so instead of naming one row. That
-    /// includes worktrees on a drive that isn't connected, whose folders only look
-    /// missing.
-    static func prune(missingCount: Int) -> WorktreeRemovalPrompt {
-        WorktreeRemovalPrompt(
-            title: "Forget missing worktrees?",
-            facts: [WorktreeCardFact(icon: .missing, text: WorktreeWording.plural(missingCount, "missing worktree"), tone: .muted)],
-            explanation: "Clears Git’s leftover records of every missing worktree, not only this one, "
-                + "including any on a drive that isn’t connected right now. Nothing on disk changes and branches are kept.")
-    }
-
-    /// Removing one existing worktree folder. Missing rows are forgotten with
-    /// `prune(missingCount:)` instead.
+    /// Removing one existing worktree folder.
     init(worktree: Worktree, status: WorktreeStatus, merge: WorktreeMergeEntry?) {
         title = "Remove “\(worktree.branch ?? worktree.name)”?"
         let entry = merge?.entry

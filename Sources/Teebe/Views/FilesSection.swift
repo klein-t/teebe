@@ -43,7 +43,10 @@ struct FilesSection: View {
             if isOpen {
                 VStack(spacing: 0) {
                     if worktree.isFolderMissing {
-                        MissingFolderPlaceholder { app.requestForgetMissing() }
+                        MissingFolderPlaceholder {
+                            guard let path = worktree.worktreePath else { return }
+                            Task { await app.selector.forgetMissingWorktree(path) }
+                        }
                         Spacer(minLength: 0)
                     } else {
                         TextField("Search files", text: $worktree.searchQuery)
@@ -111,8 +114,9 @@ struct FilesSection: View {
     }
 }
 
-/// Stands in for the file list when the selected worktree's folder is gone: a
-/// calm explanation and the way out, instead of an empty tree and an error.
+/// Stands in for the file list when the selected worktree's folder is gone, in the
+/// moment before Teebe cleans it up: a calm explanation and a way to forget just
+/// this worktree, instead of an empty tree and an error.
 struct MissingFolderPlaceholder: View {
     let onForget: () -> Void
 
@@ -120,10 +124,10 @@ struct MissingFolderPlaceholder: View {
         VStack(alignment: .leading, spacing: 6) {
             Label("This worktree's folder is gone.", systemImage: "folder.badge.questionmark")
                 .font(Typography.bodyEmphasis)
-            Text("Git still lists it, but the folder was moved or deleted. Forget it to clean up.")
+            Text("It was moved or deleted. Forget clears Git’s record of it; the branch is kept.")
                 .font(Typography.secondary).foregroundStyle(Palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Forget…", action: onForget)
+            Button("Forget", action: onForget)
                 .controlSize(.small)
                 .padding(.top, 2)
         }

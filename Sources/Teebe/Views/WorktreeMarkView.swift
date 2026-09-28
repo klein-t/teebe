@@ -33,7 +33,7 @@ struct WorktreeMarkView: View {
                             paused: paused)
         case .uncommitted:
             Circle().fill(isSelected ? Color.white : Self.uncommittedColor).frame(width: 8, height: 8)
-        case .missing:
+        case .brokenLink:
             BrokenLinkShape()
                 .stroke(isSelected ? Color.white : Color(nsColor: .tertiaryLabelColor),
                         style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
@@ -62,7 +62,7 @@ struct WorktreeMarkView: View {
         case .working: "Agent working"
         case .waiting: "Agent waiting for you"
         case .uncommitted: "Uncommitted changes"
-        case .missing: "Worktree missing"
+        case .brokenLink: "Worktree link broken"
         case .merged: "Merged"
         case .notMerged: "Not merged"
         case .none: ""
@@ -70,7 +70,7 @@ struct WorktreeMarkView: View {
     }
 }
 
-/// A chain link with a slash through it: the folder Git points at is gone. Drawn
+/// A chain link with a slash through it: the folder's `.git` link is gone. Drawn
 /// on a 24-unit grid (SF Symbols has no broken-link glyph).
 struct BrokenLinkShape: Shape {
     func path(in rect: CGRect) -> Path {
@@ -142,8 +142,6 @@ struct WorktreeFactRow: View {
     @ViewBuilder
     private var icon: some View {
         switch fact.icon {
-        case .missing:
-            BrokenLinkShape().stroke(style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
         case .merge:
             // About the weight of an 11 pt SF Symbol in this 13 pt slot.
             MergeGlyphShape().stroke(style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))

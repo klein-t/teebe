@@ -31,6 +31,8 @@ final class SelectorModel {
 
     private(set) var repositories: [Repository] = []
     private(set) var selectedRepo: Repository?
+    /// The worktrees Teebe shows. One whose folder is gone never is: a deleted one
+    /// is forgotten (`forgetDeleted`), one out of reach waits for its drive.
     private(set) var worktrees: [Worktree] = []
     private(set) var selectedWorktree: Worktree?
     private(set) var branches: [Branch] = []
@@ -38,6 +40,16 @@ final class SelectorModel {
     private(set) var worktreeInfo: [String: WorktreeInfo] = [:]
     private(set) var mergeRevision = 0
     var errorMessage: String?
+    /// How many deleted worktrees were forgotten since the notice was last
+    /// dismissed (or the repository changed).
+    private(set) var cleanedUpCount = 0
+    /// Answers whether a removal is running; nothing is forgotten meanwhile.
+    var isRemovalRunning: @MainActor () -> Bool = { false }
+    /// A record that was tried is left alone this long, so a refresh storm never
+    /// asks Git to forget the same worktree over and over.
+    var forgetRetryInterval: TimeInterval = 300
+    private var forgetAttempts: [String: Date] = [:]
+    private var isForgetting = false
 
     let worktree: WorktreeModel
 
@@ -150,7 +162,18 @@ final class SelectorModel {
         repositories = repos
     }
 
+    /// The calm one-line notice after deleted worktrees were forgotten.
+    var cleanupNotice: String? {
+        guard cleanedUpCount > 0 else { return nil }
+        return cleanedUpCount == 1 ? "Cleaned up 1 worktree whose folder was deleted."
+            : "Cleaned up \(cleanedUpCount) worktrees whose folders were deleted."
+    }
+
+    func dismissCleanupNotice() { cleanedUpCount = 0 }
+
     func clearSelection() {
+        cleanedUpCount = 0
+        forgetAttempts.removeAll()
         repoWatcher?.stop()
         repoWatcher = nil
         worktreesAdminDir = nil
@@ -170,11 +193,18 @@ final class SelectorModel {
     /// primary-then-saved double load: two full tree loads inside the window's
     /// first layout pass escalate into an AppKit constraint-loop crash at launch.
     func selectRepo(_ repo: Repository, preferredWorktreePath: String? = nil) async {
+        if selectedRepo?.path != repo.path {
+            cleanedUpCount = 0
+            forgetAttempts.removeAll()
+        }
         selectedRepo = repo
         await startRepoWatching(repo)
         startAgentWatching()
+        var deleted: [Worktree] = []
         do {
-            applyDiscovered(try await environment.worktreeService.worktrees(for: repo))
+            let found = sortMissing(try await environment.worktreeService.worktrees(for: repo))
+            deleted = found.deleted
+            applyDiscovered(found.listed)
             branches = try await environment.branchService.branches(for: repo)
             errorMessage = nil
         } catch {
@@ -190,6 +220,7 @@ final class SelectorModel {
             await selectWorktree(target)
         }
         onSelectionChange?()
+        await forgetDeleted(deleted, in: repo)
     }
 
     // MARK: - Auto-detecting worktree add/remove
@@ -254,9 +285,10 @@ final class SelectorModel {
     private func rescanWorktrees() async {
         guard let repo = selectedRepo else { return }
         let discovered: [Worktree]
+        let deleted: [Worktree]
         let discoveredBranches: [Branch]
         do {
-            discovered = try await environment.worktreeService.worktrees(for: repo)
+            (discovered, deleted) = sortMissing(try await environment.worktreeService.worktrees(for: repo))
             discoveredBranches = try await environment.branchService.branches(for: repo)
             errorMessage = nil
         } catch {
@@ -268,16 +300,64 @@ final class SelectorModel {
         branches = discoveredBranches
         await refreshWorktreeInfo()
         // Keep the current selection if it still exists; only re-focus when it's gone.
-        if let current = selectedWorktree, discovered.contains(where: { $0.path == current.path }) {
-            return
-        }
-        if let fallback = discovered.first(where: { $0.isPrimary }) ?? discovered.first {
+        let isSelectionListed = selectedWorktree.map { current in discovered.contains { $0.path == current.path } } ?? false
+        if !isSelectionListed, let fallback = discovered.first(where: { $0.isPrimary }) ?? discovered.first {
             await selectWorktree(fallback)
-        } else {
+        } else if !isSelectionListed {
             selectedWorktree = nil
             worktree.clear()
             onSelectionChange?()
         }
+        await forgetDeleted(deleted, in: repo)
+    }
+
+    // MARK: - Worktrees whose folder is gone
+
+    /// Split what Git lists into the rows to show and the deleted ones to forget.
+    /// A worktree out of reach (drive not mounted, or locked) is in neither: it is
+    /// hidden and left alone until its folder is back.
+    private func sortMissing(_ all: [Worktree]) -> (listed: [Worktree], deleted: [Worktree]) {
+        let missing = environment.missingWorktrees
+        var listed: [Worktree] = []
+        var deleted: [Worktree] = []
+        for worktree in all {
+            switch missing.disposition(of: worktree) {
+            case .present: listed.append(worktree)
+            case .deleted: deleted.append(worktree)
+            case .unreachable: break
+            }
+        }
+        return (listed, deleted)
+    }
+
+    /// Forget deleted worktrees' records, one at a time, never while a removal
+    /// runs. Each is re-checked right before (`MissingWorktrees.forget`), and one
+    /// tried recently is skipped. A failure stays quiet: the row is hidden anyway,
+    /// and it is tried again after `forgetRetryInterval`.
+    private func forgetDeleted(_ candidates: [Worktree], in repo: Repository, now: Date = Date()) async {
+        let due = candidates.filter { candidate in
+            forgetAttempts[candidate.path].map { now.timeIntervalSince($0) >= forgetRetryInterval } ?? true
+        }
+        guard !due.isEmpty, !isForgetting else { return }
+        isForgetting = true
+        defer { isForgetting = false }
+        let missing = environment.missingWorktrees
+        for candidate in due {
+            guard !isRemovalRunning(), selectedRepo?.path == repo.path else { return }
+            forgetAttempts[candidate.path] = now
+            if await missing.forget(candidate, repoPath: repo.path) { cleanedUpCount += 1 }
+        }
+    }
+
+    /// The folder-gone placeholder's Forget: forget just this worktree's record,
+    /// with the same checks as the automatic clean-up, then re-read the list.
+    func forgetMissingWorktree(_ path: String) async {
+        guard let repo = selectedRepo,
+              let listed = try? await environment.worktreeService.worktrees(for: repo),
+              let target = listed.first(where: { $0.path == path }) else { return }
+        forgetAttempts[path] = nil
+        await forgetDeleted([target], in: repo)
+        await refreshWorktrees()
     }
 
     /// Adopt a freshly discovered worktree list. Merge ancestry can only have moved
@@ -515,6 +595,14 @@ final class SelectorModel {
     func handleWorktreeFileEvents(_ paths: [String], now: Date = Date()) async {
         var changed = WorktreeActivityRouter.changedWorktrees(eventPaths: paths, among: worktrees.map(\.path))
         if let selected = selectedWorktree?.path, worktree.recentSelfWrite(now: now) { changed.remove(selected) }
+        // A folder deleted outside Teebe: re-read the list, which cleans it up.
+        let deleted = changed.filter { path in
+            worktrees.contains { $0.path == path && !$0.isPrimary } && environment.folderIsGone(path)
+        }
+        if !deleted.isEmpty {
+            changed.subtract(deleted)
+            await refreshWorktrees()
+        }
         guard !changed.isEmpty else { return }
         for path in changed { environment.activityMonitor.recordActivity(worktreePath: path, at: now) }
         refreshLiveState(now: now)

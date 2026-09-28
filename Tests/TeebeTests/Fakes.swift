@@ -64,14 +64,19 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool, startPoint: String?) async throws {
         addedWorktrees.append(AddedWorktree(path: path, branch: branch, createBranch: createBranch, startPoint: startPoint))
     }
-    func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws {}
+    /// Every `removeWorktree` call's worktree path, in order.
+    private(set) var removedWorktrees: [String] = []
+    /// Per-worktree `removeWorktree` failures (keyed by worktree path).
+    var removeWorktreeErrors: [String: GitError] = [:]
+    func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws {
+        removedWorktrees.append(worktreePath)
+        if let error = removeWorktreeErrors[worktreePath] { throw error }
+    }
 
-    // Prune / fetch are recorded under the same lock: both are called from
-    // detached work while the test reads the record from the main actor.
+    // Fetches are recorded under a lock: they are called from detached work
+    // while the test reads the record from the main actor.
     private let remoteLock = NSLock()
-    private var prunes: [String] = []
     private var fetches: [String] = []
-    var prunedRepos: [String] { remoteLock.lock(); defer { remoteLock.unlock() }; return prunes }
     var fetchedRepos: [String] { remoteLock.lock(); defer { remoteLock.unlock() }; return fetches }
     /// When set, `fetchOrigin` throws it — a remote that is unreachable.
     var fetchError: GitError?
@@ -80,10 +85,7 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     var fetchGate: (@Sendable () async -> Void)?
 
     /// Recorded synchronously: locking inside an async function is not allowed.
-    private func record(prune path: String) { remoteLock.lock(); prunes.append(path); remoteLock.unlock() }
     private func record(fetch path: String) { remoteLock.lock(); fetches.append(path); remoteLock.unlock() }
-
-    func pruneWorktrees(repoPath: String) async throws { record(prune: repoPath) }
 
     func fetchOrigin(repoPath: String) async throws {
         record(fetch: repoPath)
@@ -255,7 +257,11 @@ func makeTestEnvironment(
     worktreesInUse: @escaping @Sendable ([String], Date) -> Set<String> = { _, _ in [] },
     notify: (@MainActor (String, String) -> Void)? = nil,
     agentPing: AgentPingListening? = nil,
-    folderExists: @escaping @Sendable (String) -> Bool = { _ in true }
+    folderExists: @escaping @Sendable (String) -> Bool = { _ in true },
+    /// Defaults to "whatever `folderExists` says isn't there": fake paths are
+    /// never on disk, so the real check would read every one as deleted.
+    folderIsGone: (@Sendable (String) -> Bool)? = nil,
+    isVolumeMounted: @escaping @Sendable (String) -> Bool = { _ in true }
 ) -> AppEnvironment {
     let storeURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("tb-test-\(UUID().uuidString)")
@@ -274,6 +280,8 @@ func makeTestEnvironment(
         worktreesInUse: worktreesInUse,
         notify: notify ?? { _, _ in },
         makeAgentPingListener: { agentPing ?? FakeAgentPing() },
-        folderExists: folderExists
+        folderExists: folderExists,
+        folderIsGone: folderIsGone ?? { !folderExists($0) },
+        isVolumeMounted: isVolumeMounted
     )
 }

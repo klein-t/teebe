@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The confirmation behind every worktree removal: a row's trash or "Remove
-/// Worktree…", forgetting missing worktrees, and the Safe to delete clean-up. A
+/// Worktree…", and the Safe to delete clean-up. A
 /// sheet rather than a confirmation dialog, because it holds a checkbox.
 struct WorktreeRemovalSheet: View {
     let title: String
@@ -10,7 +10,6 @@ struct WorktreeRemovalSheet: View {
     /// The remembered "Also delete the branch" choice; nil hides the checkbox.
     var deleteBranch: Binding<Bool>?
     var deleteBranchTitle = "Also delete the branch"
-    var actionTitle = "Remove"
     /// False when Git would refuse: the button stays, disabled, and the facts say why.
     var canConfirm = true
     let onConfirm: () -> Void
@@ -43,7 +42,7 @@ struct WorktreeRemovalSheet: View {
             HStack(spacing: 8) {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(actionTitle, role: .destructive) {
+                Button("Remove", role: .destructive) {
                     dismiss()
                     onConfirm()
                 }

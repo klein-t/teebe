@@ -5,14 +5,13 @@ import TeebeCore
 /// between groups. Case order is display order. The raw values are persisted
 /// (collapsed groups per repo), so they outlive any rename of the titles.
 enum WorktreeGroup: String, CaseIterable, Identifiable {
-    case localChanges, notMerged, merged, broken
+    case localChanges, notMerged, merged
     var id: String { rawValue }
     var title: String {
         switch self {
         case .localChanges: "Uncommitted changes"
         case .notMerged: "Not merged"
         case .merged: "Safe to delete"
-        case .broken: "Missing"
         }
     }
     /// The header tooltip: what put a checkout in this group, naming the branches
@@ -25,7 +24,6 @@ enum WorktreeGroup: String, CaseIterable, Identifiable {
             return "Committed work not found in \(targetList) yet, merged but kept for a reason the row's card gives, "
                 + "or Git couldn't check."
         case .merged: return "Merged into \(targetList) with nothing uncommitted. Removing the folder loses no work."
-        case .broken: return "Git still lists these worktrees, but their folder or .git link is missing."
         }
     }
 }
@@ -99,13 +97,10 @@ extension AppModel {
     }
 
     /// What confirming "Remove Worktree…" on this row will do, captured when the
-    /// sheet opens and re-checked in full when it runs: forget a missing row
-    /// (its `.git` link can be gone, so only prune works), otherwise remove the
-    /// folder as it was last checked. nil while there is no current result to
-    /// act on.
+    /// sheet opens and re-checked in full when it runs: remove the folder as it
+    /// was last checked. nil while there is no current result to act on.
     func removalAction(for worktree: Worktree) -> WorktreeStatus.TrashAction? {
         guard let merge = mergeEntry(for: worktree, info: selector.info(for: worktree)) else { return nil }
-        if merge.entry.isBroken { return .prune }
         return worktreeStatus(for: worktree).isRechecking ? nil : .remove(merge.entry)
     }
 }

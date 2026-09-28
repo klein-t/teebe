@@ -477,8 +477,8 @@ private final class GeometryHost {
 /// different numbers of uncommitted files so switching between them really does ask
 /// the window for a different height.
 private struct WorktreeFixture {
-    static let worktreeCount = 5        // primary + one per group
-    static let groupCount = 4           // merged, uncommitted changes, unmerged commits, broken
+    static let worktreeCount = 4        // primary + one per group
+    static let groupCount = 3           // merged, uncommitted changes, unmerged commits
 
     let root: URL
     var repoPath: String { root.appendingPathComponent("repo").path }
@@ -513,10 +513,6 @@ private struct WorktreeFixture {
         // different height here than anywhere else.
         let dirty = add(worktree: "wt-dirty", branch: "feat/dirty", from: repo)
         for index in 1...4 { write("d\(index).txt", "d", in: dirty) }
-
-        // Broken: git still lists it, the folder is gone.
-        let gone = add(worktree: "wt-gone", branch: "feat/gone", from: repo)
-        try? FileManager.default.removeItem(at: gone)
     }
 
     func cleanup() { try? FileManager.default.removeItem(at: root) }

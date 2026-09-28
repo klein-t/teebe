@@ -2,18 +2,18 @@ import Foundation
 import Observation
 import TeebeCore
 
-/// The work behind the group-header actions, the row trash and "Remove
+/// The work behind the group-header action, the row trash and "Remove
 /// Worktree…": removing worktree folders (optionally deleting the local branches
-/// of merged ones), and pruning registrations whose folders are gone. Every
-/// removal runs through `perform` / `remove`, which re-check it in full as it
-/// runs. Both end in a rescan, so the list tells the truth again straight away.
+/// of merged ones). Every removal runs through `perform` / `remove`, which
+/// re-check it in full as it runs, and ends in a rescan, so the list tells the
+/// truth again straight away.
 @MainActor
 @Observable
 final class WorktreeGroupActions {
     /// Owned by `AppModel`, which outlives this.
     @ObservationIgnored private unowned let app: AppModel
     @ObservationIgnored private let service: WorktreeCleanupChecking
-    /// A removal or prune is running: the actions stand down until it finishes.
+    /// A removal is running: the actions stand down until it finishes.
     private(set) var isWorking = false
 
     init(app: AppModel, service: WorktreeCleanupChecking? = nil) {
@@ -83,32 +83,11 @@ final class WorktreeGroupActions {
         return Task { await performRemoval(entries, repo: repo, deleteBranch: deleteBranch, includingBrowsed: includingBrowsed) }
     }
 
-    /// The row trash and "Remove Worktree…": remove the folder the sheet opened
-    /// on, or prune when the row is missing.
+    /// The row trash and "Remove Worktree…": remove the folder the sheet opened on.
     @discardableResult
     func perform(_ action: WorktreeStatus.TrashAction, deleteBranch: Bool) -> Task<Void, Never>? {
         switch action {
         case .remove(let entry): return remove([entry], deleteBranch: deleteBranch, includingBrowsed: true)
-        case .prune: return prune()
-        }
-    }
-
-    @discardableResult
-    func prune() -> Task<Void, Never>? {
-        guard let repo = app.selector.selectedRepo else { return nil }
-        guard !isWorking else {
-            app.setError("Couldn't forget missing worktrees: a removal is still running.")
-            return nil
-        }
-        isWorking = true
-        return Task {
-            do {
-                try await app.environment.git.pruneWorktrees(repoPath: repo.path)
-            } catch {
-                app.setError("Couldn't prune worktrees: \(WorktreeModel.describe(error))")
-            }
-            isWorking = false
-            await rescan(repo)
         }
     }
 

@@ -291,38 +291,19 @@ struct WorktreeGroupActionsTests {
         await first?.value
     }
 
-    @Test("a missing row is forgotten by pruning, and a row being rechecked has nothing to confirm yet")
+    @Test("a broken-link row offers a removal the prompt refuses, and a row being rechecked has nothing to confirm yet")
     func removalActions() async {
         let git = FakeGitClient()
-        let gone = Worktree(path: "/gone", branch: "gone", head: "abc")
+        let unlinked = Worktree(path: "/unlinked", branch: "unlinked", head: "abc")
         let moved = Worktree(path: "/moved", branch: "moved", head: "def")
-        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true), gone, moved]
-        var broken = merged("/gone", branch: "gone")
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true), unlinked, moved]
+        var broken = merged("/unlinked", branch: "unlinked")
         broken.isBroken = true
         let stub = RemovalStub(snapshot: snapshot([broken, merged("/moved", branch: "moved")]))
         let app = await app(git, stub: stub)
-        #expect(app.removalAction(for: gone) == .prune)
+        #expect(app.removalAction(for: unlinked) == .remove(broken))
+        #expect(!app.removalPrompt(for: unlinked).canRemove)
         #expect(app.removalAction(for: moved) == nil)
-    }
-
-    @Test("prune asks git to forget the missing folders, then rescans")
-    func prune() async {
-        let counter = DiscoveryCounter()
-        let git = FakeGitClient()
-        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
-        git.beforeWorktrees = { counter.bump() }
-        let stub = RemovalStub(snapshot: snapshot([]))
-        let app = await app(git, stub: stub)
-        let actions = WorktreeGroupActions(app: app, service: stub)
-        counter.reset()
-        await stub.resetScans()
-
-        await actions.prune()?.value
-
-        #expect(git.prunedRepos == ["/repo"])
-        #expect(counter.count == 1)
-        #expect(await stub.scans == 1)
-        #expect(!actions.isWorking)
     }
 
     @Test("the row trash removes a merged row, browsed or not, passing the branch choice through")
@@ -343,16 +324,6 @@ struct WorktreeGroupActionsTests {
         #expect(await stub.removed == ["/feature"])
         #expect(await stub.branchRequests == [true])
         #expect(app.errorMessage == "Removed feature, but kept its branch: it changed or Git refused to delete it.")
-    }
-
-    @Test("the trash on a missing row prunes")
-    func trashPrunesMissingRow() async {
-        let git = FakeGitClient()
-        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
-        let stub = RemovalStub(snapshot: snapshot([]))
-        let app = await app(git, stub: stub)
-        await WorktreeGroupActions(app: app, service: stub).perform(.prune, deleteBranch: true)?.value
-        #expect(git.prunedRepos == ["/repo"])
     }
 
     @Test("the extra merge target is remembered per repository and forgotten with it")

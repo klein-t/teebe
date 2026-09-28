@@ -17,8 +17,9 @@ struct WorktreeListPresentationTests {
         entry.hasLocalChanges = true
         #expect(status(entry).group == .localChanges)
         entry.hasLocalChanges = false
+        // A folder whose .git link is missing: Git can't check it.
         entry.isBroken = true
-        #expect(status(entry).group == .broken)
+        #expect(status(entry).group == .notMerged)
     }
 
     @Test("a status Git cannot confirm is not merged")
@@ -109,19 +110,17 @@ struct WorktreeListPresentationTests {
         #expect(WorktreeGroup.notMerged.explanation(targets: ["dev", "develop", "main"])
             == "Committed work not found in dev, develop or main yet, merged but kept for a reason the row's card gives, "
             + "or Git couldn't check.")
-        #expect(WorktreeGroup.broken.explanation(targets: [])
-            == "Git still lists these worktrees, but their folder or .git link is missing.")
         #expect(WorktreeGroup.notMerged.explanation(targets: []).contains("a merge target"))
     }
 
     @Test("groups read in a fixed order and their rows sort by branch name")
     func groupOrderAndRowSorting() {
         #expect(WorktreeGroup.allCases.map(\.title)
-            == ["Uncommitted changes", "Not merged", "Safe to delete", "Missing"])
+            == ["Uncommitted changes", "Not merged", "Safe to delete"])
         // The raw values back the persisted collapsed-group state: renaming the
         // titles must not silently reset a saved layout.
         #expect(Set(WorktreeGroup.allCases.map(\.rawValue))
-            == ["merged", "localChanges", "notMerged", "broken"])
+            == ["merged", "localChanges", "notMerged"])
         let zed = Worktree(path: "/one", branch: "zed")
         let alpha = Worktree(path: "/two", branch: "alpha")
         let unnamed = Worktree(path: "/mid")   // detached: falls back to the folder name
@@ -177,27 +176,23 @@ struct WorktreeListPresentationTests {
 
     @Test("a header that carries an action costs exactly what a plain header costs")
     func headerActionsDoNotChangeHeight() {
-        // Merged and Broken headers hold a button; Unmerged commits holds none. The window
-        // is sized from this number, so an action must not make its header taller.
+        // The Merged header holds a button; Not merged holds none. The window is
+        // sized from this number, so an action must not make its header taller.
         let merged = Worktree(path: "/merged", branch: "merged")
-        let broken = Worktree(path: "/broken", branch: "broken")
         let stale = Worktree(path: "/stale", branch: "stale")
         var mergedEntry = CleanupEntry(worktree: merged)
         mergedEntry.mergeStatus = .merged
-        var brokenEntry = CleanupEntry(worktree: broken)
-        brokenEntry.isBroken = true
         var staleEntry = CleanupEntry(worktree: stale)
         staleEntry.mergeStatus = .notConfirmed
         let list = WorktreeListPresentation(
-            worktrees: [merged, broken, stale],
-            statuses: [merged.path: status(mergedEntry), broken.path: status(brokenEntry),
-                      stale.path: status(staleEntry)],
+            worktrees: [merged, stale],
+            statuses: [merged.path: status(mergedEntry), stale.path: status(staleEntry)],
             grouped: true, collapsed: [], hasRepository: true)
-        #expect(list.groups.map(\.kind) == [.notMerged, .merged, .broken])
+        #expect(list.groups.map(\.kind) == [.notMerged, .merged])
         #expect(list.naturalHeight == WorktreeListPresentation.repoHeight
                 + WorktreeListPresentation.verticalPadding
-                + 3 * WorktreeListPresentation.rowHeight
-                + 3 * WorktreeListPresentation.groupHeight)
+                + 2 * WorktreeListPresentation.rowHeight
+                + 2 * WorktreeListPresentation.groupHeight)
     }
 
     @Test("the cursor steps out of a collapsed group instead of jumping to the top")

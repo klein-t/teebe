@@ -157,21 +157,26 @@ struct ProcessGitClientTests {
         #expect(!FileManager.default.fileExists(atPath: folder.path))
     }
 
-    @Test("prune drops a worktree whose folder is gone and keeps one that is still there")
-    func prune() async throws {
+    @Test("removing a worktree whose folder is gone forgets only its record and keeps the branch")
+    func removeMissingFolder() async throws {
         let fixture = try GitFixture()
         defer { fixture.cleanup() }
         fixture.commitFile("a.txt", "base")
         let gone = fixture.addWorktree(name: "gone", branch: "gone")
+        let alsoGone = fixture.addWorktree(name: "also-gone", branch: "also-gone")
         let kept = fixture.addWorktree(name: "kept", branch: "kept")
         try FileManager.default.removeItem(at: gone)
+        try FileManager.default.removeItem(at: alsoGone)
+        let listedGone = try #require(try await git.worktrees(repoPath: fixture.repoPath).first { $0.path.hasSuffix("/gone") })
 
-        try await git.pruneWorktrees(repoPath: fixture.repoPath)
+        try await git.removeWorktree(repoPath: fixture.repoPath, worktreePath: listedGone.path, force: false)
 
         let paths = try await git.worktrees(repoPath: fixture.repoPath).map(\.path)
         #expect(!paths.contains { $0.hasSuffix("/gone") })
+        #expect(paths.contains { $0.hasSuffix("/also-gone") })
         #expect(paths.contains { $0.hasSuffix("/kept") })
         #expect(FileManager.default.fileExists(atPath: kept.path))
+        #expect(fixture.git(["branch", "--list", "gone"]).contains("gone"))
     }
 
     @Test("fetching a repository with no origin fails without waiting on a prompt")

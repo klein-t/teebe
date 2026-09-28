@@ -29,7 +29,6 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     }
     private(set) var addedWorktrees: [AddedWorktree] = []
     private(set) var removedWorktrees: [(path: String, force: Bool)] = []
-    private(set) var prunedRepos: [String] = []
     private(set) var fetchedRepos: [String] = []
     private(set) var runInvocations: [[String]] = []
     private(set) var workingDiffStagedFlags: [Bool] = []
@@ -66,7 +65,6 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
         try throwIfNeeded(); removedWorktrees.append((worktreePath, force))
     }
 
-    func pruneWorktrees(repoPath: String) async throws { try throwIfNeeded(); prunedRepos.append(repoPath) }
     func fetchOrigin(repoPath: String) async throws { try throwIfNeeded(); fetchedRepos.append(repoPath) }
 
     @discardableResult
