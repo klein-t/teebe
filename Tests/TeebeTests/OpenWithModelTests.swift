@@ -7,11 +7,12 @@ import TeebeCore
 @MainActor
 private final class ChooserScript {
     var answers: [URL?]
-    private(set) var requests: [(file: URL?, typeKey: String, current: URL?)] = []
+    struct Request { let file: URL?; let typeKey: String; let current: URL? }
+    private(set) var requests: [Request] = []
     init(_ answers: [URL?]) { self.answers = answers }
     var choose: @MainActor (URL?, String, URL?) -> URL? {
         { [self] file, key, current in
-            requests.append((file, key, current))
+            requests.append(Request(file: file, typeKey: key, current: current))
             return answers.isEmpty ? nil : answers.removeFirst()
         }
     }
