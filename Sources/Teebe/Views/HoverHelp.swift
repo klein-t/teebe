@@ -96,6 +96,15 @@ final class HoverHelpView: NSView {
     /// even while another app is frontmost.
     static let trackingOptions: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
 
+    // AppKit can report visibleRect beyond bounds for an unclipped view. With
+    // inVisibleRect tracking, that makes neighboring rows share one hover area.
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        clipsToBounds = true
+    }
+
+    required init?(coder: NSCoder) { nil }
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -278,6 +287,15 @@ final class PointerHoverView: NSView {
     var onHover: (Bool) -> Void = { _ in }
     private var hovered = false
     private var hoverArea: NSTrackingArea?
+
+    // AppKit can report visibleRect beyond bounds for an unclipped view. With
+    // inVisibleRect tracking, that makes neighboring rows share one hover area.
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        clipsToBounds = true
+    }
+
+    required init?(coder: NSCoder) { nil }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
