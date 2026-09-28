@@ -3,12 +3,18 @@ import Foundation
 /// `GitClient` implementation that shells out to the system `git` via `Process`
 /// (TECH_SPEC §1). All typed methods route raw output through the pure parsers.
 public struct ProcessGitClient: GitClient {
-    /// Queue used to bridge blocking `Process` calls into async/await.
-    private let queue: DispatchQueue
+    /// Process waits and pipe reads both use dispatch workers. An unbounded burst
+    /// can occupy every worker with waits, starving the readers they depend on.
+    /// Share this limit across clients, so many worktrees cannot exhaust the pool.
+    private static let processQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "teebe.git"
+        queue.qualityOfService = .userInitiated
+        queue.maxConcurrentOperationCount = 8
+        return queue
+    }()
 
-    public init() {
-        self.queue = DispatchQueue(label: "teebe.git", qos: .userInitiated, attributes: .concurrent)
-    }
+    public init() {}
 
     // MARK: - Discovery
 
@@ -154,7 +160,7 @@ public struct ProcessGitClient: GitClient {
         let invocation = Invocation()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                queue.async {
+                Self.processQueue.addOperation {
                     do {
                         continuation.resume(returning: try Self.execute(
                             arguments, in: directory, as: invocation, extraEnvironment: extraEnvironment))
@@ -174,7 +180,7 @@ public struct ProcessGitClient: GitClient {
     @discardableResult
     private func runUninterrupted(_ arguments: [String], in directory: String) async throws -> GitInvocationResult {
         try await withCheckedThrowingContinuation { continuation in
-            queue.async {
+            Self.processQueue.addOperation {
                 do {
                     continuation.resume(returning: try Self.execute(arguments, in: directory, as: Invocation()))
                 } catch {

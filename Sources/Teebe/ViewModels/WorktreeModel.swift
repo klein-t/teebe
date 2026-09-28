@@ -78,6 +78,7 @@ final class WorktreeModel {
     /// can't stack a backlog of `git status` calls behind one slow refresh.
     private var isRefreshing = false
     private var refreshQueued = false
+    private var loadGeneration = 0
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -125,6 +126,7 @@ final class WorktreeModel {
     }
 
     func clear() {
+        loadGeneration += 1
         watcher?.stop()
         watcher = nil
         root = nil
@@ -142,6 +144,10 @@ final class WorktreeModel {
     // MARK: - Loading
 
     func load(worktreePath: String, repo: Repository?) async {
+        loadGeneration += 1
+        let generation = loadGeneration
+        watcher?.stop()
+        watcher = nil
         self.worktreePath = worktreePath
         self.repo = repo
         self.queue = repo.map { environment.makeQueue(repoPath: $0.path) }
@@ -153,9 +159,16 @@ final class WorktreeModel {
         errorMessage = nil
         isFolderMissing = false
         guard environment.folderExists(worktreePath) else { return markFolderMissing() }
-        self.ignoredPaths = Set((try? await environment.statusService.ignoredPaths(worktreePath: worktreePath)) ?? [])
+        // Ignored-file discovery can be slow in large checkouts. Publish changes
+        // as soon as status is ready; the Files tree follows with its ignore rules.
+        let service = environment.statusService
+        async let ignored = try? service.ignoredPaths(worktreePath: worktreePath)
+        await refresh(rebuildFiles: false)
+        let paths = await ignored
+        guard generation == loadGeneration, !isFolderMissing else { return }
+        ignoredPaths = Set(paths ?? [])
+        rebuildTree()
         startWatching(worktreePath)
-        await refresh()
     }
 
     private func resetContents() {
@@ -239,23 +252,24 @@ final class WorktreeModel {
     }
 
     /// Re-query status and rebuild the tree (called on watcher events).
-    func refresh() async {
+    func refresh(rebuildFiles: Bool = true) async {
         guard let worktreePath else { return }
+        let generation = loadGeneration
         guard environment.folderExists(worktreePath) else { return markFolderMissing() }
         do {
             let result = try await environment.statusService.status(worktreePath: worktreePath)
             // A newer selection may have landed while this read was in flight.
-            guard worktreePath == self.worktreePath else { return }
+            guard generation == loadGeneration, worktreePath == self.worktreePath else { return }
             status = result
             statusPath = worktreePath
             changes = result.changes
             errorMessage = nil
             isFolderMissing = false
         } catch GitError.workingDirectoryMissing {
-            guard worktreePath == self.worktreePath else { return }
+            guard generation == loadGeneration, worktreePath == self.worktreePath else { return }
             return markFolderMissing()
         } catch {
-            guard worktreePath == self.worktreePath else { return }
+            guard generation == loadGeneration, worktreePath == self.worktreePath else { return }
             // The first read of a new selection failed: never leave the previous
             // worktree's changes standing in for this one's.
             if statusPath != worktreePath {
@@ -265,8 +279,10 @@ final class WorktreeModel {
             }
             errorMessage = Self.describe(error)
         }
-        rebuildTree()
-        reloadExpandedChildren()
+        if rebuildFiles {
+            rebuildTree()
+            reloadExpandedChildren()
+        }
     }
 
     private func rebuildTree() {
