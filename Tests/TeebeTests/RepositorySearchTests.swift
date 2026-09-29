@@ -27,6 +27,36 @@ struct RepositorySearchTests {
         #expect(!model.isSearching)
     }
 
+    @Test func collapseAvailabilityFollowsVisibleExpandedFolders() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("parent/child"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data().write(to: dir.appendingPathComponent("parent/child/file.txt"))
+        let model = WorktreeModel(environment: makeTestEnvironment())
+        await model.load(worktreePath: dir.path, repo: Repository(path: dir.path))
+        #expect(!model.hasExpandedFolders)
+        let parent = try #require(model.visibleRows.first?.node)
+        model.toggleExpand(parent)
+        #expect(model.hasExpandedFolders)
+        let child = try #require(model.visibleRows.first { $0.node.name == "child" }?.node)
+        model.toggleExpand(child)
+        model.toggleExpand(parent)
+        #expect(model.expandedPaths.contains(child.path))
+        #expect(!model.hasExpandedFolders)
+        model.toggleExpand(parent)
+        #expect(model.hasExpandedFolders)
+        model.searchQuery = "file"
+        #expect(!model.hasExpandedFolders)
+        model.searchQuery = ""
+        #expect(model.hasExpandedFolders)
+        model.collapseAll()
+        #expect(!model.hasExpandedFolders)
+        model.toggleExpand(parent)
+        #expect(model.hasExpandedFolders)
+        model.clear()
+        #expect(!model.hasExpandedFolders)
+    }
+
     @Test func collapseAllRetainsTheVisibleAncestor() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir.appendingPathComponent("folder"), withIntermediateDirectories: true)
