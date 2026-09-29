@@ -28,8 +28,17 @@ final class WorktreeModel {
     /// drops it into the wrong group and jumps it back when the read arrives.
     private(set) var statusPath: String?
     private(set) var changes: [FileChange] = []
-    var filter: ChangeFilter = .all
-    var showIgnored = false { didSet { childrenCache.removeAll(); rebuildTree() } }
+    var filter: ChangeFilter = .all { didSet { if filter != oldValue { onFilePreferencesChange?() } } }
+    var showIgnored = false {
+        didSet {
+            guard showIgnored != oldValue else { return }
+            childrenCache.removeAll()
+            rebuildTree()
+            onFilePreferencesChange?()
+        }
+    }
+    /// Saves the existing file-filter preferences when their menu controls change.
+    var onFilePreferencesChange: (() -> Void)?
     var sortOrder: FileSortOrder = .name
     /// Live search query (filters the FILES tree by name).
     var searchQuery: String = ""
@@ -384,6 +393,16 @@ final class WorktreeModel {
     var selectedNode: FileNode? {
         guard let selectedPath else { return nil }
         return node(atPath: selectedPath)
+    }
+
+    /// Search activation must never act on a cursor hidden by the current query.
+    @discardableResult
+    func selectCurrentOrFirstVisibleFile() -> FileNode? {
+        let rows = visibleRows
+        guard let node = rows.first(where: { $0.node.path == selectedPath })?.node ?? rows.first?.node else { return nil }
+        selectionSource = .files
+        select(node.path)
+        return node
     }
 
     func selectNext() { moveSelection(by: 1) }

@@ -108,6 +108,9 @@ final class AppModel {
         // Deleted worktrees are never forgotten while a removal is running.
         self.selector.isRemovalRunning = { [weak self] in self?.groupActionsStorage?.isWorking == true }
         self.openWith.onChange = { [weak self] in self?.persist() }
+        self.selector.worktree.filter = self.state.showChangedOnly ? .changed : .all
+        self.selector.worktree.showIgnored = self.state.showIgnored
+        self.selector.worktree.onFilePreferencesChange = { [weak self] in self?.persist() }
     }
 
     /// Single entry point for the global error banner. Replaces any existing
@@ -306,7 +309,28 @@ final class AppModel {
     /// ⌘F: ask the FILES search field to take focus. The view observes this counter
     /// and focuses on change (a token rather than a bool so repeat presses re-fire).
     private(set) var searchFocusRequest = 0
-    func focusSearch() { searchFocusRequest += 1 }
+    func focusSearch() {
+        focusFiles()
+        searchFocusRequest += 1
+    }
+
+    /// Clicking search and invoking its shortcut share the same keyboard owner.
+    func focusFiles() {
+        activeSection = .files
+        selector.worktree.selectionSource = .files
+    }
+
+    @discardableResult
+    func focusFileResults() -> FileNode? {
+        focusFiles()
+        return selector.worktree.selectCurrentOrFirstVisibleFile()
+    }
+
+    /// Return in search opens only a visible result, or does nothing with no matches.
+    func activateSearchResult() {
+        guard let node = focusFileResults() else { return }
+        if node.isDirectory { selector.worktree.toggleExpand(node) } else { open(node) }
+    }
 
     func rename(_ node: FileNode) {
         guard let newName = promptForName(title: "Rename", initial: node.name), newName != node.name else { return }
@@ -475,6 +499,8 @@ final class AppModel {
     func persist() {
         guard !isHydrating else { return }
         state.repositories = repositories.map { PersistedRepository(path: $0.path) }
+        state.showChangedOnly = selector.worktree.filter == .changed
+        state.showIgnored = selector.worktree.showIgnored
         state.floatOnTop = floatOnTop
         state.showMergeStatus = groupWorktreesByMergeStatus
         state.worktreeSortOrder = worktreeSortOrder == .folder ? nil : worktreeSortOrder.rawValue

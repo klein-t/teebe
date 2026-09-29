@@ -57,20 +57,18 @@ struct FilesSection: View {
                             .padding(.horizontal, 11).padding(.vertical, 5)
                             .focused(searchFocused)
                             .onChange(of: app.searchFocusRequest) { _, _ in searchFocused.wrappedValue = true }
+                            .onChange(of: searchFocused.wrappedValue) { _, focused in
+                                if focused { app.focusFiles() }
+                            }
                             // ↓ drops focus into the results so the tree's arrow keys take over.
                             .onKeyPress(.downArrow) {
                                 searchFocused.wrappedValue = false
-                                if let first = worktree.visibleRows.first,
-                                   worktree.selectedPath == nil
-                                    || !worktree.visibleRows.contains(where: { $0.node.path == worktree.selectedPath }) {
-                                    worktree.select(first.node.path)
-                                }
+                                app.focusFileResults()
                                 return .handled
                             }
                             // Enter opens the current (or first) result without leaving the field.
                             .onKeyPress(.return) {
-                                guard let node = worktree.selectedNode ?? worktree.visibleRows.first?.node else { return .ignored }
-                                if node.isDirectory { worktree.toggleExpand(node) } else { app.open(node) }
+                                app.activateSearchResult()
                                 return .handled
                             }
                             // Esc clears the query first, then hands focus back to the tree.

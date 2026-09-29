@@ -252,10 +252,25 @@ struct RootView: View {
         .background { commandShortcuts }
         .focusable()
         .focusEffectDisabled()
-        .onKeyPress(.space) { handleSpace(); return .handled }
-        .onKeyPress(.escape) { preview.close(); dismissWindow(id: "preview"); return .handled }
+        .onKeyPress(.space) {
+            guard !searchFocused else { return .ignored }
+            handleSpace()
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            if searchFocused {
+                if worktree.searchQuery.isEmpty { searchFocused = false } else { worktree.searchQuery = "" }
+            } else {
+                preview.close()
+                dismissWindow(id: "preview")
+            }
+            return .handled
+        }
         .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { handleArrow($0) }
-        .onKeyPress(.return) { activateSelected(); return .handled }
+        .onKeyPress(.return) {
+            if searchFocused { app.activateSearchResult() } else { activateSelected() }
+            return .handled
+        }
         // Tab / ⇧Tab cycle the active section (stands down while typing in search).
         .onKeyPress(keys: [.tab]) { press in
             guard !searchFocused else { return .ignored }
@@ -729,6 +744,12 @@ struct RootView: View {
     /// move the keyboard cursor (Enter commits). CHANGES: move the selection and track
     /// the open diff peek. FILES: move/extend the cursor and ←/→ collapse-expand.
     private func handleArrow(_ press: KeyPress) -> KeyPress.Result {
+        if searchFocused {
+            guard press.key == .downArrow else { return .ignored }
+            searchFocused = false
+            app.focusFileResults()
+            return .handled
+        }
         let result: KeyPress.Result
         switch app.activeSection {
         case .worktrees: result = handleWorktreeArrow(press)
@@ -789,7 +810,10 @@ struct RootView: View {
     /// ⌘1/⌘2/⌘3: if the section is already active, toggle it open/closed; otherwise
     /// make it active (opening it and moving the selection in).
     private func focusOrToggle(_ section: AppModel.FocusSection) {
-        if app.activeSection == section {
+        if searchFocused {
+            searchFocused = false
+            activate(section)
+        } else if app.activeSection == section {
             setOpen(rootSection(section), !sectionIsOpen(section))
         } else {
             activate(section)
@@ -846,22 +870,24 @@ struct RootView: View {
         Task { await preview.update(for: node, worktreePath: wt) }
     }
 
-    /// Hidden buttons that register the command-key shortcuts window-wide. Disabled
-    /// while the search field is focused so ⌘A / ⌘⌫ keep editing the query text there.
+    /// Navigation stays available during search. File actions stand down while
+    /// editing, so ⌘A / ⌘⌫ keep acting on the query text.
     private var commandShortcuts: some View {
         Group {
             Button("") { focusOrToggle(.worktrees) }.keyboardShortcut("1", modifiers: .command)
             Button("") { focusOrToggle(.changes) }.keyboardShortcut("2", modifiers: .command)
             Button("") { focusOrToggle(.files) }.keyboardShortcut("3", modifiers: .command)
             Button("") { focusSearch() }.keyboardShortcut("f", modifiers: .command)
-            Button("") { if app.activeSection == .files { worktree.selectAllVisible() } }.keyboardShortcut("a", modifiers: .command)
-            Button("") { copyRefs() }.keyboardShortcut("c", modifiers: [.command, .shift])
-            Button("") { trashSelection() }.keyboardShortcut(.delete, modifiers: .command)
+            Group {
+                Button("") { if app.activeSection == .files { worktree.selectAllVisible() } }.keyboardShortcut("a", modifiers: .command)
+                Button("") { copyRefs() }.keyboardShortcut("c", modifiers: [.command, .shift])
+                Button("") { trashSelection() }.keyboardShortcut(.delete, modifiers: .command)
+            }
+            .disabled(searchFocused)
         }
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
-        .disabled(searchFocused)
     }
 
     /// ⌘F: open FILES if needed and hand focus to its search field.
