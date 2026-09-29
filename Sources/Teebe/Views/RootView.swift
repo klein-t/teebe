@@ -14,6 +14,8 @@ final class GeometryTestHooks {
     var setWorktreesOpen: ((Bool) -> Void)?
     var setChangesOpen: ((Bool) -> Void)?
     var setFilesOpen: ((Bool) -> Void)?
+    var focusSearch: (() -> Void)?
+    var leaveSearch: (() -> Void)?
     /// One step of a WORKTREES/CHANGES divider drag, as the handle's gesture reports it.
     var dragWorktreesDivider: ((CGFloat) -> Void)?
     var dragChangesDivider: ((CGFloat) -> Void)?
@@ -74,6 +76,7 @@ struct RootView: View {
     /// Focus of the FILES search field, lifted here so ⌘F can drive it and the
     /// command-key shortcuts can stand down while the user is typing in it.
     @FocusState private var searchFocused: Bool
+    @FocusState private var listFocused: Bool
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
 
@@ -251,7 +254,11 @@ struct RootView: View {
         #endif
         .background { commandShortcuts }
         .focusable()
+        .focused($listFocused)
         .focusEffectDisabled()
+        .onChange(of: searchFocused) { _, focused in
+            if !focused { listFocused = true }
+        }
         .onKeyPress(.space) {
             guard !searchFocused else { return .ignored }
             handleSpace()
@@ -669,6 +676,8 @@ struct RootView: View {
         hooks.setWorktreesOpen = { setOpen(.worktrees, $0) }
         hooks.setChangesOpen = { setOpen(.changes, $0) }
         hooks.setFilesOpen = { setOpen(.files, $0) }
+        hooks.focusSearch = focusSearch
+        hooks.leaveSearch = { searchFocused = false; app.focusFileResults() }
         hooks.dragWorktreesDivider = resizeWorktrees
         hooks.dragChangesDivider = resizeChanges
         hooks.endDividerDrag = endDividerDrag
@@ -830,6 +839,7 @@ struct RootView: View {
     /// Make `section` the active one: open it if collapsed, and seat the selection
     /// (the open worktree for WORKTREES, the current/first change, or a file cursor).
     private func activate(_ section: AppModel.FocusSection) {
+        listFocused = true
         app.activeSection = section
         if !sectionIsOpen(section) { setOpen(rootSection(section), true) }
         switch section {
@@ -892,6 +902,7 @@ struct RootView: View {
 
     /// ⌘F: open FILES if needed and hand focus to its search field.
     private func focusSearch() {
+        listFocused = false
         if !openFiles { setOpen(.files, true) }
         app.focusSearch()
     }
