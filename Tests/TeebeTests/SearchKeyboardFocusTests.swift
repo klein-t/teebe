@@ -33,5 +33,12 @@ struct SearchKeyboardFocusTests {
         #expect(window.firstResponder !== window)
         #expect((window.firstResponder as? NSTextView)?.isFieldEditor != true)
         #expect(app.activeSection == .files)
+        hooks.focusSearch?()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect((window.firstResponder as? NSTextView)?.isFieldEditor == true)
+        hooks.focusSection?(.worktrees)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(app.activeSection == .worktrees)
+        #expect((window.firstResponder as? NSTextView)?.isFieldEditor != true)
     }
 }

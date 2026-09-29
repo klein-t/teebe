@@ -16,6 +16,7 @@ final class GeometryTestHooks {
     var setFilesOpen: ((Bool) -> Void)?
     var focusSearch: (() -> Void)?
     var leaveSearch: (() -> Void)?
+    var focusSection: ((AppModel.FocusSection) -> Void)?
     /// One step of a WORKTREES/CHANGES divider drag, as the handle's gesture reports it.
     var dragWorktreesDivider: ((CGFloat) -> Void)?
     var dragChangesDivider: ((CGFloat) -> Void)?
@@ -677,6 +678,7 @@ struct RootView: View {
         hooks.setChangesOpen = { setOpen(.changes, $0) }
         hooks.setFilesOpen = { setOpen(.files, $0) }
         hooks.focusSearch = focusSearch
+        hooks.focusSection = focusOrToggle
         hooks.leaveSearch = { searchFocused = false; app.focusFileResults() }
         hooks.dragWorktreesDivider = resizeWorktrees
         hooks.dragChangesDivider = resizeChanges
