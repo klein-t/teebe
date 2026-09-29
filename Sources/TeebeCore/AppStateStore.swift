@@ -88,6 +88,8 @@ public struct AppState: Codable, Equatable, Sendable {
     public var defaultFileApp: String?
     public var openWithAppsByRepo: [String: [String: String]]?
     public var terminalApp: String?
+    public var agentNotifications: Bool?
+    public var notificationSound: Bool?
 
     public init(
         repositories: [PersistedRepository] = [],

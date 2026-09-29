@@ -66,6 +66,7 @@ final class SelectorModel {
     var onSelectionChange: (() -> Void)?
     var onRepositoryChange: (() -> Void)?
     private(set) var isLoading = false
+    var notificationsEnabled = true
 
     private let environment: AppEnvironment
     /// Watches the selected repo's git dir so an external `git worktree add`/`remove`
@@ -478,6 +479,7 @@ final class SelectorModel {
     /// stalled). A session discovered already-finished stays silent, so app
     /// launch never replays old sessions as notifications.
     private func notifyAgentTransitions(from old: [String: WorktreeInfo], to new: [String: WorktreeInfo]) {
+        guard notificationsEnabled else { return }
         for worktree in worktrees {
             guard old[worktree.path]?.agentState == .working,
                   new[worktree.path]?.agentState == .needsAttention else { continue }
@@ -581,7 +583,10 @@ final class SelectorModel {
     /// every write belongs to another project's sessions (which the scan never
     /// reads): Claude Code sessions elsewhere log continuously.
     func handleAgentWatchEvent(_ paths: [String]) async {
-        if let root = environment.agentProjectsRootPath,
+        let otherAgentChanged = paths.contains { path in
+            environment.agentExtraWatchPaths.contains { root in path == root || path.hasPrefix(root + "/") }
+        }
+        if !otherAgentChanged, let root = environment.agentProjectsRootPath,
            !AgentSessionScanner.eventsMatter(paths, projectsRoot: root, worktreePaths: worktrees.map(\.path)) {
             return
         }

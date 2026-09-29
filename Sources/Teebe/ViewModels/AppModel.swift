@@ -45,6 +45,12 @@ final class AppModel {
     /// Light / dark override, or follow the system. Applied app-wide via `NSApp.appearance`.
     var appearance: AppearanceMode { didSet { appearance.apply(); persist() } }
     var terminal: TerminalChoice { didSet { persist() } }
+    var agentNotifications: Bool { didSet { selector.notificationsEnabled = agentNotifications; persist() } }
+    var notificationSound: Bool { didSet { AgentNotifier.soundEnabled = notificationSound; persist() } }
+    private(set) var hookInstalled = false
+    private(set) var hooksDisabled = false
+    private(set) var hookMessage: String?
+    private(set) var notificationTestMessage: String?
     private(set) var isFetching = false
     private(set) var fetchError: String?
     private(set) var errorMessage: String?
@@ -113,6 +119,10 @@ final class AppModel {
         self.floatOnTop = false
         self.appearance = .system
         self.terminal = TerminalChoice(rawValue: self.state.terminalApp ?? "") ?? .terminal
+        self.agentNotifications = self.state.agentNotifications ?? true
+        self.notificationSound = self.state.notificationSound ?? true
+        self.selector.notificationsEnabled = self.agentNotifications
+        AgentNotifier.soundEnabled = self.notificationSound
         // Persist whenever the selection changes, and clear any stale global error —
         // navigating to a different repo/worktree should dismiss the banner.
         self.selector.onSelectionChange = { [weak self] in
@@ -217,6 +227,31 @@ final class AppModel {
         }
     }
 
+    func refreshHookStatus() {
+        hookInstalled = ClaudeHookInstaller.isInstalled()
+        hooksDisabled = ClaudeHookInstaller.hooksDisabled()
+    }
+
+    func installClaudeHook() {
+        do {
+            _ = try ClaudeHookInstaller.install()
+            state.hookOfferResponse = "accepted"
+            refreshHookStatus()
+            hookMessage = hooksDisabled
+                ? "Installed, but Claude Code has all hooks disabled. Enable hooks there to receive instant updates."
+                : "Installed. Restart existing Claude Code sessions to load the hook."
+            persist()
+        } catch { hookMessage = "Couldn’t update Claude Code settings. Existing settings were kept." }
+        refreshHookStatus()
+    }
+
+    func testNotification() {
+        notificationTestMessage = "Sending…"
+        AgentNotifier.post(title: "Teebe test", body: "Agent notifications can reach this Mac.") { [weak self] result in
+            self?.notificationTestMessage = result
+        }
+    }
+
     /// Launch-time hook setup: offer once, then keep the user's choice. An
     /// accepted hook that later disappears (settings rewritten by another tool)
     /// is repaired without asking again.
@@ -228,16 +263,15 @@ final class AppModel {
         case .none:
             return
         case .repair:
-            try? ClaudeHookInstaller.install()
+            installClaudeHook()
         case .ask:
             let alert = NSAlert()
             alert.messageText = "Notify instantly, use less battery?"
             alert.informativeText = """
-            teebe can add a tiny hook to Claude Code (~/.claude/settings.json) that \
-            pings it the moment an agent finishes. With the hook, teebe stops all \
-            background file watching while its window is covered — near-zero CPU — \
-            and "agent needs you" notifications become instant. The hook is one \
-            `notifyutil` command; it sends no data anywhere.
+            Add a local signal to Claude Code so Teebe checks its status promptly, \
+            even while hidden. This optional hook is for Claude Code only. Codex \
+            activity is also detected, with checks up to two minutes apart while hidden. \
+            No session content is sent anywhere. You can install or repair the hook later in Settings.
             """
             alert.addButton(withTitle: "Add Hook")
             alert.addButton(withTitle: "No Thanks")
@@ -245,8 +279,7 @@ final class AppModel {
             state.hookOfferResponse = accepted ? "accepted" : "declined"
             try? environment.store.save(state)
             if accepted {
-                do { try ClaudeHookInstaller.install() }
-                catch { setError("Couldn't update ~/.claude/settings.json — hook not added.") }
+                do { try ClaudeHookInstaller.install() } catch { setError("Couldn't update ~/.claude/settings.json — hook not added.") }
             }
         }
     }
@@ -588,6 +621,8 @@ final class AppModel {
         state.deleteBranchOnRemove = deleteBranchOnRemove
         state.appearance = appearance == .system ? nil : appearance.rawValue
         state.terminalApp = terminal.rawValue
+        state.agentNotifications = agentNotifications
+        state.notificationSound = notificationSound
         state.openWithApps = openWith.apps.isEmpty ? nil : openWith.apps
         state.openWithAppsByRepo = openWith.projectApps
         state.openWithPolicy = openWith.policy.rawValue

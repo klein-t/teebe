@@ -47,6 +47,7 @@ struct SettingsView: View {
         .frame(width: 480, height: 480)
         .onAppear {
             comparison = app.preferences.defaults.comparisonRef ?? ""
+            app.refreshHookStatus()
         }
     }
 
@@ -165,6 +166,32 @@ struct SettingsView: View {
                 if app.terminal == .cmux {
                     Text("Opens a workspace in cmux. Keep cmux running.").font(Typography.secondary).foregroundStyle(.secondary)
                 }
+            }
+            Section("Agent notifications") {
+                Toggle("Notify when an agent needs you", isOn: $app.agentNotifications)
+                Toggle("Play a sound", isOn: $app.notificationSound).disabled(!app.agentNotifications)
+                HStack {
+                    Button("Test Notification") { app.testNotification() }.disabled(!app.agentNotifications)
+                    Button("Notification Settings…") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
+                if let message = app.notificationTestMessage { Text(message).font(Typography.secondary).foregroundStyle(.secondary) }
+            }
+            Section("Agent activity") {
+                Text("Claude Code and Codex: status detection. Other tools: file and process activity.")
+                    .font(Typography.secondary).foregroundStyle(.secondary)
+                HStack {
+                    Text("Claude Code instant-update hook")
+                    Spacer()
+                    Text(app.hooksDisabled ? "Disabled in Claude Code" : (app.hookInstalled ? "Installed" : "Not installed")).foregroundStyle(.secondary)
+                }
+                Button(app.hookInstalled ? "Check / Repair Hook" : "Install Hook") { app.installClaudeHook() }
+                Text(app.hookMessage ?? "The optional hook is Claude Code only. Codex checks can take up to two minutes while Teebe is hidden.")
+                    .font(Typography.secondary).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }.formStyle(.grouped)
     }
