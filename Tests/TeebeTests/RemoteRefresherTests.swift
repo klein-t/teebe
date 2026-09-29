@@ -45,8 +45,10 @@ struct RemoteRefresherTests {
         await app.refreshRemotes(force: false, now: start.addingTimeInterval(600))
         #expect(git.fetchedRepos.count == 3)
         // Manual refresh does not turn background fetching back on.
-        #expect(AppModel(environment: makeTestEnvironment(git: git, store: app.environment.store))
-            .fetchAutomatically == false)
+        let restored = AppModel(environment: makeTestEnvironment(git: git, store: app.environment.store))
+        await restored.selector.selectRepo(Repository(path: "/repo"))
+        #expect(!restored.fetchAutomatically)
+        #expect(restored.preferences.defaults.fetchAutomatically == true)
     }
 
     @Test("a remote that cannot be reached is silent, and does not block the next window")

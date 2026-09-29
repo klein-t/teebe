@@ -19,14 +19,23 @@ final class OpenWithModel {
 
     /// Type key (`FileTypeKey`) → the chosen app's path.
     private(set) var apps: [String: String]
+    private(set) var projectApps: [String: [String: String]] = [:]
+    var repositoryPath: String?
+    enum Policy: String, CaseIterable { case system, application, ask }
+    var policy: Policy = .system { didSet { onChange() } }
+    var defaultApp: String? { didSet { onChange() } }
     /// Called after every change so the owner can persist `apps`.
     @ObservationIgnored var onChange: () -> Void = {}
 
     private let environment: AppEnvironment
 
-    init(environment: AppEnvironment, apps: [String: String]) {
+    init(environment: AppEnvironment, apps: [String: String], projectApps: [String: [String: String]] = [:],
+         policy: Policy = .system, defaultApp: String? = nil) {
         self.environment = environment
         self.apps = apps
+        self.projectApps = projectApps
+        self.policy = policy
+        self.defaultApp = defaultApp
     }
 
     /// Remembered types, alphabetical by how they read.
@@ -37,7 +46,8 @@ final class OpenWithModel {
 
     /// The remembered app for `file`'s type, if it is still installed.
     func rememberedApp(for file: URL) -> URL? {
-        guard let path = apps[FileTypeKey.key(forFileName: file.lastPathComponent)] else { return nil }
+        let key = FileTypeKey.key(forFileName: file.lastPathComponent)
+        guard let path = repositoryPath.flatMap({ projectApps[$0]?[key] }) ?? apps[key] else { return nil }
         let url = URL(fileURLWithPath: path)
         return environment.appExists(url) ? url : nil
     }
@@ -50,7 +60,18 @@ final class OpenWithModel {
             try environment.opener.open(file, withApplicationAt: app)
             return true
         }
-        return try chooseAndOpen(file)
+        switch policy {
+        case .system:
+            try environment.opener.open(file)
+            return true
+        case .application:
+            if let defaultApp, environment.appExists(URL(fileURLWithPath: defaultApp)) {
+                try environment.opener.open(file, withApplicationAt: URL(fileURLWithPath: defaultApp))
+                return true
+            }
+            return try chooseAndOpen(file)
+        case .ask: return try chooseAndOpen(file)
+        }
     }
 
     /// Open With…: always ask, then remember the choice for the type.
@@ -58,7 +79,10 @@ final class OpenWithModel {
     func chooseAndOpen(_ file: URL) throws -> Bool {
         let key = FileTypeKey.key(forFileName: file.lastPathComponent)
         guard let app = environment.chooseApp(file, key, rememberedApp(for: file)) else { return false }
-        remember(app, forType: key)
+        if let repositoryPath {
+            projectApps[repositoryPath, default: [:]][key] = app.path
+            onChange()
+        } else { remember(app, forType: key) }
         try environment.opener.open(file, withApplicationAt: app)
         return true
     }
@@ -69,6 +93,31 @@ final class OpenWithModel {
         guard let app = environment.chooseApp(nil, key, current) else { return }
         remember(app, forType: key)
     }
+
+    func chooseDefaultApp() {
+        guard let chosen = environment.chooseApp(nil, "", defaultApp.map { URL(fileURLWithPath: $0) }) else { return }
+        defaultApp = chosen.path
+        policy = .application
+    }
+
+    func addType(_ raw: String) {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        let key = value.hasPrefix(".") ? value.lowercased() : FileTypeKey.key(forFileName: value)
+        changeApp(forType: key)
+    }
+
+    func hasProjectOverride(for file: URL) -> Bool {
+        repositoryPath.flatMap { projectApps[$0]?[FileTypeKey.key(forFileName: file.lastPathComponent)] } != nil
+    }
+
+    func resetProjectOverride(for file: URL) {
+        guard let repositoryPath else { return }
+        projectApps[repositoryPath]?[FileTypeKey.key(forFileName: file.lastPathComponent)] = nil
+        onChange()
+    }
+
+    func removeProject(_ path: String) { projectApps[path] = nil; onChange() }
 
     func forget(type key: String) {
         apps[key] = nil

@@ -71,7 +71,7 @@ public struct AppState: Codable, Equatable, Sendable {
     /// state files decode; nil means the default (on).
     public var fetchAutomatically: Bool?
     /// The removal confirmation's "Also delete the branch" choice, remembered
-    /// across sessions. Optional so older state files decode; nil means on.
+    /// across sessions. Optional so older state files decode; nil means off.
     public var deleteBranchOnRemove: Bool?
     /// The folder last chosen for new worktrees, keyed by repository path.
     /// Optional so older state files decode; a missing entry means no choice yet.
@@ -82,6 +82,12 @@ public struct AppState: Codable, Equatable, Sendable {
     /// How the worktree list is ordered ("status", "name"). Optional so older state
     /// files decode; nil means the default (by folder).
     public var worktreeSortOrder: String?
+    public var defaultPreferences: ProjectPreferences?
+    public var projectPreferences: [String: ProjectPreferences]?
+    public var openWithPolicy: String?
+    public var defaultFileApp: String?
+    public var openWithAppsByRepo: [String: [String: String]]?
+    public var terminalApp: String?
 
     public init(
         repositories: [PersistedRepository] = [],

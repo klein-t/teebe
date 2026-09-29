@@ -35,7 +35,10 @@ struct AppModelTests {
         #expect(!app.groupWorktreesByMergeStatus)
         app.groupWorktreesByMergeStatus = true
         app.floatOnTop = true
-        #expect(AppModel(environment: env).groupWorktreesByMergeStatus)
+        let restored = AppModel(environment: env)
+        await restored.bootstrap()
+        #expect(restored.groupWorktreesByMergeStatus)
+        #expect(restored.preferences.defaults.groupByStatus == false)
         await app.selector.selectRepo(Repository(path: "/b"))
         #expect(app.recentRepositories.first?.path == "/b")
         #expect(app.repositories.count == 2)

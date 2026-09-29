@@ -42,6 +42,10 @@ struct FilesSection: View {
                             Text("Recently changed").tag(FileSortOrder.recent)
                         }
                         Toggle("Show ignored", isOn: $worktree.showIgnored)
+                        Divider()
+                        Text("Applies to this project")
+                        Button("Use Global Defaults") { app.preferences.reset() }
+                            .disabled(!app.preferences.hasOverrides)
                     } label: {
                         Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Palette.secondaryText).hoverChip()
@@ -443,6 +447,11 @@ struct FileContextMenu: View {
         } else {
             Button("Open") { app.open(node) }
             Button("Open With…") { app.openWith(node) }
+            if app.openWith.hasProjectOverride(for: URL(fileURLWithPath: node.path)) {
+                Button("Use Default App for This Type") {
+                    app.openWith.resetProjectOverride(for: URL(fileURLWithPath: node.path))
+                }
+            }
         }
         Button("Reveal in Finder") { app.reveal(node) }
         if !node.isDirectory {

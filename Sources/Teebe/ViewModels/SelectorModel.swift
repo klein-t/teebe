@@ -64,6 +64,7 @@ final class SelectorModel {
     /// Invoked whenever the selected repo/worktree changes, so the owner can persist
     /// the new selection (drives "reopen where I left off").
     var onSelectionChange: (() -> Void)?
+    var onRepositoryChange: (() -> Void)?
     private(set) var isLoading = false
 
     private let environment: AppEnvironment
@@ -190,6 +191,7 @@ final class SelectorModel {
         stopAgentWatching()
         stopWorktreeActivity()
         selectedRepo = nil
+        onRepositoryChange?()
         worktrees = []
         selectedWorktree = nil
         branches = []
@@ -210,6 +212,7 @@ final class SelectorModel {
             forgetAttempts.removeAll()
         }
         selectedRepo = repo
+        onRepositoryChange?()
         await startRepoWatching(repo)
         startAgentWatching()
         var deleted: [Worktree] = []
