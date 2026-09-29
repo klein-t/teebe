@@ -28,20 +28,26 @@ final class WorktreeModel {
     /// drops it into the wrong group and jumps it back when the read arrives.
     private(set) var statusPath: String?
     private(set) var changes: [FileChange] = []
-    var filter: ChangeFilter = .all { didSet { if filter != oldValue { onFilePreferencesChange?() } } }
+    var filter: ChangeFilter = .all { didSet { if filter != oldValue { scheduleSearch(); onFilePreferencesChange?() } } }
     var showIgnored = false {
         didSet {
             guard showIgnored != oldValue else { return }
             childrenCache.removeAll()
             rebuildTree()
+            scheduleSearch()
             onFilePreferencesChange?()
         }
     }
     /// Saves the existing file-filter preferences when their menu controls change.
     var onFilePreferencesChange: (() -> Void)?
-    var sortOrder: FileSortOrder = .name
+    var sortOrder: FileSortOrder = .name { didSet { if sortOrder != oldValue { onFilePreferencesChange?() } } }
     /// Live search query (filters the FILES tree by name).
-    var searchQuery: String = ""
+    var searchQuery: String = "" { didSet { if searchQuery != oldValue { scheduleSearch() } } }
+    private(set) var isSearching = false
+    private(set) var isLoading = false
+    private var searchResults: [FileNode]?
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    private var searchGeneration = 0
     /// Currently selected row path (drives the spacebar preview).
     var selectedPath: String?
     /// Which list the current selection came from — decides what space previews:
@@ -135,6 +141,11 @@ final class WorktreeModel {
     }
 
     func clear() {
+        searchTask?.cancel()
+        searchGeneration += 1
+        searchResults = nil
+        isSearching = false
+        isLoading = false
         loadGeneration += 1
         watcher?.stop()
         watcher = nil
@@ -155,6 +166,11 @@ final class WorktreeModel {
     func load(worktreePath: String, repo: Repository?) async {
         loadGeneration += 1
         let generation = loadGeneration
+        isLoading = true
+        searchTask?.cancel()
+        searchGeneration += 1
+        searchResults = nil
+        defer { if generation == loadGeneration { isLoading = false; scheduleSearch() } }
         watcher?.stop()
         watcher = nil
         self.worktreePath = worktreePath
@@ -296,6 +312,7 @@ final class WorktreeModel {
             ignoredPaths = Set(paths ?? [])
             rebuildTree()
             reloadExpandedChildren()
+            scheduleSearch()
         }
     }
 
@@ -314,6 +331,45 @@ final class WorktreeModel {
     }
 
     func isExpanded(_ node: FileNode) -> Bool { expandedPaths.contains(node.path) }
+
+    func collapseAll() {
+        expandedPaths.removeAll()
+        // Keep the cursor on a visible ancestor after its child disappears.
+        guard searchQuery.isEmpty, let selectedPath, let worktreePath else { return }
+        let rootPath = PathUtil.standardized(worktreePath)
+        let first = PathUtil.relativePath(of: selectedPath, under: rootPath).split(separator: "/").first
+        if let first { select(rootPath + "/" + first) }
+    }
+
+    func relativePath(of node: FileNode) -> String {
+        worktreePath.map { PathUtil.relativePath(of: node.path, under: PathUtil.standardized($0)) } ?? node.path
+    }
+
+    /// The task owns a cancellable background scan, not a growing chain of scans
+    /// for every keystroke. Query and worktree generations reject stale results.
+    private func scheduleSearch() {
+        searchTask?.cancel()
+        searchGeneration += 1
+        searchResults = nil
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard filter == .all, !query.isEmpty, let path = worktreePath, !isLoading else { isSearching = false; return }
+        isSearching = true
+        let generation = searchGeneration
+        let builder = makeBuilder(rootPath: path)
+        searchTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(120))
+                let scan = Task.detached(priority: .userInitiated) { try builder.search(query) }
+                let nodes = try await withTaskCancellationHandler { try await scan.value } onCancel: { scan.cancel() }
+                guard let self, !Task.isCancelled, generation == self.searchGeneration else { return }
+                self.searchResults = nodes
+                self.isSearching = false
+            } catch {
+                guard let self, generation == self.searchGeneration else { return }
+                self.isSearching = false
+            }
+        }
+    }
 
     /// Toggle a directory's expansion, loading its children on first expand.
     func toggleExpand(_ node: FileNode) {
@@ -351,6 +407,14 @@ final class WorktreeModel {
         guard let root = displayRoot else { return [] }
         let query = searchQuery.trimmingCharacters(in: .whitespaces).lowercased()
         var rows: [TreeRow] = []
+        if !query.isEmpty, filter == .all, let searchResults, let worktreePath {
+            let byPath = Dictionary(changes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+            return sortNodes(searchResults).map { node in
+                var node = node
+                node.change = byPath[PathUtil.relativePath(of: node.path, under: PathUtil.standardized(worktreePath))]
+                return TreeRow(node: node, depth: 0)
+            }
+        }
 
         func childrenSorted(_ node: FileNode) -> [FileNode] {
             let kids = node.children ?? childrenCache[node.path] ?? []
@@ -370,7 +434,7 @@ final class WorktreeModel {
         } else {
             func collect(_ node: FileNode) {
                 for child in childrenSorted(node) {
-                    if !child.isDirectory, child.name.lowercased().contains(query) {
+                    if !child.isDirectory, relativePath(of: child).lowercased().contains(query) {
                         rows.append(TreeRow(node: child, depth: 0))
                     }
                     if child.isDirectory { collect(child) }

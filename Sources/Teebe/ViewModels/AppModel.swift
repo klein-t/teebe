@@ -292,9 +292,23 @@ final class AppModel {
         }
     }
 
-    func copyPath(_ node: FileNode) {
+    private(set) var quickLookRequest: (path: String, count: Int)?
+
+    func requestQuickLook(_ node: FileNode) {
+        guard !node.isDirectory else { return }
+        quickLookRequest = (node.path, (quickLookRequest?.count ?? 0) + 1)
+    }
+
+    func copyPath(_ node: FileNode, relative: Bool = false) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(node.path, forType: .string)
+        NSPasteboard.general.setString(relative ? selector.worktree.relativePath(of: node) : node.path, forType: .string)
+    }
+
+    func copySelectedPaths() {
+        let paths = selector.worktree.orderedSelection()
+        guard activeSection == .files, !paths.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
     }
 
     /// ⌘⇧C: copy the FILES selection to the clipboard as Claude-ready `@`-refs, ready

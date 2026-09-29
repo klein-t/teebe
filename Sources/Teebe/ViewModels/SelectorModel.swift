@@ -64,6 +64,7 @@ final class SelectorModel {
     /// Invoked whenever the selected repo/worktree changes, so the owner can persist
     /// the new selection (drives "reopen where I left off").
     var onSelectionChange: (() -> Void)?
+    private(set) var isLoading = false
 
     private let environment: AppEnvironment
     /// Watches the selected repo's git dir so an external `git worktree add`/`remove`
@@ -202,6 +203,8 @@ final class SelectorModel {
     /// primary-then-saved double load: two full tree loads inside the window's
     /// first layout pass escalate into an AppKit constraint-loop crash at launch.
     func selectRepo(_ repo: Repository, preferredWorktreePath: String? = nil) async {
+        isLoading = true
+        defer { isLoading = false }
         if selectedRepo?.path != repo.path {
             cleanedUpCount = 0
             forgetAttempts.removeAll()

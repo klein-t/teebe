@@ -197,7 +197,7 @@ struct WorktreesSection: View {
                 }
             }
             if selector.worktrees.isEmpty {
-                Text(app.repositories.isEmpty ? "No repository added" : "No worktrees")
+                Text(app.repositories.isEmpty ? "No repository added" : selector.isLoading ? "Loading worktrees…" : "No worktrees")
                     .font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 25).padding(.vertical, 5)
@@ -348,9 +348,8 @@ struct WorktreesSection: View {
                 // No mark to hover: the slot stays so names line up.
                 Color.clear.frame(width: 22, height: WorktreeListPresentation.rowHeight)
             }
-            Text(worktree.branch ?? worktree.name)
+            HoverScrollingText(text: worktree.branch ?? worktree.name)
                 .font(Typography.rowName)
-                .lineLimit(1).truncationMode(.middle)
                 .padding(.leading, 2)
                 // Without a mark or an info icon there is no card to hover; the text is still read out.
                 .accessibilityHint(status.hasHoverCard(grouped: grouped) || status.showsInfoIcon(grouped: grouped) ? "" : summary)

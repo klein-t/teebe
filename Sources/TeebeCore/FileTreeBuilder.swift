@@ -76,6 +76,37 @@ public struct FileTreeBuilder: Sendable {
         return Self.sorted(nodes)
     }
 
+    /// Search every directory without expanding the visible tree. Run off the UI
+    /// thread; cancellation is checked between entries. Never follow directory
+    /// symlinks or descend into Git metadata or excluded ignored directories.
+    public func search(_ query: String) throws -> [FileNode] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey]
+        guard let entries = FileManager.default.enumerator(at: URL(fileURLWithPath: rootPath),
+                includingPropertiesForKeys: keys, errorHandler: { _, _ in true }) else { return [] }
+        var matches: [FileNode] = []
+        for case let url as URL in entries {
+            try Task.checkCancellation()
+            let values = try? url.resourceValues(forKeys: Set(keys))
+            let directory = values?.isDirectory == true
+            let relative = relativePath(of: url.path)
+            if url.lastPathComponent == ".git"
+                || (!options.showHidden && url.lastPathComponent.hasPrefix("."))
+                || (!options.showIgnored && isIgnored(relative)) {
+                if directory { entries.skipDescendants() }
+                continue
+            }
+            if directory {
+                if values?.isSymbolicLink == true { entries.skipDescendants() }
+                continue
+            }
+            guard relative.localizedCaseInsensitiveContains(query) else { continue }
+            matches.append(FileNode(path: url.path, isDirectory: false, modifiedAt: values?.contentModificationDate))
+        }
+        return matches.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+    }
+
     /// Directories first, then files; case-insensitive name order (Finder-like).
     static func sorted(_ nodes: [FileNode]) -> [FileNode] {
         nodes.sorted { lhs, rhs in

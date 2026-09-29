@@ -254,6 +254,12 @@ struct RootView: View {
         .onAppear { installTestHooks() }
         #endif
         .background { commandShortcuts }
+        .focusedSceneValue(\.mainWindowActions, MainWindowActions(
+            focusSection: focusOrToggle, search: focusSearch,
+            collapseFolders: worktree.collapseAll, copyReferences: copyRefs,
+            copyPaths: { app.copySelectedPaths() }, trash: trashSelection,
+            hasFileSelection: !searchFocused && app.activeSection == .files && !worktree.selectedPaths.isEmpty,
+            hasExpandedFolders: !worktree.expandedPaths.isEmpty))
         .focusable()
         .focused($listFocused)
         .focusEffectDisabled()
@@ -885,21 +891,21 @@ struct RootView: View {
     /// Navigation stays available during search. File actions stand down while
     /// editing, so ⌘A / ⌘⌫ keep acting on the query text.
     private var commandShortcuts: some View {
-        Group {
-            Button("") { focusOrToggle(.worktrees) }.keyboardShortcut("1", modifiers: .command)
-            Button("") { focusOrToggle(.changes) }.keyboardShortcut("2", modifiers: .command)
-            Button("") { focusOrToggle(.files) }.keyboardShortcut("3", modifiers: .command)
-            Button("") { focusSearch() }.keyboardShortcut("f", modifiers: .command)
-            Group {
-                Button("") { if app.activeSection == .files { worktree.selectAllVisible() } }.keyboardShortcut("a", modifiers: .command)
-                Button("") { copyRefs() }.keyboardShortcut("c", modifiers: [.command, .shift])
-                Button("") { trashSelection() }.keyboardShortcut(.delete, modifiers: .command)
-            }
+        Button("") { if app.activeSection == .files { worktree.selectAllVisible() } }
+            .keyboardShortcut("a", modifiers: .command)
             .disabled(searchFocused)
-        }
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
+        .onChange(of: app.quickLookRequest?.count) { _, _ in
+            guard let request = app.quickLookRequest else { return }
+            app.focusFiles()
+            worktree.select(request.path)
+            preview.close()
+            dismissWindow(id: "preview")
+            quickLook.onArrow = { _ = worktree.stepPeek($0, in: .files) }
+            if quickLook.isOpen { quickLook.show(URL(fileURLWithPath: request.path)) } else { presentQuickLook() }
+        }
     }
 
     /// ⌘F: open FILES if needed and hand focus to its search field.
@@ -971,6 +977,7 @@ struct RootView: View {
     /// row, file or folder. Arrow keys in the panel move the FILES selection and the
     /// panel follows it (`syncQuickLookToSelection`).
     private func presentQuickLook() {
+        if preview.isVisible { preview.close(); dismissWindow(id: "preview") }
         if worktree.selectedNode == nil, let first = worktree.visibleRows.first { worktree.select(first.node.path) }
         guard let node = worktree.selectedNode else { return }
         quickLook.onArrow = { _ = worktree.stepPeek($0, in: .files) }
