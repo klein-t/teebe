@@ -259,7 +259,7 @@ struct RootView: View {
             collapseFolders: worktree.collapseAll, copyReferences: copyRefs,
             copyPaths: { app.copySelectedPaths() }, trash: trashSelection,
             hasFileSelection: !searchFocused && app.activeSection == .files && !worktree.selectedPaths.isEmpty,
-            hasExpandedFolders: !worktree.expandedPaths.isEmpty))
+            hasExpandedFolders: worktree.hasExpandedFolders))
         .focusable()
         .focused($listFocused)
         .focusEffectDisabled()

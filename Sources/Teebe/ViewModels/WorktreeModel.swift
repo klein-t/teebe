@@ -332,6 +332,13 @@ final class WorktreeModel {
 
     func isExpanded(_ node: FileNode) -> Bool { expandedPaths.contains(node.path) }
 
+    /// A nested expansion under a closed parent is remembered, but cannot be
+    /// collapsed in the displayed tree. Search results are flat as well.
+    var hasExpandedFolders: Bool {
+        guard searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return displayRoot?.children?.contains { $0.isDirectory && isExpanded($0) } == true
+    }
+
     func collapseAll() {
         expandedPaths.removeAll()
         // Keep the cursor on a visible ancestor after its child disappears.

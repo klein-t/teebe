@@ -23,15 +23,16 @@ struct FilesSection: View {
         VStack(spacing: 0) {
             SectionHeader(title: "FILES", isOpen: isOpen, isActive: app.activeSection == .files, onToggle: { isOpen.toggle() }) {
                 if isOpen {
-                    Button { worktree.collapseAll() } label: {
-                        Image(systemName: "rectangle.compress.vertical")
-                            .font(.system(size: 11, weight: .semibold))
+                    if worktree.hasExpandedFolders {
+                        Button { worktree.collapseAll() } label: {
+                            Image(systemName: "rectangle.compress.vertical")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .buttonStyle(IconButtonStyle())
+                        .foregroundStyle(Palette.secondaryText)
+                        .accessibilityLabel("Collapse all folders")
+                        .hoverHelp("Collapse all folders")
                     }
-                    .buttonStyle(IconButtonStyle())
-                    .foregroundStyle(Palette.secondaryText)
-                    .disabled(worktree.expandedPaths.isEmpty)
-                    .accessibilityLabel("Collapse all folders")
-                    .hoverHelp("Collapse all folders")
                     Menu {
                         Picker("Show", selection: $worktree.filter) {
                             Text("All files").tag(ChangeFilter.all)
