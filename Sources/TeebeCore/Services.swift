@@ -47,13 +47,11 @@ public struct StatusService: Sendable {
     /// single `dir/` entry). Feeds the file tree's "show ignored" toggle.
     public func ignoredPaths(worktreePath: String) async throws -> [String] {
         let result = try await git.run(
-            ["status", "--porcelain=v2", "-z", "--ignored", "--untracked-files=no"],
+            ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
             in: worktreePath
         )
         guard result.succeeded else { return [] }
-        return StatusParser.parse(result.stdoutString).changes
-            .filter { $0.worktreeStatus == .ignored }
-            .map(\.path)
+        return result.stdoutString.split(separator: "\0").map(String.init)
     }
 }
 

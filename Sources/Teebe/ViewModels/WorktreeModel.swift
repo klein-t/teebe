@@ -289,6 +289,11 @@ final class WorktreeModel {
             errorMessage = Self.describe(error)
         }
         if rebuildFiles {
+            // Ignore rules and ignored files can change while this checkout stays
+            // selected. Refresh their listing before rebuilding the visible tree.
+            let paths = try? await environment.statusService.ignoredPaths(worktreePath: worktreePath)
+            guard generation == loadGeneration, worktreePath == self.worktreePath, !isFolderMissing else { return }
+            ignoredPaths = Set(paths ?? [])
             rebuildTree()
             reloadExpandedChildren()
         }
