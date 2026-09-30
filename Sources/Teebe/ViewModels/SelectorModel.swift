@@ -109,6 +109,8 @@ final class SelectorModel {
     /// Low-power mode (window occluded): every FSEvents watcher is stopped and
     /// the app rides on the hook ping plus a slow poll. See `setLowPower`.
     private(set) var isLowPower = false
+    private var visibilityGeneration = UUID()
+    private var hiddenRefs: (repoPath: String, output: Data)?
     /// Poll cadences for the time-only agent transitions (stall/idle-out).
     /// Vars so tests can shrink them.
     var agentPollInterval: TimeInterval = 30
@@ -268,6 +270,7 @@ final class SelectorModel {
     private func startRepoWatching(_ repo: Repository) async {
         repoWatcher?.stop()
         let commonDir = await resolveGitCommonDir(for: repo)
+        guard !isLowPower, selectedRepo?.path == repo.path else { return }
         worktreesAdminDir = (commonDir as NSString).appendingPathComponent("worktrees")
         let watcher = environment.makeWatcher()
         watcher.start(paths: [commonDir], debounce: 0.5) { [weak self] paths in
@@ -307,6 +310,10 @@ final class SelectorModel {
             await refreshWorktreeInfo()
         }
     }
+
+    /// Remote fetches and visibility changes can happen while FSEvents is stopped.
+    /// Restart merge checks explicitly instead of relying on an event we may miss.
+    func invalidateMergeChecks() { mergeRevision += 1 }
 
     /// Re-discover the repo's worktrees + branches in place — the manual Refresh
     /// button and the auto-detect watcher both land here. Unlike `selectRepo` it
@@ -411,10 +418,9 @@ final class SelectorModel {
     }
 
     /// Adopt a freshly discovered worktree list. Merge ancestry can only have moved
-    /// when the set of checkouts changed or one of their HEADs did, so only that
-    /// bumps `mergeRevision`. Re-discovering the same trees — which is what a manual
-    /// Refresh, a selection change, or leaving low power (alt-tab) does — reuses the
-    /// last scan instead of restarting a full N-worktree check.
+    /// when the set of checkouts changed or one of their HEADs did, so discovery
+    /// bumps `mergeRevision` only then. Fetch completion and leaving low power
+    /// invalidate separately because comparison refs may move with unchanged HEADs.
     private func applyDiscovered(_ discovered: [Worktree]) {
         func identity(_ trees: [Worktree]) -> [String] { trees.map { $0.path + "\u{0}" + $0.head } }
         if identity(discovered) != identity(worktrees) { mergeRevision += 1 }
@@ -606,7 +612,17 @@ final class SelectorModel {
     func setLowPower(_ on: Bool) async {
         guard on != isLowPower else { return }
         isLowPower = on
+        let generation = UUID()
+        visibilityGeneration = generation
         if on {
+            hiddenRefs = nil
+            if let repo = selectedRepo {
+                // Keep the watcher active until the baseline is captured, so refs
+                // moving during this read still invalidate the current merge scan.
+                let refs = try? await environment.git.run(["show-ref"], in: repo.path)
+                guard visibilityGeneration == generation, selectedRepo?.path == repo.path else { return }
+                hiddenRefs = refs.flatMap { $0.succeeded ? (repo.path, $0.standardOutput) : nil }
+            }
             repoWatcher?.stop()
             agentWatcher?.stop()
             agentWatcher = nil
@@ -614,9 +630,19 @@ final class SelectorModel {
             worktree.pauseWatching()
         } else {
             if let repo = selectedRepo { await startRepoWatching(repo) }
+            guard visibilityGeneration == generation else { return }
             startAgentWatcher()
             startWorktreeActivity()
             await worktree.resumeWatching()
+            guard visibilityGeneration == generation else { return }
+            if let repo = selectedRepo {
+                let refs = try? await environment.git.run(["show-ref"], in: repo.path)
+                guard visibilityGeneration == generation, selectedRepo?.path == repo.path else { return }
+                if hiddenRefs?.repoPath != repo.path || refs?.succeeded != true || hiddenRefs?.output != refs?.standardOutput {
+                    invalidateMergeChecks()
+                }
+                hiddenRefs = nil
+            }
             await refreshWorktrees()
         }
     }

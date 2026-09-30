@@ -95,6 +95,8 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     /// Scripted stdout for `git rev-parse --git-common-dir` (the repo's git common
     /// dir). When nil, `run` returns empty stdout and callers fall back to `.git`.
     var gitCommonDirOutput: String?
+    var showRefOutput = ""
+    var showRefExitCode: Int32 = 0
     var runGate: (@Sendable ([String], String) async -> Void)?
     @discardableResult
     func run(_ arguments: [String], in directory: String) async throws -> GitInvocationResult {
@@ -104,7 +106,8 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
         if arguments == ["rev-parse", "--git-common-dir"], let gitCommonDirOutput {
             stdout = Data(gitCommonDirOutput.utf8)
         }
-        return GitInvocationResult(arguments: arguments, exitCode: 0, standardOutput: stdout, standardError: "")
+        if arguments == ["show-ref"] { stdout = Data(showRefOutput.utf8) }
+        return GitInvocationResult(arguments: arguments, exitCode: arguments == ["show-ref"] ? showRefExitCode : 0, standardOutput: stdout, standardError: "")
     }
 }
 
