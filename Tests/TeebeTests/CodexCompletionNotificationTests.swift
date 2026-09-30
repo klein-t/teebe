@@ -43,6 +43,49 @@ struct CodexCompletionNotificationTests {
         #expect(rig.spy.posted.count == 1)
     }
 
+    @Test(arguments: [false, true])
+    func reenablingBeforeTheNextPollDiscardsMutedTurnsAndKeepsNewTurns(newBeforeFirstScan: Bool) async throws {
+        let rig = try Rig()
+        defer { rig.cleanUp() }
+        await rig.selector.selectRepo(Repository(path: rig.path))
+        try rig.record("task_started", turn: "muted")
+        await rig.selector.refreshAgentStates()
+        rig.selector.notificationsEnabled = false
+        try rig.record("task_complete", turn: "muted")
+        rig.selector.notificationsEnabled = true
+        if !newBeforeFirstScan {
+            await rig.selector.refreshAgentStates()
+            #expect(rig.spy.posted.isEmpty)
+        }
+        // Rollout timestamps have millisecond precision. Make the next turn
+        // unambiguously newer than the toggle, with or without an earlier scan.
+        try await Task.sleep(for: .milliseconds(3))
+        try rig.turn("new")
+        await rig.selector.refreshAgentStates()
+        #expect(rig.spy.posted.count == 1)
+        await rig.selector.refreshAgentStates()
+        #expect(rig.spy.posted.count == 1)
+    }
+
+    @Test func reenablingBaselinesDelayedBadgeEdgesButKeepsLaterTransitions() async throws {
+        let states = FakeAgentStates()
+        let rig = try Rig(states: states)
+        defer { rig.cleanUp() }
+        await rig.selector.selectRepo(Repository(path: rig.path))
+        states[rig.path] = .working
+        await rig.selector.refreshAgentStates()
+        rig.selector.notificationsEnabled = false
+        states[rig.path] = .needsAttention
+        rig.selector.notificationsEnabled = true
+        await rig.selector.refreshAgentStates()
+        #expect(rig.spy.posted.isEmpty)
+        states[rig.path] = .working
+        await rig.selector.refreshAgentStates()
+        states[rig.path] = .needsAttention
+        await rig.selector.refreshAgentStates()
+        #expect(rig.spy.posted.count == 1)
+    }
+
     @Test func observedCompletionDoesNotDuplicateTheBadgeTransition() async throws {
         let rig = try Rig()
         defer { rig.cleanUp() }

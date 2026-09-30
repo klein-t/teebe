@@ -66,7 +66,14 @@ final class SelectorModel {
     var onSelectionChange: (() -> Void)?
     var onRepositoryChange: (() -> Void)?
     private(set) var isLoading = false
-    var notificationsEnabled = true
+    var notificationsEnabled = true {
+        didSet {
+            guard notificationsEnabled, !oldValue else { return }
+            turnDelivery.resumeObservation()
+            needsNotificationBaseline = true
+        }
+    }
+    @ObservationIgnored private var needsNotificationBaseline = false
     @ObservationIgnored private var turnDelivery = AgentTurnDelivery()
     @ObservationIgnored private var lastAgentSnapshotAt = Date.distantPast
     @ObservationIgnored private var agentRefreshGeneration = 0
@@ -508,6 +515,13 @@ final class SelectorModel {
         for event in fresh where event.completed {
             let name = worktrees.first { $0.path == event.worktreePath }?.branch ?? URL(fileURLWithPath: event.worktreePath).lastPathComponent
             environment.notify("Agent finished", "\(name): Codex finished a turn")
+        }
+        // A badge may still describe work that ended while notifications were
+        // off. The first enabled snapshot establishes a new transition baseline;
+        // journal completions newer than the toggle are still delivered above.
+        if needsNotificationBaseline {
+            needsNotificationBaseline = false
+            return
         }
         for worktree in worktrees {
             guard !endedPaths.contains(worktree.path), old[worktree.path]?.agentState == .working,

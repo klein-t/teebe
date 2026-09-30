@@ -30,6 +30,12 @@ public struct AgentTurnDelivery: Sendable {
         for path in paths where watchingSince[path] == nil { watchingSince[path] = boundary }
     }
 
+    /// Reenabling notifications discards unscanned endings from the muted
+    /// interval. Keep seen identities so already delivered turns stay deduplicated.
+    public mutating func resumeObservation(now: Date = Date()) {
+        for path in watchingSince.keys { watchingSince[path] = now }
+    }
+
     public mutating func consume(_ events: [AgentTurnEnd], now: Date) -> [AgentTurnEnd] {
         seen = seen.filter { now.timeIntervalSince($0.value) < 86_400 }
         var fresh: [AgentTurnEnd] = []
