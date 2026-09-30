@@ -96,6 +96,18 @@ struct CodexCompletionJournalTests {
         #expect(delivery.consume([away], now: epoch.addingTimeInterval(7)).isEmpty)
     }
 
+    @Test func resumingDiscardsMutedBacklogAndPreservesNewTurnsAndDeduplication() {
+        var delivery = AgentTurnDelivery()
+        delivery.watch(["/repo"], now: epoch)
+        let delivered = AgentTurnEnd(id: "delivered", worktreePath: "/repo", endedAt: epoch.addingTimeInterval(1))
+        #expect(delivery.consume([delivered], now: epoch.addingTimeInterval(2)) == [delivered])
+        let muted = AgentTurnEnd(id: "muted", worktreePath: "/repo", endedAt: epoch.addingTimeInterval(3))
+        delivery.resumeObservation(now: epoch.addingTimeInterval(4))
+        let fresh = AgentTurnEnd(id: "fresh", worktreePath: "/repo", endedAt: epoch.addingTimeInterval(5))
+        #expect(delivery.consume([delivered, muted, fresh], now: epoch.addingTimeInterval(6)) == [fresh])
+        #expect(delivery.consume([fresh], now: epoch.addingTimeInterval(7)).isEmpty)
+    }
+
     private func line(_ type: String, turn: String = "t", at date: Date) -> String {
         #"{"timestamp":"\#(stamp(date))","type":"event_msg","payload":{"type":"\#(type)","turn_id":"\#(turn)"}}"#
     }
