@@ -110,6 +110,8 @@ final class SelectorModel {
     /// the app rides on the hook ping plus a slow poll. See `setLowPower`.
     private(set) var isLowPower = false
     private var visibilityGeneration = UUID()
+    private var visibleRefs: (repoPath: String, output: Data)?
+    private var hiddenRefsChanged = false
     private var hiddenRefs: (repoPath: String, output: Data)?
     /// Poll cadences for the time-only agent transitions (stall/idle-out).
     /// Vars so tests can shrink them.
@@ -268,9 +270,13 @@ final class SelectorModel {
     /// `prune`) rewrites `worktrees/…` there, which `handleRepoWatchEvent` filters
     /// for; routine index/ref writes in the primary checkout are ignored.
     private func startRepoWatching(_ repo: Repository) async {
+        let generation = visibilityGeneration
         repoWatcher?.stop()
         let commonDir = await resolveGitCommonDir(for: repo)
-        guard !isLowPower, selectedRepo?.path == repo.path else { return }
+        guard visibilityGeneration == generation, !isLowPower, selectedRepo?.path == repo.path else { return }
+        let refs = try? await environment.git.run(["show-ref"], in: repo.path)
+        guard visibilityGeneration == generation, !isLowPower, selectedRepo?.path == repo.path else { return }
+        visibleRefs = refs.flatMap { $0.succeeded ? (repo.path, $0.standardOutput) : nil }
         worktreesAdminDir = (commonDir as NSString).appendingPathComponent("worktrees")
         let watcher = environment.makeWatcher()
         watcher.start(paths: [commonDir], debounce: 0.5) { [weak self] paths in
@@ -617,10 +623,11 @@ final class SelectorModel {
         if on {
             hiddenRefs = nil
             if let repo = selectedRepo {
-                // Keep the watcher active until the baseline is captured, so refs
-                // moving during this read still invalidate the current merge scan.
+                // A debounced event may be dropped when the watcher stops. Compare
+                // against the earlier visible baseline as well as the return read.
                 let refs = try? await environment.git.run(["show-ref"], in: repo.path)
                 guard visibilityGeneration == generation, selectedRepo?.path == repo.path else { return }
+                hiddenRefsChanged = visibleRefs?.repoPath != repo.path || refs?.succeeded != true || visibleRefs?.output != refs?.standardOutput
                 hiddenRefs = refs.flatMap { $0.succeeded ? (repo.path, $0.standardOutput) : nil }
             }
             repoWatcher?.stop()
@@ -638,10 +645,11 @@ final class SelectorModel {
             if let repo = selectedRepo {
                 let refs = try? await environment.git.run(["show-ref"], in: repo.path)
                 guard visibilityGeneration == generation, selectedRepo?.path == repo.path else { return }
-                if hiddenRefs?.repoPath != repo.path || refs?.succeeded != true || hiddenRefs?.output != refs?.standardOutput {
+                if hiddenRefsChanged || hiddenRefs?.repoPath != repo.path || refs?.succeeded != true || hiddenRefs?.output != refs?.standardOutput {
                     invalidateMergeChecks()
                 }
                 hiddenRefs = nil
+                hiddenRefsChanged = false
             }
             await refreshWorktrees()
         }

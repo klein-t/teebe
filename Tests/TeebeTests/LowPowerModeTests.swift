@@ -171,8 +171,8 @@ struct LowPowerModeTests {
         let firstHide = Task { await rig.selector.setLowPower(true) }
         await started.wait()
         rig.git.runGate = nil
-        await rig.selector.setLowPower(false)
         rig.git.showRefOutput = "current refs/heads/main\n"
+        await rig.selector.setLowPower(false)
         await rig.selector.setLowPower(true)
         rig.git.showRefOutput = "obsolete refs/heads/main\n"
         await finish.open()
@@ -181,6 +181,23 @@ struct LowPowerModeTests {
         let revision = rig.selector.mergeRevision
         await rig.selector.setLowPower(false)
         #expect(rig.selector.mergeRevision == revision)
+    }
+
+    @Test("refs changed before watcher shutdown are rechecked even when its pending event is dropped")
+    func pendingRefEventAtHideBoundary() async {
+        let rig = await makeRig()
+        let revision = rig.selector.mergeRevision
+        // The last visible scan read old refs. Git now changes them, but the
+        // watcher's debounce has not delivered the event before the window hides.
+        rig.git.showRefOutput = "new-oid refs/heads/main\n"
+        await rig.selector.setLowPower(true)
+        #expect(rig.selector.mergeRevision == revision)
+        await rig.selector.setLowPower(false)
+        #expect(rig.selector.mergeRevision > revision)
+        let refreshed = rig.selector.mergeRevision
+        await rig.selector.setLowPower(true)
+        await rig.selector.setLowPower(false)
+        #expect(rig.selector.mergeRevision == refreshed)
     }
 
     @Test("setLowPower is idempotent")
