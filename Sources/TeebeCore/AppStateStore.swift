@@ -45,6 +45,8 @@ public struct SectionLayout: Codable, Equatable, Sendable {
 /// (TECH_SPEC §10). Serialized to JSON; nothing sensitive.
 public struct AppState: Codable, Equatable, Sendable {
     public var repositories: [PersistedRepository]
+    /// Legacy required key kept for older app versions to decode saved state.
+    /// Files ignores this value; app saves always write false.
     public var showChangedOnly: Bool
     public var showIgnored: Bool
     public var floatOnTop: Bool

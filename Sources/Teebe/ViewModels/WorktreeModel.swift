@@ -28,7 +28,6 @@ final class WorktreeModel {
     /// drops it into the wrong group and jumps it back when the read arrives.
     private(set) var statusPath: String?
     private(set) var changes: [FileChange] = []
-    var filter: ChangeFilter = .all { didSet { if filter != oldValue { scheduleSearch(); onFilePreferencesChange?() } } }
     var showIgnored = false {
         didSet {
             guard showIgnored != oldValue else { return }
@@ -38,7 +37,7 @@ final class WorktreeModel {
             onFilePreferencesChange?()
         }
     }
-    /// Saves the existing file-filter preferences when their menu controls change.
+    /// Saves file browsing preferences when their menu controls change.
     var onFilePreferencesChange: (() -> Void)?
     var sortOrder: FileSortOrder = .name { didSet { if sortOrder != oldValue { onFilePreferencesChange?() } } }
     /// Live search query (filters the FILES tree by name).
@@ -336,7 +335,7 @@ final class WorktreeModel {
     /// collapsed in the displayed tree. Search results are flat as well.
     var hasExpandedFolders: Bool {
         guard searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        return displayRoot?.children?.contains { $0.isDirectory && isExpanded($0) } == true
+        return root?.children?.contains { $0.isDirectory && isExpanded($0) } == true
     }
 
     func collapseAll() {
@@ -359,7 +358,7 @@ final class WorktreeModel {
         searchGeneration += 1
         searchResults = nil
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard filter == .all, !query.isEmpty, let path = worktreePath, !isLoading else { isSearching = false; return }
+        guard !query.isEmpty, let path = worktreePath, !isLoading else { isSearching = false; return }
         isSearching = true
         let generation = searchGeneration
         let builder = makeBuilder(rootPath: path)
@@ -411,10 +410,10 @@ final class WorktreeModel {
     /// The flattened, visible rows of the FILES tree, honoring expansion, sort and
     /// search. Search yields a flat list of matching files across the loaded tree.
     var visibleRows: [TreeRow] {
-        guard let root = displayRoot else { return [] }
+        guard let root else { return [] }
         let query = searchQuery.trimmingCharacters(in: .whitespaces).lowercased()
         var rows: [TreeRow] = []
-        if !query.isEmpty, filter == .all, let searchResults, let worktreePath {
+        if !query.isEmpty, let searchResults, let worktreePath {
             let byPath = Dictionary(changes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
             return sortNodes(searchResults).map { node in
                 var node = node
@@ -656,7 +655,7 @@ final class WorktreeModel {
     /// tree, including lazily-loaded children.
     func node(atPath path: String) -> FileNode? {
         if let row = visibleRows.first(where: { $0.node.path == path }) { return row.node }
-        guard let root = displayRoot else { return nil }
+        guard let root else { return nil }
         return Self.find(path, in: root)
     }
 
@@ -673,19 +672,6 @@ final class WorktreeModel {
             rootPath: rootPath,
             options: .init(showHidden: true, showIgnored: showIgnored, ignoredPaths: ignoredPaths)
         )
-    }
-
-    /// The tree to display given the current filter. `Changed` derives the tree
-    /// directly from the change list so changed files always appear.
-    var displayRoot: FileNode? {
-        switch filter {
-        case .all:
-            return root
-        case .changed:
-            guard let worktreePath else { return root }
-            let tree = FileTreeBuilder.tree(fromRelativePaths: changes.map(\.path), rootPath: worktreePath)
-            return StatusOverlay.apply(changes, to: tree, rootPath: worktreePath)
-        }
     }
 
     // MARK: - Non-destructive git (no confirmation)

@@ -113,7 +113,6 @@ struct SettingsView: View {
         Form {
             Section("Defaults for all projects") {
                 scope
-                Toggle("Changed only", isOn: boolean(\.changedOnly, fallback: false))
                 Toggle("Show ignored", isOn: boolean(\.showIgnored, fallback: false))
                 Picker("Sort", selection: string(\.fileSort, fallback: "name")) {
                     Text("Name").tag("name")

@@ -154,7 +154,6 @@ final class AppModel {
         isApplyingPreferences = true
         defer { isApplyingPreferences = false }
         let values = preferences.effective
-        selector.worktree.filter = values.changedOnly == true ? .changed : .all
         selector.worktree.showIgnored = values.showIgnored ?? false
         selector.worktree.sortOrder = FileSortOrder(rawValue: values.fileSort ?? "") ?? .name
     }
@@ -165,9 +164,6 @@ final class AppModel {
         defer { isApplyingPreferences = false }
         let values = preferences.effective
         let files = selector.worktree
-        if (files.filter == .changed) != (values.changedOnly ?? false) {
-            preferences.set(\.changedOnly, files.filter == .changed)
-        }
         if files.showIgnored != (values.showIgnored ?? false) { preferences.set(\.showIgnored, files.showIgnored) }
         if files.sortOrder.rawValue != (values.fileSort ?? "name") { preferences.set(\.fileSort, files.sortOrder.rawValue) }
     }
@@ -612,7 +608,7 @@ final class AppModel {
         state.repositories = repositories.map { PersistedRepository(path: $0.path) }
         state.defaultPreferences = preferences.defaults
         state.projectPreferences = preferences.projects
-        state.showChangedOnly = preferences.defaults.changedOnly ?? false
+        state.showChangedOnly = false
         state.showIgnored = preferences.defaults.showIgnored ?? false
         state.floatOnTop = floatOnTop
         state.showMergeStatus = preferences.defaults.groupByStatus

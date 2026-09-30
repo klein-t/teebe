@@ -19,27 +19,76 @@ struct SearchPreferencesTests {
         #expect(app.searchFocusRequest == 2)
     }
 
-    @Test("saved file filters are restored and changes survive recreation")
-    func fileFiltersPersist() async throws {
+    @Test("saved ignored-file preference survives recreation")
+    func ignoredPreferencePersists() async throws {
         let env = makeTestEnvironment()
-        try env.store.save(AppState(showChangedOnly: true, showIgnored: true))
+        try env.store.save(AppState(showIgnored: true))
         let app = AppModel(environment: env)
         await app.bootstrap()
-        #expect(app.selector.worktree.filter == .changed)
         #expect(app.selector.worktree.showIgnored)
-        app.selector.worktree.filter = .all
         app.selector.worktree.showIgnored = false
         let recreated = AppModel(environment: env)
         await recreated.bootstrap()
-        #expect(recreated.selector.worktree.filter == .all)
         #expect(!recreated.selector.worktree.showIgnored)
-        recreated.selector.worktree.filter = .changed
         recreated.selector.worktree.showIgnored = true
         let restored = AppModel(environment: env)
         await restored.bootstrap()
-        #expect(restored.selector.worktree.filter == .changed)
         #expect(restored.selector.worktree.showIgnored)
     }
+
+    @Test("legacy changed-only preferences cannot hide unchanged files", arguments: ["legacy", "global", "project"])
+    func legacyChangedOnlyShowsAllFiles(scope: String) async throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: temporary.appendingPathComponent("nested"), withIntermediateDirectories: true)
+        let directory = URL(fileURLWithPath: PathUtil.standardized(temporary.path))
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for name in ["changed.txt", "unchanged.txt", "nested/unchanged.swift"] {
+            try Data(name.utf8).write(to: directory.appendingPathComponent(name))
+        }
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: directory.path, branch: "main", isPrimary: true)]
+        git.statusResult = StatusResult(changes: [FileChange(path: "changed.txt", worktreeStatus: .modified)])
+        let env = makeTestEnvironment(git: git)
+        var state = AppState(repositories: [PersistedRepository(path: directory.path)],
+                             showChangedOnly: true, floatOnTop: true, lastSelectedRepoPath: directory.path)
+        state.lastSeenVersion = "0.7.0"
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? [String: Any])
+        let savedPreferences: [String: Any] = ["changedOnly": true, "showIgnored": true, "fileSort": "recent"]
+        if scope == "global" { json["defaultPreferences"] = savedPreferences }
+        if scope == "project" { json["projectPreferences"] = [directory.path: savedPreferences] }
+        try FileManager.default.createDirectory(at: env.store.url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: json).write(to: env.store.url)
+
+        let app = AppModel(environment: env)
+        await app.bootstrap()
+        let files = app.selector.worktree
+        #expect(Set(files.visibleRows.map(\.node.name)) == ["nested", "changed.txt", "unchanged.txt"])
+        #expect(files.visibleRows.first { $0.node.name == "changed.txt" }?.node.change?.worktreeStatus == .modified)
+        #expect(files.visibleRows.first { $0.node.name == "unchanged.txt" }?.node.change == nil)
+        #expect(files.changes.map(\.path) == ["changed.txt"])
+        #expect(files.changeGroups.flatMap(\.changes).map(\.path) == ["changed.txt"])
+        #expect(files.selectCurrentOrFirstChange()?.path == "changed.txt")
+        #expect(files.selectionSource == .changes)
+        files.searchQuery = "nested/unchanged"
+        for _ in 0..<100 where files.isSearching { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(files.visibleRows.map(\.node.name) == ["unchanged.swift"])
+        #expect(app.floatOnTop)
+        if scope != "legacy" {
+            #expect(files.showIgnored)
+            #expect(files.sortOrder == .recent)
+        }
+        app.persist()
+        let saved = env.store.load()
+        #expect(saved.repositories == state.repositories)
+        #expect(saved.lastSeenVersion == "0.7.0")
+        #expect(!saved.showChangedOnly)
+        #expect(saved.floatOnTop)
+        let rewritten = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: env.store.url)) as? [String: Any])
+        #expect((rewritten["defaultPreferences"] as? [String: Any])?["changedOnly"] == nil)
+        let projects = rewritten["projectPreferences"] as? [String: [String: Any]]
+        #expect(projects?[directory.path]?["changedOnly"] == nil)
+    }
+
     @Test("Return opens the matching result instead of a hidden previous selection")
     func returnOpensVisibleResult() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -22,7 +22,7 @@ struct ProjectPreferencesTests {
         #expect(!prefs.hasOverrides)
     }
 
-    @Test func switchingProjectsRestoresFiltersWithoutChangingDefaults() async throws {
+    @Test func switchingProjectsRestoresFilePreferencesWithoutChangingDefaults() async throws {
         let env = makeTestEnvironment()
         let app = AppModel(environment: env)
         await app.selector.selectRepo(Repository(path: "/a"))
@@ -34,16 +34,13 @@ struct ProjectPreferencesTests {
         #expect(!app.selector.worktree.showIgnored)
         #expect(app.selector.worktree.sortOrder == .name)
         #expect(!app.groupWorktreesByMergeStatus)
-        app.preferences.defaults.changedOnly = true
         let restored = AppModel(environment: env)
         await restored.selector.selectRepo(Repository(path: "/a"))
         #expect(restored.selector.worktree.showIgnored)
         #expect(restored.selector.worktree.sortOrder == .recent)
         #expect(restored.groupWorktreesByMergeStatus)
-        #expect(restored.selector.worktree.filter == .changed)
         restored.preferences.reset()
         #expect(!restored.selector.worktree.showIgnored)
-        #expect(restored.selector.worktree.filter == .changed)
     }
 
     @Test func explicitNoComparisonOverridesDefaultAndLegacyMigrates() {

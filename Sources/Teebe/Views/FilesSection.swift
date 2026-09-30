@@ -34,10 +34,6 @@ struct FilesSection: View {
                         .hoverHelp("Collapse all folders")
                     }
                     Menu {
-                        Picker("Show", selection: $worktree.filter) {
-                            Text("All files").tag(ChangeFilter.all)
-                            Text("Changed only").tag(ChangeFilter.changed)
-                        }
                         Picker("Sort", selection: $worktree.sortOrder) {
                             Text("Name").tag(FileSortOrder.name)
                             Text("Recently changed").tag(FileSortOrder.recent)
@@ -90,15 +86,10 @@ struct FilesSection: View {
                                 if worktree.searchQuery.isEmpty { searchFocused.wrappedValue = false } else { worktree.searchQuery = "" }
                                 return .handled
                             }
-                        if worktree.filter == .changed || worktree.isSearching {
-                            HStack(spacing: 6) {
-                                if worktree.filter == .changed {
-                                    Text("Changed only").font(Typography.secondary)
-                                    Button("Show all") { worktree.filter = .all }.buttonStyle(.link)
-                                }
-                                Spacer()
-                                if worktree.isSearching { Text("Searching…").font(Typography.secondary).foregroundStyle(.secondary) }
-                            }.padding(.horizontal, 12).padding(.bottom, 4)
+                        if worktree.isSearching {
+                            Text("Searching…").font(Typography.secondary).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .padding(.horizontal, 12).padding(.bottom, 4)
                         }
                         ScrollViewReader { proxy in
                             // Rows fade into the window's bottom edge while more are below,
@@ -205,7 +196,6 @@ struct FileRowsView: View {
         if worktree.isSearching { return "Searching…" }
         if worktree.errorMessage != nil { return "Couldn’t load files" }
         if !worktree.searchQuery.isEmpty { return "No matching files" }
-        if worktree.filter == .changed { return "No changed files" }
         return "No files"
     }
 

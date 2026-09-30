@@ -17,7 +17,7 @@ final class PreferencesModel {
             groupByStatus: state.showMergeStatus ?? false,
             fetchAutomatically: state.fetchAutomatically ?? true,
             worktreeSort: state.worktreeSortOrder ?? "folder", fileSort: "name",
-            changedOnly: state.showChangedOnly, showIgnored: state.showIgnored)
+            showIgnored: state.showIgnored)
         projects = state.projectPreferences ?? [:]
         if state.projectPreferences == nil {
             for (path, ref) in state.cleanupTargetByRepo ?? [:] {
