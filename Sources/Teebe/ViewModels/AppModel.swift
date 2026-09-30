@@ -277,7 +277,7 @@ final class AppModel {
             alert.addButton(withTitle: "No Thanks")
             let accepted = alert.runModal() == .alertFirstButtonReturn
             state.hookOfferResponse = accepted ? "accepted" : "declined"
-            try? environment.store.save(state)
+            saveState()
             if accepted {
                 do { try ClaudeHookInstaller.install() } catch { setError("Couldn't update ~/.claude/settings.json — hook not added.") }
             }
@@ -629,6 +629,13 @@ final class AppModel {
         state.defaultFileApp = openWith.defaultApp
         state.lastSelectedRepoPath = selector.selectedRepo?.path
         state.lastSelectedWorktreePath = selector.selectedWorktree?.path
+        saveState()
+    }
+
+    private func saveState() {
+        // WhatsNewModel owns this marker and may have advanced it since we
+        // loaded our in-memory preferences. Never restore the previous version.
+        state.lastSeenVersion = environment.store.load().lastSeenVersion
         try? environment.store.save(state)
     }
 
@@ -646,6 +653,6 @@ final class AppModel {
         var byRepo = state.layoutByRepo ?? [:]
         byRepo[path] = layout
         state.layoutByRepo = byRepo
-        try? environment.store.save(state)
+        saveState()
     }
 }
