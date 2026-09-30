@@ -402,12 +402,12 @@ struct WorktreeGroupActionsTests {
         #expect(app.worktreeCardReveal?.count != first)
     }
 
-    @Test("deleting the branch on removal defaults on and remembers the last choice")
+    @Test("deleting the branch on removal defaults off and remembers the last choice")
     func deleteBranchPreference() {
         let env = makeTestEnvironment()
-        #expect(AppModel(environment: env).deleteBranchOnRemove)
-        AppModel(environment: env).deleteBranchOnRemove = false
         #expect(!AppModel(environment: env).deleteBranchOnRemove)
-        #expect(env.store.load().deleteBranchOnRemove == false)
+        AppModel(environment: env).deleteBranchOnRemove = true
+        #expect(AppModel(environment: env).deleteBranchOnRemove)
+        #expect(env.store.load().deleteBranchOnRemove == true)
     }
 }

@@ -28,11 +28,25 @@ final class WorktreeModel {
     /// drops it into the wrong group and jumps it back when the read arrives.
     private(set) var statusPath: String?
     private(set) var changes: [FileChange] = []
-    var filter: ChangeFilter = .all
-    var showIgnored = false { didSet { childrenCache.removeAll(); rebuildTree() } }
-    var sortOrder: FileSortOrder = .name
+    var showIgnored = false {
+        didSet {
+            guard showIgnored != oldValue else { return }
+            childrenCache.removeAll()
+            rebuildTree()
+            scheduleSearch()
+            onFilePreferencesChange?()
+        }
+    }
+    /// Saves file browsing preferences when their menu controls change.
+    var onFilePreferencesChange: (() -> Void)?
+    var sortOrder: FileSortOrder = .name { didSet { if sortOrder != oldValue { onFilePreferencesChange?() } } }
     /// Live search query (filters the FILES tree by name).
-    var searchQuery: String = ""
+    var searchQuery: String = "" { didSet { if searchQuery != oldValue { scheduleSearch() } } }
+    private(set) var isSearching = false
+    private(set) var isLoading = false
+    private var searchResults: [FileNode]?
+    @ObservationIgnored private var searchTask: Task<Void, Never>?
+    private var searchGeneration = 0
     /// Currently selected row path (drives the spacebar preview).
     var selectedPath: String?
     /// Which list the current selection came from — decides what space previews:
@@ -78,6 +92,7 @@ final class WorktreeModel {
     /// can't stack a backlog of `git status` calls behind one slow refresh.
     private var isRefreshing = false
     private var refreshQueued = false
+    private var loadGeneration = 0
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -125,6 +140,12 @@ final class WorktreeModel {
     }
 
     func clear() {
+        searchTask?.cancel()
+        searchGeneration += 1
+        searchResults = nil
+        isSearching = false
+        isLoading = false
+        loadGeneration += 1
         watcher?.stop()
         watcher = nil
         root = nil
@@ -142,6 +163,15 @@ final class WorktreeModel {
     // MARK: - Loading
 
     func load(worktreePath: String, repo: Repository?) async {
+        loadGeneration += 1
+        let generation = loadGeneration
+        isLoading = true
+        searchTask?.cancel()
+        searchGeneration += 1
+        searchResults = nil
+        defer { if generation == loadGeneration { isLoading = false; scheduleSearch() } }
+        watcher?.stop()
+        watcher = nil
         self.worktreePath = worktreePath
         self.repo = repo
         self.queue = repo.map { environment.makeQueue(repoPath: $0.path) }
@@ -153,9 +183,16 @@ final class WorktreeModel {
         errorMessage = nil
         isFolderMissing = false
         guard environment.folderExists(worktreePath) else { return markFolderMissing() }
-        self.ignoredPaths = Set((try? await environment.statusService.ignoredPaths(worktreePath: worktreePath)) ?? [])
+        // Ignored-file discovery can be slow in large checkouts. Publish changes
+        // as soon as status is ready; the Files tree follows with its ignore rules.
+        let service = environment.statusService
+        async let ignored = try? service.ignoredPaths(worktreePath: worktreePath)
+        await refresh(rebuildFiles: false)
+        let paths = await ignored
+        guard generation == loadGeneration, !isFolderMissing else { return }
+        ignoredPaths = Set(paths ?? [])
+        rebuildTree()
         startWatching(worktreePath)
-        await refresh()
     }
 
     private func resetContents() {
@@ -239,23 +276,24 @@ final class WorktreeModel {
     }
 
     /// Re-query status and rebuild the tree (called on watcher events).
-    func refresh() async {
+    func refresh(rebuildFiles: Bool = true) async {
         guard let worktreePath else { return }
+        let generation = loadGeneration
         guard environment.folderExists(worktreePath) else { return markFolderMissing() }
         do {
             let result = try await environment.statusService.status(worktreePath: worktreePath)
             // A newer selection may have landed while this read was in flight.
-            guard worktreePath == self.worktreePath else { return }
+            guard generation == loadGeneration, worktreePath == self.worktreePath else { return }
             status = result
             statusPath = worktreePath
             changes = result.changes
             errorMessage = nil
             isFolderMissing = false
         } catch GitError.workingDirectoryMissing {
-            guard worktreePath == self.worktreePath else { return }
+            guard generation == loadGeneration, worktreePath == self.worktreePath else { return }
             return markFolderMissing()
         } catch {
-            guard worktreePath == self.worktreePath else { return }
+            guard generation == loadGeneration, worktreePath == self.worktreePath else { return }
             // The first read of a new selection failed: never leave the previous
             // worktree's changes standing in for this one's.
             if statusPath != worktreePath {
@@ -265,8 +303,16 @@ final class WorktreeModel {
             }
             errorMessage = Self.describe(error)
         }
-        rebuildTree()
-        reloadExpandedChildren()
+        if rebuildFiles {
+            // Ignore rules and ignored files can change while this checkout stays
+            // selected. Refresh their listing before rebuilding the visible tree.
+            let paths = try? await environment.statusService.ignoredPaths(worktreePath: worktreePath)
+            guard generation == loadGeneration, worktreePath == self.worktreePath, !isFolderMissing else { return }
+            ignoredPaths = Set(paths ?? [])
+            rebuildTree()
+            reloadExpandedChildren()
+            scheduleSearch()
+        }
     }
 
     private func rebuildTree() {
@@ -284,6 +330,52 @@ final class WorktreeModel {
     }
 
     func isExpanded(_ node: FileNode) -> Bool { expandedPaths.contains(node.path) }
+
+    /// A nested expansion under a closed parent is remembered, but cannot be
+    /// collapsed in the displayed tree. Search results are flat as well.
+    var hasExpandedFolders: Bool {
+        guard searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return root?.children?.contains { $0.isDirectory && isExpanded($0) } == true
+    }
+
+    func collapseAll() {
+        expandedPaths.removeAll()
+        // Keep the cursor on a visible ancestor after its child disappears.
+        guard searchQuery.isEmpty, let selectedPath, let worktreePath else { return }
+        let rootPath = PathUtil.standardized(worktreePath)
+        let first = PathUtil.relativePath(of: selectedPath, under: rootPath).split(separator: "/").first
+        if let first { select(rootPath + "/" + first) }
+    }
+
+    func relativePath(of node: FileNode) -> String {
+        worktreePath.map { PathUtil.relativePath(of: node.path, under: PathUtil.standardized($0)) } ?? node.path
+    }
+
+    /// The task owns a cancellable background scan, not a growing chain of scans
+    /// for every keystroke. Query and worktree generations reject stale results.
+    private func scheduleSearch() {
+        searchTask?.cancel()
+        searchGeneration += 1
+        searchResults = nil
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, let path = worktreePath, !isLoading else { isSearching = false; return }
+        isSearching = true
+        let generation = searchGeneration
+        let builder = makeBuilder(rootPath: path)
+        searchTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(120))
+                let scan = Task.detached(priority: .userInitiated) { try builder.search(query) }
+                let nodes = try await withTaskCancellationHandler { try await scan.value } onCancel: { scan.cancel() }
+                guard let self, !Task.isCancelled, generation == self.searchGeneration else { return }
+                self.searchResults = nodes
+                self.isSearching = false
+            } catch {
+                guard let self, generation == self.searchGeneration else { return }
+                self.isSearching = false
+            }
+        }
+    }
 
     /// Toggle a directory's expansion, loading its children on first expand.
     func toggleExpand(_ node: FileNode) {
@@ -318,9 +410,17 @@ final class WorktreeModel {
     /// The flattened, visible rows of the FILES tree, honoring expansion, sort and
     /// search. Search yields a flat list of matching files across the loaded tree.
     var visibleRows: [TreeRow] {
-        guard let root = displayRoot else { return [] }
+        guard let root else { return [] }
         let query = searchQuery.trimmingCharacters(in: .whitespaces).lowercased()
         var rows: [TreeRow] = []
+        if !query.isEmpty, let searchResults, let worktreePath {
+            let byPath = Dictionary(changes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+            return sortNodes(searchResults).map { node in
+                var node = node
+                node.change = byPath[PathUtil.relativePath(of: node.path, under: PathUtil.standardized(worktreePath))]
+                return TreeRow(node: node, depth: 0)
+            }
+        }
 
         func childrenSorted(_ node: FileNode) -> [FileNode] {
             let kids = node.children ?? childrenCache[node.path] ?? []
@@ -340,7 +440,7 @@ final class WorktreeModel {
         } else {
             func collect(_ node: FileNode) {
                 for child in childrenSorted(node) {
-                    if !child.isDirectory, child.name.lowercased().contains(query) {
+                    if !child.isDirectory, relativePath(of: child).lowercased().contains(query) {
                         rows.append(TreeRow(node: child, depth: 0))
                     }
                     if child.isDirectory { collect(child) }
@@ -368,6 +468,16 @@ final class WorktreeModel {
     var selectedNode: FileNode? {
         guard let selectedPath else { return nil }
         return node(atPath: selectedPath)
+    }
+
+    /// Search activation must never act on a cursor hidden by the current query.
+    @discardableResult
+    func selectCurrentOrFirstVisibleFile() -> FileNode? {
+        let rows = visibleRows
+        guard let node = rows.first(where: { $0.node.path == selectedPath })?.node ?? rows.first?.node else { return nil }
+        selectionSource = .files
+        select(node.path)
+        return node
     }
 
     func selectNext() { moveSelection(by: 1) }
@@ -545,7 +655,7 @@ final class WorktreeModel {
     /// tree, including lazily-loaded children.
     func node(atPath path: String) -> FileNode? {
         if let row = visibleRows.first(where: { $0.node.path == path }) { return row.node }
-        guard let root = displayRoot else { return nil }
+        guard let root else { return nil }
         return Self.find(path, in: root)
     }
 
@@ -562,19 +672,6 @@ final class WorktreeModel {
             rootPath: rootPath,
             options: .init(showHidden: true, showIgnored: showIgnored, ignoredPaths: ignoredPaths)
         )
-    }
-
-    /// The tree to display given the current filter. `Changed` derives the tree
-    /// directly from the change list so changed files always appear.
-    var displayRoot: FileNode? {
-        switch filter {
-        case .all:
-            return root
-        case .changed:
-            guard let worktreePath else { return root }
-            let tree = FileTreeBuilder.tree(fromRelativePaths: changes.map(\.path), rootPath: worktreePath)
-            return StatusOverlay.apply(changes, to: tree, rootPath: worktreePath)
-        }
     }
 
     // MARK: - Non-destructive git (no confirmation)

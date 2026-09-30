@@ -1,11 +1,5 @@
 import Foundation
 
-/// File-tree filter (PRD §5.1: `All | Changed`).
-public enum ChangeFilter: String, Sendable, CaseIterable, Equatable {
-    case all
-    case changed
-}
-
 /// File-tree sort order (PRD §5.1: `Sort: name | recently changed`).
 public enum FileSortOrder: String, Sendable, CaseIterable, Equatable {
     case name

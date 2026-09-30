@@ -17,6 +17,7 @@ struct AppEnvironment {
     /// rollouts — combined; tests inject a script). Batched so the scanner can attribute a session logged
     /// under one worktree's project dir to the worktree it actually runs in.
     let agentStatuses: @Sendable (_ worktreePaths: [String], _ now: Date) -> [String: AgentActivityState]
+    let agentTurnEnds: @Sendable ([String], Date) -> [AgentTurnEnd]
     /// Where the session logs live, so a watcher can react to log writes.
     /// nil disables watching (and in tests, the watcher entirely).
     let agentProjectsRootPath: String?
@@ -61,6 +62,7 @@ struct AppEnvironment {
         activityMonitor: WorktreeActivityMonitor,
         makeWatcher: @escaping @MainActor () -> FileSystemWatcher,
         agentStatuses: @escaping @Sendable ([String], Date) -> [String: AgentActivityState] = { _, _ in [:] },
+        agentTurnEnds: @escaping @Sendable ([String], Date) -> [AgentTurnEnd] = { _, _ in [] },
         agentProjectsRootPath: String? = nil,
         agentExtraWatchPaths: [String] = [],
         processActivity: (@Sendable ([String], Date) -> Set<String>)? = nil,
@@ -81,6 +83,7 @@ struct AppEnvironment {
         self.activityMonitor = activityMonitor
         self.makeWatcher = makeWatcher
         self.agentStatuses = agentStatuses
+        self.agentTurnEnds = agentTurnEnds
         self.agentProjectsRootPath = agentProjectsRootPath
         self.agentExtraWatchPaths = agentExtraWatchPaths
         self.processActivity = processActivity
@@ -135,6 +138,7 @@ struct AppEnvironment {
             activityMonitor: WorktreeActivityMonitor(),
             makeWatcher: { FSEventsWatcher() },
             agentStatuses: { paths, now in adapters.states(forWorktreePaths: paths, now: now) },
+            agentTurnEnds: { paths, now in adapters.turnEnds(forWorktreePaths: paths, now: now) },
             agentProjectsRootPath: projectsRoot.path,
             agentExtraWatchPaths: [codexSessions.path],
             processActivity: { paths, now in processes.activeWorktrees(among: paths, now: now) },

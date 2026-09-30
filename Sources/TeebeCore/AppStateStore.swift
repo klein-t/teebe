@@ -45,6 +45,8 @@ public struct SectionLayout: Codable, Equatable, Sendable {
 /// (TECH_SPEC §10). Serialized to JSON; nothing sensitive.
 public struct AppState: Codable, Equatable, Sendable {
     public var repositories: [PersistedRepository]
+    /// Legacy required key kept for older app versions to decode saved state.
+    /// Files ignores this value; app saves always write false.
     public var showChangedOnly: Bool
     public var showIgnored: Bool
     public var floatOnTop: Bool
@@ -71,7 +73,7 @@ public struct AppState: Codable, Equatable, Sendable {
     /// state files decode; nil means the default (on).
     public var fetchAutomatically: Bool?
     /// The removal confirmation's "Also delete the branch" choice, remembered
-    /// across sessions. Optional so older state files decode; nil means on.
+    /// across sessions. Optional so older state files decode; nil means off.
     public var deleteBranchOnRemove: Bool?
     /// The folder last chosen for new worktrees, keyed by repository path.
     /// Optional so older state files decode; a missing entry means no choice yet.
@@ -82,6 +84,14 @@ public struct AppState: Codable, Equatable, Sendable {
     /// How the worktree list is ordered ("status", "name"). Optional so older state
     /// files decode; nil means the default (by folder).
     public var worktreeSortOrder: String?
+    public var defaultPreferences: ProjectPreferences?
+    public var projectPreferences: [String: ProjectPreferences]?
+    public var openWithPolicy: String?
+    public var defaultFileApp: String?
+    public var openWithAppsByRepo: [String: [String: String]]?
+    public var terminalApp: String?
+    public var agentNotifications: Bool?
+    public var notificationSound: Bool?
 
     public init(
         repositories: [PersistedRepository] = [],

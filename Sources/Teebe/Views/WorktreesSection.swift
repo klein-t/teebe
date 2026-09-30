@@ -4,6 +4,7 @@ import TeebeCore
 /// WORKTREES accordion section: the list of a repo's worktrees, each with its one
 /// status mark, a hover card, a hover trash where removal is safe, and sync arrows.
 struct WorktreesSection: View {
+    @State private var choosingComparison = false
     @Bindable var app: AppModel
     @Binding var isOpen: Bool
     @Binding var collapsedGroups: Set<WorktreeGroup>
@@ -42,6 +43,12 @@ struct WorktreesSection: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let error = app.fetchError {
+                HStack {
+                    Text(error).font(Typography.secondary).foregroundStyle(.secondary)
+                    Button("Retry") { refresh() }.disabled(app.isFetching)
+                }.padding(.horizontal, 12).padding(.vertical, 6)
+            }
             SectionHeader(title: "WORKTREES", isOpen: isOpen, isActive: app.activeSection == .worktrees, onToggle: { isOpen.toggle() }) {
                 if isOpen {
                     HStack(spacing: 2) {
@@ -52,10 +59,11 @@ struct WorktreesSection: View {
                         .disabled(selector.selectedRepo == nil)
                         .hoverHelp("New worktree")
                         Button { refresh() } label: {
-                            Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
+                            if app.isFetching { ProgressView().controlSize(.mini) } else { Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold)) }
                         }
                         .buttonStyle(IconButtonStyle()).foregroundStyle(Palette.secondaryText)
                         .hoverHelp("Fetch and refresh")
+                        .disabled(app.isFetching)
                         Menu {
                             projectSwitcher
                             Divider()
@@ -76,6 +84,12 @@ struct WorktreesSection: View {
                                 ForEach(WorktreeSortOrder.allCases) { Text($0.title).tag($0) }
                             }
                             Toggle(WorktreePreferences.fetchTitle, isOn: $app.fetchAutomatically)
+                            Button("Comparison Branch…") { choosingComparison = true }
+                            Button("Worktree Folder…") { app.chooseWorktreeParentDefault(forProject: true) }
+                            Divider()
+                            Text("Applies to this project")
+                            Button("Use Global Defaults") { app.preferences.reset() }
+                                .disabled(!app.preferences.hasOverrides)
                         } label: {
                             Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(Palette.secondaryText).hoverChip()
@@ -124,6 +138,12 @@ struct WorktreesSection: View {
             }
         }
         .clipped()
+        .sheet(isPresented: $choosingComparison) {
+            ComparisonBranchSheet(branches: app.mergeStatus.snapshot?.targets.branches ?? [],
+                saved: selector.selectedRepo.flatMap { app.extraMergeTarget(for: $0.path) } ?? "") { ref in
+                if let repo = selector.selectedRepo { app.setExtraMergeTarget(ref.isEmpty ? nil : ref, for: repo.path) }
+            }
+        }
         .task(id: mergeRefreshKey) {
             let repo = selector.selectedRepo
             await app.mergeStatus.refresh(repo: repo, extraTarget: repo.flatMap { app.extraMergeTarget(for: $0.path) },
@@ -197,7 +217,7 @@ struct WorktreesSection: View {
                 }
             }
             if selector.worktrees.isEmpty {
-                Text(app.repositories.isEmpty ? "No repository added" : "No worktrees")
+                Text(app.repositories.isEmpty ? "No repository added" : selector.isLoading ? "Loading worktrees…" : "No worktrees")
                     .font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 25).padding(.vertical, 5)
@@ -348,9 +368,8 @@ struct WorktreesSection: View {
                 // No mark to hover: the slot stays so names line up.
                 Color.clear.frame(width: 22, height: WorktreeListPresentation.rowHeight)
             }
-            Text(worktree.branch ?? worktree.name)
+            HoverScrollingText(text: worktree.branch ?? worktree.name)
                 .font(Typography.rowName)
-                .lineLimit(1).truncationMode(.middle)
                 .padding(.leading, 2)
                 // Without a mark or an info icon there is no card to hover; the text is still read out.
                 .accessibilityHint(status.hasHoverCard(grouped: grouped) || status.showsInfoIcon(grouped: grouped) ? "" : summary)
@@ -383,7 +402,7 @@ struct WorktreesSection: View {
         }
         .contextMenu {
             Button("Open in Finder") { app.revealPath(worktree.path) }
-            Button("Open in Terminal") { app.openTerminal(at: worktree.path) }
+            Button("Open in \(app.terminal.title)") { app.openTerminal(at: worktree.path) }
             if !worktree.isPrimary {
                 Button("Remove Worktree…", role: .destructive) {
                     confirmRemoval(worktree, action: app.removalAction(for: worktree))

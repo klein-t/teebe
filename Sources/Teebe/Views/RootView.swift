@@ -14,6 +14,9 @@ final class GeometryTestHooks {
     var setWorktreesOpen: ((Bool) -> Void)?
     var setChangesOpen: ((Bool) -> Void)?
     var setFilesOpen: ((Bool) -> Void)?
+    var focusSearch: (() -> Void)?
+    var leaveSearch: (() -> Void)?
+    var focusSection: ((AppModel.FocusSection) -> Void)?
     /// One step of a WORKTREES/CHANGES divider drag, as the handle's gesture reports it.
     var dragWorktreesDivider: ((CGFloat) -> Void)?
     var dragChangesDivider: ((CGFloat) -> Void)?
@@ -74,6 +77,7 @@ struct RootView: View {
     /// Focus of the FILES search field, lifted here so ⌘F can drive it and the
     /// command-key shortcuts can stand down while the user is typing in it.
     @FocusState private var searchFocused: Bool
+    @FocusState private var listFocused: Bool
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
 
@@ -250,12 +254,37 @@ struct RootView: View {
         .onAppear { installTestHooks() }
         #endif
         .background { commandShortcuts }
+        .focusedSceneValue(\.mainWindowActions, MainWindowActions(
+            focusSection: focusOrToggle, search: focusSearch,
+            collapseFolders: worktree.collapseAll, copyReferences: copyRefs,
+            copyPaths: { app.copySelectedPaths() }, trash: trashSelection,
+            hasFileSelection: !searchFocused && app.activeSection == .files && !worktree.selectedPaths.isEmpty,
+            hasExpandedFolders: worktree.hasExpandedFolders))
         .focusable()
+        .focused($listFocused)
         .focusEffectDisabled()
-        .onKeyPress(.space) { handleSpace(); return .handled }
-        .onKeyPress(.escape) { preview.close(); dismissWindow(id: "preview"); return .handled }
+        .onChange(of: searchFocused) { _, focused in
+            if !focused { listFocused = true }
+        }
+        .onKeyPress(.space) {
+            guard !searchFocused else { return .ignored }
+            handleSpace()
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            if searchFocused {
+                if worktree.searchQuery.isEmpty { searchFocused = false } else { worktree.searchQuery = "" }
+            } else {
+                preview.close()
+                dismissWindow(id: "preview")
+            }
+            return .handled
+        }
         .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { handleArrow($0) }
-        .onKeyPress(.return) { activateSelected(); return .handled }
+        .onKeyPress(.return) {
+            if searchFocused { app.activateSearchResult() } else { activateSelected() }
+            return .handled
+        }
         // Tab / ⇧Tab cycle the active section (stands down while typing in search).
         .onKeyPress(keys: [.tab]) { press in
             guard !searchFocused else { return .ignored }
@@ -654,6 +683,9 @@ struct RootView: View {
         hooks.setWorktreesOpen = { setOpen(.worktrees, $0) }
         hooks.setChangesOpen = { setOpen(.changes, $0) }
         hooks.setFilesOpen = { setOpen(.files, $0) }
+        hooks.focusSearch = focusSearch
+        hooks.focusSection = focusOrToggle
+        hooks.leaveSearch = { searchFocused = false; app.focusFileResults() }
         hooks.dragWorktreesDivider = resizeWorktrees
         hooks.dragChangesDivider = resizeChanges
         hooks.endDividerDrag = endDividerDrag
@@ -729,6 +761,12 @@ struct RootView: View {
     /// move the keyboard cursor (Enter commits). CHANGES: move the selection and track
     /// the open diff peek. FILES: move/extend the cursor and ←/→ collapse-expand.
     private func handleArrow(_ press: KeyPress) -> KeyPress.Result {
+        if searchFocused {
+            guard press.key == .downArrow else { return .ignored }
+            searchFocused = false
+            app.focusFileResults()
+            return .handled
+        }
         let result: KeyPress.Result
         switch app.activeSection {
         case .worktrees: result = handleWorktreeArrow(press)
@@ -789,7 +827,10 @@ struct RootView: View {
     /// ⌘1/⌘2/⌘3: if the section is already active, toggle it open/closed; otherwise
     /// make it active (opening it and moving the selection in).
     private func focusOrToggle(_ section: AppModel.FocusSection) {
-        if app.activeSection == section {
+        if searchFocused {
+            searchFocused = false
+            activate(section)
+        } else if app.activeSection == section {
             setOpen(rootSection(section), !sectionIsOpen(section))
         } else {
             activate(section)
@@ -806,6 +847,7 @@ struct RootView: View {
     /// Make `section` the active one: open it if collapsed, and seat the selection
     /// (the open worktree for WORKTREES, the current/first change, or a file cursor).
     private func activate(_ section: AppModel.FocusSection) {
+        listFocused = true
         app.activeSection = section
         if !sectionIsOpen(section) { setOpen(rootSection(section), true) }
         switch section {
@@ -846,26 +888,29 @@ struct RootView: View {
         Task { await preview.update(for: node, worktreePath: wt) }
     }
 
-    /// Hidden buttons that register the command-key shortcuts window-wide. Disabled
-    /// while the search field is focused so ⌘A / ⌘⌫ keep editing the query text there.
+    /// Navigation stays available during search. File actions stand down while
+    /// editing, so ⌘A / ⌘⌫ keep acting on the query text.
     private var commandShortcuts: some View {
-        Group {
-            Button("") { focusOrToggle(.worktrees) }.keyboardShortcut("1", modifiers: .command)
-            Button("") { focusOrToggle(.changes) }.keyboardShortcut("2", modifiers: .command)
-            Button("") { focusOrToggle(.files) }.keyboardShortcut("3", modifiers: .command)
-            Button("") { focusSearch() }.keyboardShortcut("f", modifiers: .command)
-            Button("") { if app.activeSection == .files { worktree.selectAllVisible() } }.keyboardShortcut("a", modifiers: .command)
-            Button("") { copyRefs() }.keyboardShortcut("c", modifiers: [.command, .shift])
-            Button("") { trashSelection() }.keyboardShortcut(.delete, modifiers: .command)
-        }
+        Button("") { if app.activeSection == .files { worktree.selectAllVisible() } }
+            .keyboardShortcut("a", modifiers: .command)
+            .disabled(searchFocused)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
-        .disabled(searchFocused)
+        .onChange(of: app.quickLookRequest?.count) { _, _ in
+            guard let request = app.quickLookRequest else { return }
+            app.focusFiles()
+            worktree.select(request.path)
+            preview.close()
+            dismissWindow(id: "preview")
+            quickLook.onArrow = { _ = worktree.stepPeek($0, in: .files) }
+            if quickLook.isOpen { quickLook.show(URL(fileURLWithPath: request.path)) } else { presentQuickLook() }
+        }
     }
 
     /// ⌘F: open FILES if needed and hand focus to its search field.
     private func focusSearch() {
+        listFocused = false
         if !openFiles { setOpen(.files, true) }
         app.focusSearch()
     }
@@ -932,6 +977,7 @@ struct RootView: View {
     /// row, file or folder. Arrow keys in the panel move the FILES selection and the
     /// panel follows it (`syncQuickLookToSelection`).
     private func presentQuickLook() {
+        if preview.isVisible { preview.close(); dismissWindow(id: "preview") }
         if worktree.selectedNode == nil, let first = worktree.visibleRows.first { worktree.select(first.node.path) }
         guard let node = worktree.selectedNode else { return }
         quickLook.onArrow = { _ = worktree.stepPeek($0, in: .files) }

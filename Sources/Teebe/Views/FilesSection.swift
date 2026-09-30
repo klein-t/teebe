@@ -23,16 +23,26 @@ struct FilesSection: View {
         VStack(spacing: 0) {
             SectionHeader(title: "FILES", isOpen: isOpen, isActive: app.activeSection == .files, onToggle: { isOpen.toggle() }) {
                 if isOpen {
-                    Menu {
-                        Picker("Show", selection: $worktree.filter) {
-                            Text("All files").tag(ChangeFilter.all)
-                            Text("Changed only").tag(ChangeFilter.changed)
+                    if worktree.hasExpandedFolders {
+                        Button { worktree.collapseAll() } label: {
+                            Image(systemName: "rectangle.compress.vertical")
+                                .font(.system(size: 11, weight: .semibold))
                         }
+                        .buttonStyle(IconButtonStyle())
+                        .foregroundStyle(Palette.secondaryText)
+                        .accessibilityLabel("Collapse all folders")
+                        .hoverHelp("Collapse all folders")
+                    }
+                    Menu {
                         Picker("Sort", selection: $worktree.sortOrder) {
                             Text("Name").tag(FileSortOrder.name)
                             Text("Recently changed").tag(FileSortOrder.recent)
                         }
                         Toggle("Show ignored", isOn: $worktree.showIgnored)
+                        Divider()
+                        Text("Applies to this project")
+                        Button("Use Global Defaults") { app.preferences.reset() }
+                            .disabled(!app.preferences.hasOverrides)
                     } label: {
                         Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Palette.secondaryText).hoverChip()
@@ -57,20 +67,18 @@ struct FilesSection: View {
                             .padding(.horizontal, 11).padding(.vertical, 5)
                             .focused(searchFocused)
                             .onChange(of: app.searchFocusRequest) { _, _ in searchFocused.wrappedValue = true }
+                            .onChange(of: searchFocused.wrappedValue) { _, focused in
+                                if focused { app.focusFiles() }
+                            }
                             // ↓ drops focus into the results so the tree's arrow keys take over.
                             .onKeyPress(.downArrow) {
                                 searchFocused.wrappedValue = false
-                                if let first = worktree.visibleRows.first,
-                                   worktree.selectedPath == nil
-                                    || !worktree.visibleRows.contains(where: { $0.node.path == worktree.selectedPath }) {
-                                    worktree.select(first.node.path)
-                                }
+                                app.focusFileResults()
                                 return .handled
                             }
                             // Enter opens the current (or first) result without leaving the field.
                             .onKeyPress(.return) {
-                                guard let node = worktree.selectedNode ?? worktree.visibleRows.first?.node else { return .ignored }
-                                if node.isDirectory { worktree.toggleExpand(node) } else { app.open(node) }
+                                app.activateSearchResult()
                                 return .handled
                             }
                             // Esc clears the query first, then hands focus back to the tree.
@@ -78,6 +86,11 @@ struct FilesSection: View {
                                 if worktree.searchQuery.isEmpty { searchFocused.wrappedValue = false } else { worktree.searchQuery = "" }
                                 return .handled
                             }
+                        if worktree.isSearching {
+                            Text("Searching…").font(Typography.secondary).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .padding(.horizontal, 12).padding(.bottom, 4)
+                        }
                         ScrollViewReader { proxy in
                             // Rows fade into the window's bottom edge while more are below,
                             // like the WORKTREES and CHANGES lists.
@@ -177,12 +190,20 @@ struct FileRowsView: View {
     let sticky: StickyFolders
 
     private var worktree: WorktreeModel { app.selector.worktree }
+    private var emptyMessage: String {
+        if app.repositories.isEmpty { return "Add a repository to get started" }
+        if app.selector.isLoading || worktree.isLoading { return "Loading files…" }
+        if worktree.isSearching { return "Searching…" }
+        if worktree.errorMessage != nil { return "Couldn’t load files" }
+        if !worktree.searchQuery.isEmpty { return "No matching files" }
+        return "No files"
+    }
 
     var body: some View {
         let rows = worktree.visibleRows
         Group {
             if rows.isEmpty {
-                Text(app.repositories.isEmpty ? "Add a repository to get started" : "No files")
+                Text(emptyMessage)
                     .font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 30).padding(.vertical, 6)
@@ -336,13 +357,18 @@ struct FileRow: View {
                 Spacer().frame(width: 13)
             }
             icon
-            Text(node.name)
-                .font(.system(size: 13)).lineLimit(1)
+            HoverScrollingText(text: node.name).font(.system(size: 13))
+            if !worktree.searchQuery.isEmpty {
+                Text((worktree.relativePath(of: node) as NSString).deletingLastPathComponent)
+                    .font(Typography.secondary).foregroundStyle(isSelected ? .white.opacity(0.75) : .secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
             Spacer(minLength: 4)
             if let change = node.change {
                 StatusLetter(change: change)
             } else if node.containsChanges {
                 Circle().fill(Palette.amber).frame(width: 6, height: 6)
+                    .frame(width: 16, height: 16)
             }
         }
         .padding(.leading, CGFloat(row.depth) * 16 + 11).padding(.trailing, 11)
@@ -407,11 +433,23 @@ struct FileContextMenu: View {
     private var worktree: WorktreeModel { app.selector.worktree }
 
     var body: some View {
-        Button("Open") { app.open(node) }
-        Button("Open With…") { app.openWith(node) }
+        if node.isDirectory {
+            Button(worktree.isExpanded(node) ? "Collapse" : "Expand") { worktree.toggleExpand(node) }
+        } else {
+            Button("Open") { app.open(node) }
+            Button("Open With…") { app.openWith(node) }
+            if app.openWith.hasProjectOverride(for: URL(fileURLWithPath: node.path)) {
+                Button("Use Default App for This Type") {
+                    app.openWith.resetProjectOverride(for: URL(fileURLWithPath: node.path))
+                }
+            }
+        }
         Button("Reveal in Finder") { app.reveal(node) }
         if !node.isDirectory {
-            Button("Quick Look") {
+            Button("Quick Look") { app.requestQuickLook(node) }
+        }
+        if !node.isDirectory, node.change != nil {
+            Button("Preview Changes") {
                 guard let wt = worktree.worktreePath else { return }
                 // Show the window before loading so a close during loading stays closed.
                 Task {
@@ -429,7 +467,8 @@ struct FileContextMenu: View {
         Button("New Folder…") { app.newFolder(in: node) }
         Button("Rename…") { app.rename(node) }
         Button("Duplicate") { app.duplicate(node) }
-        Button("Copy Path") { app.copyPath(node) }
+        Button("Copy Relative Path") { app.copyPath(node, relative: true) }
+        Button("Copy Full Path") { app.copyPath(node) }.keyboardShortcut("c", modifiers: [.command, .option])
         if let change = node.change {
             Divider()
             if change.isStaged {

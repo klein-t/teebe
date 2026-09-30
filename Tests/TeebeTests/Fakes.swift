@@ -95,9 +95,11 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     /// Scripted stdout for `git rev-parse --git-common-dir` (the repo's git common
     /// dir). When nil, `run` returns empty stdout and callers fall back to `.git`.
     var gitCommonDirOutput: String?
+    var runGate: (@Sendable ([String], String) async -> Void)?
     @discardableResult
     func run(_ arguments: [String], in directory: String) async throws -> GitInvocationResult {
         statusLock.lock(); gitDirectories.append(directory); statusLock.unlock()
+        if let runGate { await runGate(arguments, directory) }
         var stdout = Data()
         if arguments == ["rev-parse", "--git-common-dir"], let gitCommonDirOutput {
             stdout = Data(gitCommonDirOutput.utf8)
@@ -253,6 +255,7 @@ func makeTestEnvironment(
     monitor: WorktreeActivityMonitor = WorktreeActivityMonitor(),
     makeWatcher: (@MainActor () -> FileSystemWatcher)? = nil,
     agentStatuses: (@Sendable ([String], Date) -> [String: AgentActivityState])? = nil,
+    agentTurnEnds: @escaping @Sendable ([String], Date) -> [AgentTurnEnd] = { _, _ in [] },
     agentProjectsRootPath: String? = nil,
     agentExtraWatchPaths: [String] = [],
     processActivity: (@Sendable ([String], Date) -> Set<String>)? = nil,
@@ -281,6 +284,7 @@ func makeTestEnvironment(
         activityMonitor: monitor,
         makeWatcher: makeWatcher ?? { FakeWatcher() },
         agentStatuses: agentStatuses ?? { _, _ in [:] },
+        agentTurnEnds: agentTurnEnds,
         agentProjectsRootPath: agentProjectsRootPath,
         agentExtraWatchPaths: agentExtraWatchPaths,
         processActivity: processActivity,

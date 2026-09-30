@@ -9,7 +9,7 @@ enum WorktreePreferences {
     static let groupingHelp = "Group worktrees into Uncommitted changes, Not merged and Safe to delete. "
         + "When off, keep a flat list; each row still shows its status."
     static let fetchTitle = "Fetch automatically"
-    static let fetchHelp = "Check remotes in the background. Your files stay unchanged; Refresh still works when off."
+    static let fetchHelp = "Fetch origin when you return to the app or select a project, at most once every five minutes. Refresh always works."
     static let extraTargetTitle = "Also check merges against"
     static let extraTargetHelp = "Merges are checked against up to four branches: the default branch, the one chosen "
         + "here, then dev, develop, main and master when they exist. "
@@ -21,12 +21,22 @@ enum WorktreePreferences {
 @Observable
 final class AppModel {
     private(set) var repositories: [Repository] = []
-    var groupWorktreesByMergeStatus: Bool { didSet { persist() } }
+    let preferences: PreferencesModel
+    var groupWorktreesByMergeStatus: Bool {
+        get { preferences.effective.groupByStatus ?? false }
+        set { preferences.set(\.groupByStatus, newValue) }
+    }
     /// How the worktree list is ordered, within each group when grouped.
-    var worktreeSortOrder: WorktreeSortOrder { didSet { persist() } }
+    var worktreeSortOrder: WorktreeSortOrder {
+        get { WorktreeSortOrder(rawValue: preferences.effective.worktreeSort ?? "") ?? .folder }
+        set { preferences.set(\.worktreeSort, newValue.rawValue) }
+    }
     /// Fetch remote refs in the background, so merge results reflect what was
     /// pushed rather than what was last pulled by hand.
-    var fetchAutomatically: Bool { didSet { persist() } }
+    var fetchAutomatically: Bool {
+        get { preferences.effective.fetchAutomatically ?? true }
+        set { preferences.set(\.fetchAutomatically, newValue) }
+    }
     /// Bumped when a repository's extra merge target changes, so the scan reruns.
     private(set) var mergeTargetRevision = 0
     /// "Also delete the branch" in the removal confirmation; the last choice sticks.
@@ -34,6 +44,15 @@ final class AppModel {
     var floatOnTop: Bool { didSet { persist() } }
     /// Light / dark override, or follow the system. Applied app-wide via `NSApp.appearance`.
     var appearance: AppearanceMode { didSet { appearance.apply(); persist() } }
+    var terminal: TerminalChoice { didSet { persist() } }
+    var agentNotifications: Bool { didSet { selector.notificationsEnabled = agentNotifications; persist() } }
+    var notificationSound: Bool { didSet { AgentNotifier.soundEnabled = notificationSound; persist() } }
+    private(set) var hookInstalled = false
+    private(set) var hooksDisabled = false
+    private(set) var hookMessage: String?
+    private(set) var notificationTestMessage: String?
+    private(set) var isFetching = false
+    private(set) var fetchError: String?
     private(set) var errorMessage: String?
     /// The New Worktree sheet's form while it is up; nil when it is closed.
     var newWorktree: NewWorktreeModel?
@@ -81,23 +100,29 @@ final class AppModel {
     /// True only while `bootstrap()` hydrates the model from `state`; suppresses the
     /// `persist()` that property assignments would otherwise trigger during load.
     @ObservationIgnored private var isHydrating = false
+    @ObservationIgnored private var isApplyingPreferences = false
 
     /// `mergeService` is the scanner behind the worktree groups; tests hand in a
     /// scripted one instead of a real repository.
     init(environment: AppEnvironment, mergeService: WorktreeCleanupChecking? = nil) {
         self.environment = environment
         self.state = environment.store.load()
+        self.preferences = PreferencesModel(state: self.state)
         self.selector = SelectorModel(environment: environment)
         self.mergeStatus = WorktreeMergeModel(service: mergeService ?? WorktreeCleanupService(git: environment.git))
         self.remoteRefresher = RemoteRefresher(git: environment.git)
-        self.openWith = OpenWithModel(environment: environment, apps: self.state.openWithApps ?? [:])
-        // Keep the legacy key so existing grouping choices survive the new default.
-        self.groupWorktreesByMergeStatus = self.state.showMergeStatus ?? false
-        self.worktreeSortOrder = WorktreeSortOrder(rawValue: self.state.worktreeSortOrder ?? "") ?? .folder
-        self.fetchAutomatically = self.state.fetchAutomatically ?? true
-        self.deleteBranchOnRemove = self.state.deleteBranchOnRemove ?? true
+        self.openWith = OpenWithModel(environment: environment, apps: self.state.openWithApps ?? [:],
+            projectApps: self.state.openWithAppsByRepo ?? [:],
+            policy: OpenWithModel.Policy(rawValue: self.state.openWithPolicy ?? "") ?? .system,
+            defaultApp: self.state.defaultFileApp)
+        self.deleteBranchOnRemove = self.state.deleteBranchOnRemove ?? false
         self.floatOnTop = false
         self.appearance = .system
+        self.terminal = TerminalChoice(rawValue: self.state.terminalApp ?? "") ?? .terminal
+        self.agentNotifications = self.state.agentNotifications ?? true
+        self.notificationSound = self.state.notificationSound ?? true
+        self.selector.notificationsEnabled = self.agentNotifications
+        AgentNotifier.soundEnabled = self.notificationSound
         // Persist whenever the selection changes, and clear any stale global error —
         // navigating to a different repo/worktree should dismiss the banner.
         self.selector.onSelectionChange = { [weak self] in
@@ -108,6 +133,39 @@ final class AppModel {
         // Deleted worktrees are never forgotten while a removal is running.
         self.selector.isRemovalRunning = { [weak self] in self?.groupActionsStorage?.isWorking == true }
         self.openWith.onChange = { [weak self] in self?.persist() }
+        self.preferences.onChange = { [weak self] in
+            guard let self else { return }
+            self.applyFilePreferences()
+            self.mergeTargetRevision += 1
+            self.persist()
+        }
+        self.selector.onRepositoryChange = { [weak self] in
+            guard let self else { return }
+            self.preferences.repositoryPath = self.selector.selectedRepo?.path
+            self.openWith.repositoryPath = self.selector.selectedRepo?.path
+            self.applyFilePreferences()
+        }
+        self.applyFilePreferences()
+        self.selector.worktree.onFilePreferencesChange = { [weak self] in self?.saveFileOverrides() }
+    }
+
+    private func applyFilePreferences() {
+        guard !isApplyingPreferences else { return }
+        isApplyingPreferences = true
+        defer { isApplyingPreferences = false }
+        let values = preferences.effective
+        selector.worktree.showIgnored = values.showIgnored ?? false
+        selector.worktree.sortOrder = FileSortOrder(rawValue: values.fileSort ?? "") ?? .name
+    }
+
+    private func saveFileOverrides() {
+        guard !isApplyingPreferences else { return }
+        isApplyingPreferences = true
+        defer { isApplyingPreferences = false }
+        let values = preferences.effective
+        let files = selector.worktree
+        if files.showIgnored != (values.showIgnored ?? false) { preferences.set(\.showIgnored, files.showIgnored) }
+        if files.sortOrder.rawValue != (values.fileSort ?? "name") { preferences.set(\.fileSort, files.sortOrder.rawValue) }
     }
 
     /// Single entry point for the global error banner. Replaces any existing
@@ -165,6 +223,31 @@ final class AppModel {
         }
     }
 
+    func refreshHookStatus() {
+        hookInstalled = ClaudeHookInstaller.isInstalled()
+        hooksDisabled = ClaudeHookInstaller.hooksDisabled()
+    }
+
+    func installClaudeHook() {
+        do {
+            _ = try ClaudeHookInstaller.install()
+            state.hookOfferResponse = "accepted"
+            refreshHookStatus()
+            hookMessage = hooksDisabled
+                ? "Installed, but Claude Code has all hooks disabled. Enable hooks there to receive instant updates."
+                : "Installed. Restart existing Claude Code sessions to load the hook."
+            persist()
+        } catch { hookMessage = "Couldn’t update Claude Code settings. Existing settings were kept." }
+        refreshHookStatus()
+    }
+
+    func testNotification() {
+        notificationTestMessage = "Sending…"
+        AgentNotifier.post(title: "Teebe test", body: "Agent notifications can reach this Mac.") { [weak self] result in
+            self?.notificationTestMessage = result
+        }
+    }
+
     /// Launch-time hook setup: offer once, then keep the user's choice. An
     /// accepted hook that later disappears (settings rewritten by another tool)
     /// is repaired without asking again.
@@ -176,25 +259,23 @@ final class AppModel {
         case .none:
             return
         case .repair:
-            try? ClaudeHookInstaller.install()
+            installClaudeHook()
         case .ask:
             let alert = NSAlert()
             alert.messageText = "Notify instantly, use less battery?"
             alert.informativeText = """
-            teebe can add a tiny hook to Claude Code (~/.claude/settings.json) that \
-            pings it the moment an agent finishes. With the hook, teebe stops all \
-            background file watching while its window is covered — near-zero CPU — \
-            and "agent needs you" notifications become instant. The hook is one \
-            `notifyutil` command; it sends no data anywhere.
+            Add a local signal to Claude Code so Teebe checks its status promptly, \
+            even while hidden. This optional hook is for Claude Code only. Codex \
+            activity is also detected, with checks up to two minutes apart while hidden. \
+            No session content is sent anywhere. You can install or repair the hook later in Settings.
             """
             alert.addButton(withTitle: "Add Hook")
             alert.addButton(withTitle: "No Thanks")
             let accepted = alert.runModal() == .alertFirstButtonReturn
             state.hookOfferResponse = accepted ? "accepted" : "declined"
-            try? environment.store.save(state)
+            saveState()
             if accepted {
-                do { try ClaudeHookInstaller.install() }
-                catch { setError("Couldn't update ~/.claude/settings.json — hook not added.") }
+                do { try ClaudeHookInstaller.install() } catch { setError("Couldn't update ~/.claude/settings.json — hook not added.") }
             }
         }
     }
@@ -257,6 +338,8 @@ final class AppModel {
         state.cleanupTargetByRepo?[repo.path] = nil
         state.layoutByRepo?[repo.path] = nil
         state.worktreeParentByRepo?[repo.path] = nil
+        preferences.remove(repo.path)
+        openWith.removeProject(repo.path)
         persist()
     }
 
@@ -289,9 +372,23 @@ final class AppModel {
         }
     }
 
-    func copyPath(_ node: FileNode) {
+    private(set) var quickLookRequest: (path: String, count: Int)?
+
+    func requestQuickLook(_ node: FileNode) {
+        guard !node.isDirectory else { return }
+        quickLookRequest = (node.path, (quickLookRequest?.count ?? 0) + 1)
+    }
+
+    func copyPath(_ node: FileNode, relative: Bool = false) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(node.path, forType: .string)
+        NSPasteboard.general.setString(relative ? selector.worktree.relativePath(of: node) : node.path, forType: .string)
+    }
+
+    func copySelectedPaths() {
+        let paths = selector.worktree.orderedSelection()
+        guard activeSection == .files, !paths.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
     }
 
     /// ⌘⇧C: copy the FILES selection to the clipboard as Claude-ready `@`-refs, ready
@@ -306,7 +403,28 @@ final class AppModel {
     /// ⌘F: ask the FILES search field to take focus. The view observes this counter
     /// and focuses on change (a token rather than a bool so repeat presses re-fire).
     private(set) var searchFocusRequest = 0
-    func focusSearch() { searchFocusRequest += 1 }
+    func focusSearch() {
+        focusFiles()
+        searchFocusRequest += 1
+    }
+
+    /// Clicking search and invoking its shortcut share the same keyboard owner.
+    func focusFiles() {
+        activeSection = .files
+        selector.worktree.selectionSource = .files
+    }
+
+    @discardableResult
+    func focusFileResults() -> FileNode? {
+        focusFiles()
+        return selector.worktree.selectCurrentOrFirstVisibleFile()
+    }
+
+    /// Return in search opens only a visible result, or does nothing with no matches.
+    func activateSearchResult() {
+        guard let node = focusFileResults() else { return }
+        if node.isDirectory { selector.worktree.toggleExpand(node) } else { open(node) }
+    }
 
     func rename(_ node: FileNode) {
         guard let newName = promptForName(title: "Rename", initial: node.name), newName != node.name else { return }
@@ -378,7 +496,7 @@ final class AppModel {
         let comparison = mergeStatus.snapshot?.targets.automatic?.name
         let primaryBranch = selector.worktrees.first(where: \.isPrimary)?.branch
         let parent = WorktreeLocation.parentFolder(
-            repoPath: repo.path, remembered: state.worktreeParentByRepo?[repo.path],
+            repoPath: repo.path, remembered: preferences.effective(for: repo.path).worktreeParent,
             worktrees: selector.worktrees)
         newWorktree = NewWorktreeModel(repo: repo, branches: selector.branches,
                                        comparisonBranch: comparison, primaryBranch: primaryBranch,
@@ -406,7 +524,8 @@ final class AppModel {
         var byRepo = state.worktreeParentByRepo ?? [:]
         byRepo[form.repo.path] = path
         state.worktreeParentByRepo = byRepo
-        try? environment.store.save(state)
+        preferences.setWorktreeParent(path, for: form.repo.path)
+        persist()
     }
 
     /// Create the worktree the sheet describes. On success the repository is
@@ -437,53 +556,82 @@ final class AppModel {
     /// refs is what makes the merge check re-run, through the repository watcher. The
     /// rows' sync facts are re-read here too: the watcher is off in low power.
     func refreshRemotes(force: Bool, now: Date = Date()) async {
-        guard force || fetchAutomatically, let repo = selector.selectedRepo,
-              await remoteRefresher.fetch(repoPath: repo.path, force: force, now: now) else { return }
-        await selector.refreshWorktreeInfo()
+        guard force || fetchAutomatically, let repo = selector.selectedRepo else { return }
+        if force {
+            guard !isFetching else { return }
+            isFetching = true
+            fetchError = nil
+        }
+        defer { if force { isFetching = false } }
+        let succeeded = await remoteRefresher.fetch(repoPath: repo.path, force: force, now: now)
+        guard selector.selectedRepo?.path == repo.path else { return }
+        if succeeded { await selector.refreshWorktreeInfo() } else if force { fetchError = "Couldn’t fetch origin. Check your connection and repository access." }
     }
 
     /// The branch (full ref, e.g. `refs/heads/release/2`) this repository's
     /// worktrees are also checked against, beyond the automatic default and the
     /// integration branches. nil when none is set.
     func extraMergeTarget(for repoPath: String) -> String? {
-        state.cleanupTargetByRepo?[repoPath]
+        let ref = preferences.effective(for: repoPath).comparisonRef
+        return ref?.isEmpty == false ? ref : nil
     }
 
     /// Set or clear (nil) the extra merge target; the merge check reruns.
     func setExtraMergeTarget(_ ref: String?, for repoPath: String) {
-        var targets = state.cleanupTargetByRepo ?? [:]
-        targets[repoPath] = ref
-        state.cleanupTargetByRepo = targets
-        mergeTargetRevision += 1
-        // Through persist(), so the write picks up the rest of the current state and
-        // honours the hydration guard instead of racing bootstrap.
-        persist()
+        preferences.setComparison(ref, for: repoPath)
     }
 
     func revealPath(_ path: String) {
         environment.opener.reveal(URL(fileURLWithPath: path))
     }
 
-    /// Open the worktree directory in Terminal.
+    func chooseWorktreeParentDefault(forProject: Bool = false) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Folder"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if forProject { preferences.set(\.worktreeParent, url.path) } else { preferences.defaults.worktreeParent = url.path }
+    }
+
     func openTerminal(at path: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-a", "Terminal", path]
-        try? process.run()
+        let choice = terminal
+        Task {
+            let succeeded = await Task.detached { choice.launch(at: path) }.value
+            if !succeeded { setError("Couldn’t open \(choice.title). Check that it is installed.") }
+        }
     }
 
     func persist() {
         guard !isHydrating else { return }
         state.repositories = repositories.map { PersistedRepository(path: $0.path) }
+        state.defaultPreferences = preferences.defaults
+        state.projectPreferences = preferences.projects
+        state.showChangedOnly = false
+        state.showIgnored = preferences.defaults.showIgnored ?? false
         state.floatOnTop = floatOnTop
-        state.showMergeStatus = groupWorktreesByMergeStatus
-        state.worktreeSortOrder = worktreeSortOrder == .folder ? nil : worktreeSortOrder.rawValue
-        state.fetchAutomatically = fetchAutomatically
+        state.showMergeStatus = preferences.defaults.groupByStatus
+        state.worktreeSortOrder = preferences.defaults.worktreeSort == "folder" ? nil : preferences.defaults.worktreeSort
+        state.fetchAutomatically = preferences.defaults.fetchAutomatically
         state.deleteBranchOnRemove = deleteBranchOnRemove
         state.appearance = appearance == .system ? nil : appearance.rawValue
+        state.terminalApp = terminal.rawValue
+        state.agentNotifications = agentNotifications
+        state.notificationSound = notificationSound
         state.openWithApps = openWith.apps.isEmpty ? nil : openWith.apps
+        state.openWithAppsByRepo = openWith.projectApps
+        state.openWithPolicy = openWith.policy.rawValue
+        state.defaultFileApp = openWith.defaultApp
         state.lastSelectedRepoPath = selector.selectedRepo?.path
         state.lastSelectedWorktreePath = selector.selectedWorktree?.path
+        saveState()
+    }
+
+    private func saveState() {
+        // WhatsNewModel owns this marker and may have advanced it since we
+        // loaded our in-memory preferences. Never restore the previous version.
+        state.lastSeenVersion = environment.store.load().lastSeenVersion
         try? environment.store.save(state)
     }
 
@@ -501,6 +649,6 @@ final class AppModel {
         var byRepo = state.layoutByRepo ?? [:]
         byRepo[path] = layout
         state.layoutByRepo = byRepo
-        try? environment.store.save(state)
+        saveState()
     }
 }

@@ -58,7 +58,8 @@ struct ChangesSection: View {
                 changeRow(change, indented: false)
             }
             if worktree.changeCount == 0 {
-                Text(worktree.isFolderMissing ? "Folder missing" : "No changes")
+                Text(worktree.isFolderMissing ? "Folder missing" : (app.selector.isLoading || worktree.isLoading) ? "Checking for changes…"
+                     : worktree.errorMessage != nil ? "Couldn’t check changes" : "No changes")
                     .font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 30).padding(.vertical, 4)
@@ -72,8 +73,13 @@ struct ChangesSection: View {
             Image(systemName: change.iconName)
                 .font(.system(size: 11))
                 .foregroundStyle(selected ? .white : Palette.secondaryText)
-            Text((change.path as NSString).lastPathComponent)
-                .font(.system(size: 13)).lineLimit(1)
+            HoverScrollingText(text: (change.path as NSString).lastPathComponent)
+                .font(.system(size: 13))
+            if worktree.changes.filter({ ($0.path as NSString).lastPathComponent == (change.path as NSString).lastPathComponent }).count > 1 {
+                Text((change.path as NSString).deletingLastPathComponent)
+                    .font(Typography.secondary).foregroundStyle(selected ? .white.opacity(0.75) : .secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
             Spacer(minLength: 4)
             StatusLetter(change: change)
         }
