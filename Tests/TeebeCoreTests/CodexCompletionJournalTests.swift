@@ -108,6 +108,20 @@ struct CodexCompletionJournalTests {
         #expect(delivery.consume([fresh], now: epoch.addingTimeInterval(7)).isEmpty)
     }
 
+    @Test(arguments: [0.0001, 0.0006])
+    func resumingDiscardsTheIndistinguishableTimestampBoundary(fraction: TimeInterval) throws {
+        var delivery = AgentTurnDelivery()
+        delivery.watch(["/repo"], now: epoch.addingTimeInterval(-1))
+        let enabledAt = epoch.addingTimeInterval(fraction)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let encodedBoundary = try #require(formatter.date(from: stamp(enabledAt)))
+        delivery.resumeObservation(now: enabledAt)
+        let ambiguous = AgentTurnEnd(id: "ambiguous", worktreePath: "/repo", endedAt: encodedBoundary)
+        let fresh = AgentTurnEnd(id: "fresh", worktreePath: "/repo", endedAt: encodedBoundary.addingTimeInterval(0.001))
+        #expect(delivery.consume([ambiguous, fresh], now: epoch.addingTimeInterval(1)) == [fresh])
+    }
+
     private func line(_ type: String, turn: String = "t", at date: Date) -> String {
         #"{"timestamp":"\#(stamp(date))","type":"event_msg","payload":{"type":"\#(type)","turn_id":"\#(turn)"}}"#
     }

@@ -66,12 +66,19 @@ final class SelectorModel {
     var onSelectionChange: (() -> Void)?
     var onRepositoryChange: (() -> Void)?
     private(set) var isLoading = false
-    var notificationsEnabled = true {
-        didSet {
-            guard notificationsEnabled, !oldValue else { return }
-            turnDelivery.resumeObservation()
-            needsNotificationBaseline = true
-        }
+    private var notificationPreference = true
+    var notificationsEnabled: Bool {
+        get { notificationPreference }
+        set { setNotificationsEnabled(newValue) }
+    }
+
+    func setNotificationsEnabled(_ enabled: Bool, now: Date = Date()) {
+        guard enabled != notificationPreference else { return }
+        notificationPreference = enabled
+        guard enabled else { return }
+        turnDelivery.resumeObservation(now: now)
+        agentRefreshGeneration += 1
+        needsNotificationBaseline = true
     }
     @ObservationIgnored private var needsNotificationBaseline = false
     @ObservationIgnored private var turnDelivery = AgentTurnDelivery()
@@ -509,7 +516,9 @@ final class SelectorModel {
         // A scan can read a completion after reading the working badge. Keep
         // that ending through the following badge edge, even if already delivered.
         let endedPaths = Set(turnEnds.filter { $0.endedAt >= lastAgentSnapshotAt }.map(\.worktreePath))
-        lastAgentSnapshotAt = now
+        // Completion timestamps round to milliseconds. Keep every ending from
+        // the scan-start millisecond through the following badge snapshot.
+        lastAgentSnapshotAt = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970 * 1_000) / 1_000)
         let fresh = turnDelivery.consume(turnEnds, now: max(now, Date()))
         guard notificationsEnabled else { return }
         for event in fresh where event.completed {

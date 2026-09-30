@@ -48,22 +48,22 @@ struct CodexCompletionNotificationTests {
         let rig = try Rig()
         defer { rig.cleanUp() }
         await rig.selector.selectRepo(Repository(path: rig.path))
-        try rig.record("task_started", turn: "muted")
-        await rig.selector.refreshAgentStates()
+        let enabledAt = Date().addingTimeInterval(1)
+        try rig.record("task_started", turn: "muted", at: enabledAt.addingTimeInterval(-0.5))
+        await rig.selector.refreshAgentStates(now: enabledAt.addingTimeInterval(-0.4))
         rig.selector.notificationsEnabled = false
-        try rig.record("task_complete", turn: "muted")
-        rig.selector.notificationsEnabled = true
+        try rig.record("task_complete", turn: "muted", at: enabledAt.addingTimeInterval(-0.1))
+        rig.selector.setNotificationsEnabled(true, now: enabledAt)
         if !newBeforeFirstScan {
-            await rig.selector.refreshAgentStates()
+            await rig.selector.refreshAgentStates(now: enabledAt.addingTimeInterval(0.1))
             #expect(rig.spy.posted.isEmpty)
         }
-        // Rollout timestamps have millisecond precision. Make the next turn
-        // unambiguously newer than the toggle, with or without an earlier scan.
-        try await Task.sleep(for: .milliseconds(3))
-        try rig.turn("new")
-        await rig.selector.refreshAgentStates()
+        // Use explicit times because rollout timestamps round to milliseconds.
+        // The new ending is provably after the toggle, without timing sleeps.
+        try rig.turn("new", at: enabledAt.addingTimeInterval(0.2))
+        await rig.selector.refreshAgentStates(now: enabledAt.addingTimeInterval(0.3))
         #expect(rig.spy.posted.count == 1)
-        await rig.selector.refreshAgentStates()
+        await rig.selector.refreshAgentStates(now: enabledAt.addingTimeInterval(0.4))
         #expect(rig.spy.posted.count == 1)
     }
 
@@ -77,6 +77,31 @@ struct CodexCompletionNotificationTests {
         rig.selector.notificationsEnabled = false
         states[rig.path] = .needsAttention
         rig.selector.notificationsEnabled = true
+        await rig.selector.refreshAgentStates()
+        #expect(rig.spy.posted.isEmpty)
+        states[rig.path] = .working
+        await rig.selector.refreshAgentStates()
+        states[rig.path] = .needsAttention
+        await rig.selector.refreshAgentStates()
+        #expect(rig.spy.posted.count == 1)
+    }
+
+    @Test func reenablingRejectsAnInFlightMutedSnapshotBeforeBaselining() async throws {
+        let states = FakeAgentStates()
+        let gate = SnapshotGate()
+        let rig = try Rig(states: states, afterStateRead: gate.pauseIfArmed)
+        defer { gate.release(); rig.cleanUp() }
+        await rig.selector.selectRepo(Repository(path: rig.path))
+        states[rig.path] = .working
+        await rig.selector.refreshAgentStates()
+        rig.selector.notificationsEnabled = false
+        gate.arm()
+        let pending = Task { await rig.selector.refreshAgentStates() }
+        for await _ in gate.started { break }
+        states[rig.path] = .needsAttention
+        rig.selector.notificationsEnabled = true
+        gate.release()
+        await pending.value
         await rig.selector.refreshAgentStates()
         #expect(rig.spy.posted.isEmpty)
         states[rig.path] = .working
@@ -116,6 +141,45 @@ struct CodexCompletionNotificationTests {
         #expect(rig.spy.posted.count == 1)
     }
 
+    @Test func completionInTheSnapshotMillisecondDoesNotDuplicateTheNextBadgeEdge() async throws {
+        let states = FakeAgentStates()
+        let rig = try Rig(states: states)
+        defer { rig.cleanUp() }
+        await rig.selector.selectRepo(Repository(path: rig.path))
+        let millisecond = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970 * 1_000) / 1_000 + 1)
+        states[rig.path] = .working
+        await rig.selector.refreshAgentStates(now: millisecond.addingTimeInterval(-0.1))
+        // The completion is read after the badge snapshot but its rounded
+        // timestamp is slightly earlier than the exact scan-start Date.
+        try rig.turn("same-millisecond", at: millisecond.addingTimeInterval(0.0003))
+        await rig.selector.refreshAgentStates(now: millisecond.addingTimeInterval(0.0001))
+        #expect(rig.spy.posted.count == 1)
+        states[rig.path] = .needsAttention
+        await rig.selector.refreshAgentStates(now: millisecond.addingTimeInterval(0.002))
+        #expect(rig.spy.posted.count == 1)
+    }
+
+    private final class SnapshotGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private let resume = DispatchSemaphore(value: 0)
+        private var armed = false
+        let started: AsyncStream<Void>
+        private let continuation: AsyncStream<Void>.Continuation
+
+        init() { (started, continuation) = AsyncStream.makeStream() }
+        func arm() { lock.lock(); armed = true; lock.unlock() }
+        func release() { resume.signal() }
+        @Sendable func pauseIfArmed() {
+            lock.lock()
+            let pause = armed
+            armed = false
+            lock.unlock()
+            guard pause else { return }
+            continuation.yield(())
+            resume.wait()
+        }
+    }
+
     @MainActor
     private struct Rig {
         let folder: URL
@@ -124,7 +188,7 @@ struct CodexCompletionNotificationTests {
         let spy = NotificationSpy()
         let selector: SelectorModel
 
-        init(states: FakeAgentStates? = nil) throws {
+        init(states: FakeAgentStates? = nil, afterStateRead: (@Sendable () -> Void)? = nil) throws {
             folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             let root = folder.appendingPathComponent("sessions")
             let project = folder.appendingPathComponent("repo")
@@ -140,14 +204,18 @@ struct CodexCompletionNotificationTests {
             let git = FakeGitClient()
             git.worktreesResult = [Worktree(path: path, branch: "feature", isPrimary: true)]
             selector = SelectorModel(environment: makeTestEnvironment(git: git,
-                agentStatuses: { paths, now in states?.provider(paths, now) ?? scanner.states(forWorktreePaths: paths, now: now) },
+                agentStatuses: { paths, now in
+                    let snapshot = states?.provider(paths, now) ?? scanner.states(forWorktreePaths: paths, now: now)
+                    afterStateRead?()
+                    return snapshot
+                },
                 agentTurnEnds: { scanner.turnEnds(forWorktreePaths: $0, now: $1) }, notify: spy.record))
         }
 
-        func record(_ kind: String, turn: String) throws {
+        func record(_ kind: String, turn: String, at date: Date = Date()) throws {
             let stamp = ISO8601DateFormatter()
             stamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            let record: [String: Any] = ["timestamp": stamp.string(from: Date()), "type": "event_msg",
+            let record: [String: Any] = ["timestamp": stamp.string(from: date), "type": "event_msg",
                                          "payload": ["type": kind, "turn_id": turn]]
             var data = try JSONSerialization.data(withJSONObject: record); data.append(10)
             let handle = try FileHandle(forWritingTo: file)
@@ -155,9 +223,9 @@ struct CodexCompletionNotificationTests {
             try handle.seekToEnd(); try handle.write(contentsOf: data)
         }
 
-        func turn(_ id: String) throws {
-            try record("task_started", turn: id)
-            try record("task_complete", turn: id)
+        func turn(_ id: String, at date: Date = Date()) throws {
+            try record("task_started", turn: id, at: date)
+            try record("task_complete", turn: id, at: date)
         }
 
         func cleanUp() {
