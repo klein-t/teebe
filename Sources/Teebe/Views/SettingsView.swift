@@ -189,7 +189,7 @@ struct SettingsView: View {
                     Text(app.hooksDisabled ? "Disabled in Claude Code" : (app.hookInstalled ? "Installed" : "Not installed")).foregroundStyle(.secondary)
                 }
                 Button(app.hookInstalled ? "Check / Repair Hook" : "Install Hook") { app.installClaudeHook() }
-                Text(app.hookMessage ?? "The optional hook is Claude Code only. Codex checks can take up to two minutes while Teebe is hidden.")
+                Text(app.hookMessage ?? "The optional hook is Claude Code only. Codex completions are checked every two minutes while Teebe is hidden, including short turns.")
                     .font(Typography.secondary).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

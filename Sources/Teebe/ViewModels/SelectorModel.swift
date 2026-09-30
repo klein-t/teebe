@@ -67,6 +67,9 @@ final class SelectorModel {
     var onRepositoryChange: (() -> Void)?
     private(set) var isLoading = false
     var notificationsEnabled = true
+    @ObservationIgnored private var turnDelivery = AgentTurnDelivery()
+    @ObservationIgnored private var lastAgentSnapshotAt = Date.distantPast
+    @ObservationIgnored private var agentRefreshGeneration = 0
 
     private let environment: AppEnvironment
     /// Watches the selected repo's git dir so an external `git worktree add`/`remove`
@@ -191,6 +194,8 @@ final class SelectorModel {
         worktreesAdminDir = nil
         stopAgentWatching()
         stopWorktreeActivity()
+        turnDelivery.watch([])
+        lastAgentSnapshotAt = .distantPast
         selectedRepo = nil
         onRepositoryChange?()
         worktrees = []
@@ -209,6 +214,8 @@ final class SelectorModel {
         isLoading = true
         defer { isLoading = false }
         if selectedRepo?.path != repo.path {
+            turnDelivery.watch([])
+            lastAgentSnapshotAt = .distantPast
             cleanedUpCount = 0
             forgetAttempts.removeAll()
         }
@@ -399,6 +406,7 @@ final class SelectorModel {
         if identity(discovered) != identity(worktrees) { mergeRevision += 1 }
         let pathsChanged = discovered.map(\.path) != worktrees.map(\.path)
         worktrees = discovered
+        turnDelivery.watch(discovered.map(\.path))
         if pathsChanged || worktreesWatcher == nil { startWorktreeActivity() }
     }
 
@@ -407,12 +415,16 @@ final class SelectorModel {
     func refreshWorktreeInfo(now: Date = Date()) async {
         let statusService = environment.statusService
         let agentStatuses = environment.agentStatuses
+        let agentTurnEnds = environment.agentTurnEnds
+        let repository = selectedRepo?.path
+        agentRefreshGeneration += 1
+        let generation = agentRefreshGeneration
         let worktrees = self.worktrees
         let paths = worktrees.map(\.path)
         // One batched agent-log scan for the whole repo — the scanner needs every
         // worktree path to attribute a session to the worktree it runs in, not
         // the one it was launched from. Runs off-main alongside the git reads.
-        let agentTask = Task.detached { agentStatuses(paths, now) }
+        let agentTask = Task.detached { (agentStatuses(paths, now), agentTurnEnds(paths, now)) }
         // Fetch each worktree's status concurrently — these are independent git
         // reads, so a repo with many worktrees shouldn't serialize N `git status`
         // calls on every repo switch.
@@ -429,7 +441,9 @@ final class SelectorModel {
             }
             return byPath
         }
-        let agentStates = await agentTask.value
+        let (agentStates, turnEnds) = await agentTask.value
+        guard selectedRepo?.path == repository, self.worktrees.map(\.path) == paths,
+              generation == agentRefreshGeneration else { return }
         let remoteBranches = Set(branches.filter(\.isRemote).map(\.name))
         var info: [String: WorktreeInfo] = [:]
         for worktree in worktrees {
@@ -447,7 +461,7 @@ final class SelectorModel {
                 isKeptMissing: keptMissingPaths.contains(worktree.path)
             )
         }
-        notifyAgentTransitions(from: worktreeInfo, to: info)
+        notifyAgentTransitions(from: worktreeInfo, to: info, turnEnds: turnEnds, now: now)
         publish(info)
     }
 
@@ -461,9 +475,15 @@ final class SelectorModel {
     /// watcher and the periodic poll; cheap enough to run often.
     func refreshAgentStates(now: Date = Date()) async {
         let agentStatuses = environment.agentStatuses
+        let agentTurnEnds = environment.agentTurnEnds
+        let repository = selectedRepo?.path
+        agentRefreshGeneration += 1
+        let generation = agentRefreshGeneration
         let worktrees = self.worktrees
         let paths = worktrees.map(\.path)
-        let states = await Task.detached { agentStatuses(paths, now) }.value
+        let (states, turnEnds) = await Task.detached { (agentStatuses(paths, now), agentTurnEnds(paths, now)) }.value
+        guard selectedRepo?.path == repository, self.worktrees.map(\.path) == paths,
+              generation == agentRefreshGeneration else { return }
         var info = worktreeInfo
         for worktree in worktrees {
             var entry = info[worktree.path] ?? WorktreeInfo()
@@ -471,17 +491,26 @@ final class SelectorModel {
             entry.isLive = environment.activityMonitor.isBusy(worktreePath: worktree.path, within: liveWindow, now: now)
             info[worktree.path] = entry
         }
-        notifyAgentTransitions(from: worktreeInfo, to: info)
+        notifyAgentTransitions(from: worktreeInfo, to: info, turnEnds: turnEnds, now: now)
         publish(info)
     }
 
-    /// Notify only on the working → needsAttention edge: the turn just ended (or
-    /// stalled). A session discovered already-finished stays silent, so app
-    /// launch never replays old sessions as notifications.
-    private func notifyAgentTransitions(from old: [String: WorktreeInfo], to new: [String: WorktreeInfo]) {
+    /// Recorded turn ends also cover work completed entirely between polls.
+    /// Badge edges remain the fallback for questions, stalls and other adapters.
+    private func notifyAgentTransitions(from old: [String: WorktreeInfo], to new: [String: WorktreeInfo],
+                                        turnEnds: [AgentTurnEnd], now: Date) {
+        // A scan can read a completion after reading the working badge. Keep
+        // that ending through the following badge edge, even if already delivered.
+        let endedPaths = Set(turnEnds.filter { $0.endedAt >= lastAgentSnapshotAt }.map(\.worktreePath))
+        lastAgentSnapshotAt = now
+        let fresh = turnDelivery.consume(turnEnds, now: max(now, Date()))
         guard notificationsEnabled else { return }
+        for event in fresh where event.completed {
+            let name = worktrees.first { $0.path == event.worktreePath }?.branch ?? URL(fileURLWithPath: event.worktreePath).lastPathComponent
+            environment.notify("Agent finished", "\(name): Codex finished a turn")
+        }
         for worktree in worktrees {
-            guard old[worktree.path]?.agentState == .working,
+            guard !endedPaths.contains(worktree.path), old[worktree.path]?.agentState == .working,
                   new[worktree.path]?.agentState == .needsAttention else { continue }
             let name = worktree.branch ?? worktree.name
             environment.notify("Agent needs you", "\(name) — the agent finished or is waiting")

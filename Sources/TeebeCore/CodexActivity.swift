@@ -187,6 +187,7 @@ public struct CodexRolloutScanner: AgentActivitySource {
     /// are reused: a busy agent rewrites one or two rollouts a second, not all.
     private let cache = CodexSummaryCache()
     private let archive = CodexArchive()
+    private let completions = CodexCompletionJournal()
 
     public init(sessionsRoot: URL = CodexRolloutScanner.defaultSessionsRoot,
                 thresholds: AgentStatusThresholds = AgentStatusThresholds(),
@@ -229,6 +230,12 @@ public struct CodexRolloutScanner: AgentActivitySource {
             if let parent, let owner = owner(of: parent, among: paths) { result[owner] = .working }
         }
         return result
+    }
+
+    public func turnEnds(forWorktreePaths paths: [String], now: Date) -> [AgentTurnEnd] {
+        completions.read(files: rolloutFiles(now: now).values.map(\.url), paths: paths, now: now) { url in
+            cachedSummary(of: url, id: Self.threadID(of: url))
+        }
     }
 
     static func state(of thread: CodexThreadSummary, now: Date, thresholds: AgentStatusThresholds) -> AgentActivityState {
@@ -345,6 +352,7 @@ public struct CodexRolloutScanner: AgentActivitySource {
            let meta = (try? JSONSerialization.jsonObject(with: head[head.startIndex..<end])) as? [String: Any],
            meta["type"] as? String == "session_meta",
            let payload = meta["payload"] as? [String: Any] {
+            thread.id = payload["id"] as? String ?? payload["session_id"] as? String ?? id
             thread.cwd = payload["cwd"] as? String
             thread.role = Self.role(of: payload["source"])
         }
