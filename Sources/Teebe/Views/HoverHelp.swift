@@ -39,9 +39,12 @@ extension View {
     /// card's own size and starting at the view's leading edge. `summary` is the
     /// plain-text version, for accessibility and to notice when the card changes.
     /// A new `reveal` value shows the card straight away, without the pointer (the
-    /// keyboard's way in); the next key, click or scroll puts it away.
-    func hoverCard<Card: View>(_ summary: String, reveal: Int? = nil, @ViewBuilder card: () -> Card) -> some View {
-        background(HoverHelpAnchor(text: summary, highlight: false, card: AnyView(card()), reveal: reveal))
+    /// keyboard's way in); the next key, click or scroll puts it away. `onReveal`
+    /// runs once it is shown, so the caller can spend the request.
+    func hoverCard<Card: View>(_ summary: String, reveal: Int? = nil, onReveal: (() -> Void)? = nil,
+                               @ViewBuilder card: () -> Card) -> some View {
+        background(HoverHelpAnchor(text: summary, highlight: false, card: AnyView(card()), reveal: reveal,
+                                   onReveal: onReveal))
             .accessibilityHint(summary)
     }
 }
@@ -51,9 +54,16 @@ private struct HoverHelpAnchor: NSViewRepresentable {
     let highlight: Bool
     var card: AnyView?
     var reveal: Int?
+    var onReveal: (() -> Void)?
     @Environment(\.isEnabled) private var isEnabled
 
-    func makeNSView(context: Context) -> HoverHelpView { HoverHelpView() }
+    func makeNSView(context: Context) -> HoverHelpView {
+        let view = HoverHelpView()
+        // A request already standing when this anchor is made was meant for an
+        // earlier one (the row was redrawn, regrouped or swapped its mark): not new.
+        view.revealed = reveal
+        return view
+    }
 
     func updateNSView(_ view: HoverHelpView, context: Context) {
         if view.text != text || view.enabled != isEnabled {
@@ -67,9 +77,10 @@ private struct HoverHelpAnchor: NSViewRepresentable {
         if let reveal, reveal != view.revealed {
             view.revealed = reveal
             // After this update: the panel measures the view in its window.
-            DispatchQueue.main.async { [weak view] in
+            DispatchQueue.main.async { [weak view, onReveal] in
                 guard let view else { return }
                 HoverHelpPresenter.shared.reveal(owner: view)
+                onReveal?()
             }
         }
     }
