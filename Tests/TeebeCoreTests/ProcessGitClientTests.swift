@@ -27,7 +27,7 @@ struct ProcessGitClientTests {
     func worktreeAddArguments() {
         #expect(ProcessGitClient.worktreeAddArguments(
             path: "/tmp/wt", branch: "feat", createBranch: true, startPoint: "origin/dev")
-            == ["worktree", "add", "-b", "feat", "/tmp/wt", "origin/dev"])
+            == ["worktree", "add", "--no-track", "-b", "feat", "/tmp/wt", "origin/dev"])
         #expect(ProcessGitClient.worktreeAddArguments(
             path: "/tmp/wt", branch: "feat", createBranch: true, startPoint: nil)
             == ["worktree", "add", "-b", "feat", "/tmp/wt"])
@@ -57,6 +57,24 @@ struct ProcessGitClientTests {
         let head = fixture.git(["rev-parse", "HEAD"], in: URL(fileURLWithPath: linked))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         #expect(head == base)
+    }
+
+    @Test("a branch created from a start point has no upstream")
+    func worktreeAddFromStartPointHasNoUpstream() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("seed.txt", "seed\n")
+        fixture.createBranch("base")
+        // Makes git track any start point, local ones included, the way a remote
+        // start point such as origin/main is tracked by default.
+        fixture.git(["config", "branch.autoSetupMerge", "always"])
+
+        let linked = fixture.root.appendingPathComponent("from-base").path
+        try await git.addWorktree(repoPath: fixture.repoPath, path: linked, branch: "feat",
+                                  createBranch: true, startPoint: "base")
+        let merge = fixture.git(["config", "--get", "branch.feat.merge"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(merge.isEmpty)
     }
 
     // MARK: M2 — Status & change model

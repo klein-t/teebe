@@ -90,11 +90,19 @@ public struct ProcessGitClient: GitClient {
 
     /// The `git worktree add` argument list. Pure, so the ordering git cares about
     /// (`-b <branch> <path> <start-point>`) is covered by a test.
+    /// A branch made from a start point gets `--no-track`: from a remote start point
+    /// such as `origin/main` git would otherwise make that its upstream, so a plain
+    /// push would fail on the name mismatch or, with `push.default=upstream`, push
+    /// the new branch into `main`.
     static func worktreeAddArguments(path: String, branch: String?, createBranch: Bool, startPoint: String?) -> [String] {
         var args = ["worktree", "add"]
-        if createBranch, let branch { args.append(contentsOf: ["-b", branch]) }
+        let startPoint = startPoint.flatMap { $0.isEmpty ? nil : $0 }
+        if createBranch, let branch {
+            if startPoint != nil { args.append("--no-track") }
+            args.append(contentsOf: ["-b", branch])
+        }
         args.append(path)
-        if createBranch, branch != nil, let startPoint, !startPoint.isEmpty {
+        if createBranch, branch != nil, let startPoint {
             args.append(startPoint)
         } else if let branch, !createBranch {
             args.append(branch)
