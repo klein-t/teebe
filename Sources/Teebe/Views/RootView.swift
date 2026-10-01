@@ -36,6 +36,21 @@ final class GeometryTestHooks {
 }
 #endif
 
+/// Sum of the heights of the rows that only show now and then (errors, notices).
+/// The window adds it to the layout it wraps, so such a row never pushes a section
+/// header below the bottom edge.
+struct TransientRowsHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value += nextValue() }
+}
+
+extension View {
+    /// Report this row's height to the window sizing (see `TransientRowsHeightKey`).
+    func measuredAsTransientRow() -> some View {
+        background(GeometryReader { Color.clear.preference(key: TransientRowsHeightKey.self, value: $0.size.height) })
+    }
+}
+
 /// Compact, floating main window: a three-section accordion (WORKTREES / CHANGES /
 /// FILES).
 struct RootView: View {
@@ -71,6 +86,10 @@ struct RootView: View {
     /// `NSWindow.frame` nor `window.screen`: without this the clamp stayed stale until
     /// some unrelated change re-ran the body, and the window snapped short much later.
     @State private var roomBelowTop: CGFloat = 900
+    /// Measured height of the rows that come and go above and below the sections (the
+    /// fetch error, the error line, the clean-up notice). The window grows by exactly
+    /// this much so they never push FILES out of view.
+    @State private var transientRowsHeight: CGFloat = 0
     /// Layout to restore when the green zoom is toggled off — set while the window is
     /// "vertically maximized" (full height), nil otherwise.
     @State private var zoomRestore: ZoomRestore?
@@ -84,9 +103,12 @@ struct RootView: View {
     private var worktree: WorktreeModel { app.selector.worktree }
     private var selector: SelectorModel { app.selector }
 
-    /// Window height when all three sections are collapsed: the compact title row
-    /// plus the three stacked headers (with their separators), no slack below.
-    private let collapsedHeight: CGFloat = 126
+    /// The compact title row plus the three stacked headers (with their separators).
+    private let headersHeight: CGFloat = 126
+    /// Window height when all three sections are collapsed: the headers plus any
+    /// error or notice row currently shown, no slack below. Everything else is
+    /// stacked on top of this.
+    private var collapsedHeight: CGFloat { headersHeight + transientRowsHeight }
     /// Comfortable height for the "no repositories" empty state.
     private let emptyStateHeight: CGFloat = 460
     /// Narrowest the window may be dragged.
@@ -166,29 +188,38 @@ struct RootView: View {
                 .frame(maxHeight: .infinity, alignment: .top)
             }
             if let error = worktree.errorMessage ?? app.errorMessage {
-                Divider()
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.red).lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 11).padding(.vertical, 4)
+                VStack(spacing: 0) {
+                    Divider()
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.red).lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 11).padding(.vertical, 4)
+                }
+                .measuredAsTransientRow()
             }
             if let notice = app.selector.cleanupNotice {
                 // News, not an error: muted, and it stays until dismissed.
-                Divider()
-                HStack(spacing: 6) {
-                    Label(notice, systemImage: "checkmark.circle")
-                        .font(.caption).foregroundStyle(Palette.secondaryText).lineLimit(1)
-                    Spacer(minLength: 4)
-                    Button { app.selector.dismissCleanupNotice() } label: {
-                        Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                VStack(spacing: 0) {
+                    Divider()
+                    HStack(spacing: 6) {
+                        Label(notice, systemImage: "checkmark.circle")
+                            .font(.caption).foregroundStyle(Palette.secondaryText).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Button { app.selector.dismissCleanupNotice() } label: {
+                            Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                        }
+                        .buttonStyle(IconButtonStyle(size: CGSize(width: 18, height: 18)))
+                        .foregroundStyle(Palette.secondaryText)
+                        .accessibilityLabel("Dismiss")
+                        .hoverHelp("Dismiss")
                     }
-                    .buttonStyle(IconButtonStyle(size: CGSize(width: 18, height: 18)))
-                    .foregroundStyle(Palette.secondaryText)
-                    .accessibilityLabel("Dismiss")
-                    .hoverHelp("Dismiss")
+                    .padding(.leading, 11).padding(.trailing, 6).padding(.vertical, 2)
                 }
-                .padding(.leading, 11).padding(.trailing, 6).padding(.vertical, 2)
+                .measuredAsTransientRow()
             }
+        }
+        .onPreferenceChange(TransientRowsHeightKey.self) { height in
+            MainActor.assumeIsolated { transientRowsHeight = height }
         }
         .ignoresSafeArea(.container, edges: .top)   // title row sits level with the traffic lights
         .frame(minWidth: minWindowWidth, idealWidth: 440, maxWidth: .infinity,

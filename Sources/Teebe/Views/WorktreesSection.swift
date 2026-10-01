@@ -48,6 +48,7 @@ struct WorktreesSection: View {
                     Text(error).font(Typography.secondary).foregroundStyle(.secondary)
                     Button("Retry") { refresh() }.disabled(app.isFetching)
                 }.padding(.horizontal, 12).padding(.vertical, 6)
+                .measuredAsTransientRow()
             }
             SectionHeader(title: "WORKTREES", isOpen: isOpen, isActive: app.activeSection == .worktrees, onToggle: { isOpen.toggle() }) {
                 if isOpen {
