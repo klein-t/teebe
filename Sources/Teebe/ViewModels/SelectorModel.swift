@@ -84,6 +84,9 @@ final class SelectorModel {
     @ObservationIgnored private var turnDelivery = AgentTurnDelivery()
     @ObservationIgnored private var lastAgentSnapshotAt = Date.distantPast
     @ObservationIgnored private var agentRefreshGeneration = 0
+    /// Bumped on every project pick, so a load or rescan that resumes after a
+    /// newer pick drops what it read instead of showing it under that project.
+    @ObservationIgnored private var repoSelectionGeneration = 0
 
     private let environment: AppEnvironment
     /// Watches the selected repo's git dir so an external `git worktree add`/`remove`
@@ -225,8 +228,11 @@ final class SelectorModel {
     /// primary-then-saved double load: two full tree loads inside the window's
     /// first layout pass escalate into an AppKit constraint-loop crash at launch.
     func selectRepo(_ repo: Repository, preferredWorktreePath: String? = nil) async {
+        repoSelectionGeneration += 1
+        let generation = repoSelectionGeneration
+        func isCurrent() -> Bool { generation == repoSelectionGeneration && selectedRepo?.path == repo.path }
         isLoading = true
-        defer { isLoading = false }
+        defer { if generation == repoSelectionGeneration { isLoading = false } }
         if selectedRepo?.path != repo.path {
             turnDelivery.watch([])
             lastAgentSnapshotAt = .distantPast
@@ -236,25 +242,32 @@ final class SelectorModel {
         selectedRepo = repo
         onRepositoryChange?()
         await startRepoWatching(repo)
+        guard isCurrent() else { return }
         startAgentWatching()
         var deleted: [Worktree] = []
         do {
             let found = await sortMissing(try await environment.worktreeService.worktrees(for: repo), in: repo)
+            guard isCurrent() else { return }
             deleted = found.deleted
             applyDiscovered(found.listed)
-            branches = try await environment.branchService.branches(for: repo)
+            let discoveredBranches = try await environment.branchService.branches(for: repo)
+            guard isCurrent() else { return }
+            branches = discoveredBranches
             errorMessage = nil
         } catch {
+            guard isCurrent() else { return }
             applyDiscovered([])
             branches = []
             errorMessage = WorktreeModel.describe(error)
         }
         await refreshWorktreeInfo()
+        guard isCurrent() else { return }
         let target = preferredWorktreePath.flatMap { preferred in
             worktrees.first { $0.path == preferred }
         } ?? worktrees.first(where: { $0.isPrimary }) ?? worktrees.first
         if let target {
             await selectWorktree(target)
+            guard isCurrent() else { return }
         }
         onSelectionChange?()
         await forgetDeleted(deleted, in: repo)
@@ -268,6 +281,10 @@ final class SelectorModel {
     private func startRepoWatching(_ repo: Repository) async {
         repoWatcher?.stop()
         let commonDir = await resolveGitCommonDir(for: repo)
+        // Another pick may have started its own watcher meanwhile: keep exactly one,
+        // and only for the repo that is still selected.
+        guard selectedRepo?.path == repo.path else { return }
+        repoWatcher?.stop()
         worktreesAdminDir = (commonDir as NSString).appendingPathComponent("worktrees")
         let watcher = environment.makeWatcher()
         watcher.start(paths: [commonDir], debounce: 0.5) { [weak self] paths in
@@ -325,21 +342,26 @@ final class SelectorModel {
 
     private func rescanWorktrees() async {
         guard let repo = selectedRepo else { return }
+        let generation = repoSelectionGeneration
+        func isCurrent() -> Bool { generation == repoSelectionGeneration && selectedRepo?.path == repo.path }
         let discovered: [Worktree]
         let deleted: [Worktree]
         let discoveredBranches: [Branch]
         do {
             (discovered, deleted) = await sortMissing(try await environment.worktreeService.worktrees(for: repo), in: repo)
             discoveredBranches = try await environment.branchService.branches(for: repo)
-            errorMessage = nil
         } catch {
             // A transient failure shouldn't blank the list — keep what we have.
-            errorMessage = WorktreeModel.describe(error)
+            if isCurrent() { errorMessage = WorktreeModel.describe(error) }
             return
         }
+        // Another project was picked while this read was in flight: its own load wins.
+        guard isCurrent() else { return }
+        errorMessage = nil
         applyDiscovered(discovered)
         branches = discoveredBranches
         await refreshWorktreeInfo()
+        guard isCurrent() else { return }
         // Keep the current selection if it still exists; only re-focus when it's gone.
         let isSelectionListed = selectedWorktree.map { current in discovered.contains { $0.path == current.path } } ?? false
         if !isSelectionListed, let fallback = discovered.first(where: { $0.isPrimary }) ?? discovered.first {
