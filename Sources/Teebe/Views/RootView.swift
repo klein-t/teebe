@@ -225,7 +225,7 @@ struct RootView: View {
         .frame(minWidth: minWindowWidth, idealWidth: 440, maxWidth: .infinity,
                minHeight: minimumContentHeight, idealHeight: 640,
                maxHeight: .infinity, alignment: .top)
-        .background(.regularMaterial)
+        .background(WindowBackdrop())
         #if DEBUG
         .background {
             if let testHooks {
