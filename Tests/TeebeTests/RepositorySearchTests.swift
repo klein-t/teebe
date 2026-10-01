@@ -27,6 +27,27 @@ struct RepositorySearchTests {
         #expect(!model.isSearching)
     }
 
+    @Test func refreshKeepsSearchResultsUntilTheRescanLands() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("deep"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data().write(to: dir.appendingPathComponent("deep/needle.swift"))
+        try Data().write(to: dir.appendingPathComponent("needle-notes.txt"))
+        let model = WorktreeModel(environment: makeTestEnvironment())
+        await model.load(worktreePath: dir.path, repo: Repository(path: dir.path))
+        model.searchQuery = "needle"
+        for _ in 0..<100 where model.isSearching { try await Task.sleep(for: .milliseconds(10)) }
+        let found = model.visibleRows.map(\.node.name)
+        #expect(Set(found) == ["needle.swift", "needle-notes.txt"])
+
+        try Data().write(to: dir.appendingPathComponent("deep/needle2.swift"))
+        await model.refresh()
+        #expect(!model.isSearching)
+        #expect(model.visibleRows.map(\.node.name) == found)
+        for _ in 0..<100 where model.visibleRows.count < 3 { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(Set(model.visibleRows.map(\.node.name)) == ["needle.swift", "needle2.swift", "needle-notes.txt"])
+    }
+
     @Test func collapseAvailabilityFollowsVisibleExpandedFolders() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir.appendingPathComponent("parent/child"), withIntermediateDirectories: true)

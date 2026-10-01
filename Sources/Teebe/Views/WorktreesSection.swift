@@ -139,8 +139,10 @@ struct WorktreesSection: View {
         }
         .clipped()
         .sheet(isPresented: $choosingComparison) {
-            ComparisonBranchSheet(branches: app.mergeStatus.snapshot?.targets.branches ?? [],
-                saved: selector.selectedRepo.flatMap { app.extraMergeTarget(for: $0.path) } ?? "") { ref in
+            let targets = app.mergeStatus.snapshot?.targets
+            let saved = selector.selectedRepo.flatMap { app.extraMergeTarget(for: $0.path) } ?? ""
+            ComparisonBranchSheet(branches: targets?.branches ?? [],
+                saved: targets?.extraBranch(saved)?.ref ?? saved) { ref in
                 if let repo = selector.selectedRepo { app.setExtraMergeTarget(ref.isEmpty ? nil : ref, for: repo.path) }
             }
         }
@@ -350,7 +352,7 @@ struct WorktreesSection: View {
                     WorktreeMarkView(mark: status.rowMark(grouped: grouped), isSelected: isActive,
                                      paused: selector.isLowPower, phaseKey: worktree.path)
                 }
-                .hoverCard(summary, reveal: reveal) {
+                .hoverCard(summary, reveal: reveal, onReveal: app.worktreeCardRevealed) {
                     WorktreeHoverCard(card: status.card, mark: status.mark, paused: selector.isLowPower,
                                       phaseKey: worktree.path)
                 }
@@ -360,7 +362,7 @@ struct WorktreesSection: View {
                 WorktreeMarkHoverTarget(isSelected: isActive) {
                     WorktreeInfoIcon(isSelected: isActive)
                 }
-                .hoverCard(summary, reveal: reveal) {
+                .hoverCard(summary, reveal: reveal, onReveal: app.worktreeCardRevealed) {
                     WorktreeHoverCard(card: status.card, mark: status.mark, paused: selector.isLowPower,
                                       phaseKey: worktree.path)
                 }
