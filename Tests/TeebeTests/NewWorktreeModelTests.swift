@@ -200,6 +200,31 @@ struct NewWorktreeFlowTests {
         #expect(app.newWorktree == nil)
     }
 
+    @Test("a creation that finishes after the user moved to another project leaves that project selected")
+    func cancelledCreationKeepsTheLaterProject() async throws {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true)]
+        git.branchesResult = [Branch(name: "main", isCurrent: true)]
+        let gate = Gate()
+        git.addWorktreeGate = { await gate.wait() }
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+        await app.selector.selectRepo(Repository(path: "/repo"))
+        app.presentNewWorktree()
+        let form = try #require(app.newWorktree)
+        form.branch = "feat/new"
+        let creation = Task { await app.createWorktree(form) }
+        for _ in 0..<500 where !form.isCreating { try await Task.sleep(for: .milliseconds(2)) }
+        app.newWorktree = nil
+        git.worktreesResult = [Worktree(path: "/other", branch: "main", isPrimary: true)]
+        await app.selector.selectRepo(Repository(path: "/other"))
+        await gate.open()
+        await creation.value
+
+        #expect(git.addedWorktrees.map(\.path) == ["/repo-feat-new"])
+        #expect(app.selector.selectedRepo?.path == "/other")
+        #expect(app.selector.selectedWorktree?.path == "/other")
+    }
+
     @Test("checking out an existing branch creates no branch and no start point")
     func checksOutExistingBranch() async throws {
         let git = FakeGitClient()
