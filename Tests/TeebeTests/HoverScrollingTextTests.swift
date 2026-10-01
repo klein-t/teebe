@@ -6,14 +6,14 @@ import Testing
 @MainActor
 @Suite("Hover label layout", .serialized)
 struct HoverScrollingTextTests {
-    @Test("long labels scroll inside a fixed row and restore after leaving")
-    func longLabel() async throws {
+    @Test("long labels scroll inside a fixed row and restore after leaving", arguments: [false, true])
+    func longLabel(showsFullNameHelp: Bool) async throws {
         let state = HoverLabelState()
         let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 180, height: 30),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let view = NSHostingView(rootView: HoverLabelFixture(state: state))
+        let view = NSHostingView(rootView: HoverLabelFixture(state: state, showsFullNameHelp: showsFullNameHelp))
         view.sizingOptions = []
         window.contentView = view
         window.orderFront(nil)
@@ -49,8 +49,10 @@ private final class HoverLabelState {
 
 private struct HoverLabelFixture: View {
     var state: HoverLabelState
+    var showsFullNameHelp: Bool
     var body: some View {
-        HoverScrollingText(text: "A deliberately long file name with a distinct ending.swift")
+        HoverScrollingText(text: "A deliberately long file name with a distinct ending.swift",
+                           showsFullNameHelp: showsFullNameHelp)
             .font(.system(size: 13))
             .frame(width: 180, height: 30)
             .foregroundStyle(.black).background(.white)

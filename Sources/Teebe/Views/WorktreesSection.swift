@@ -368,7 +368,7 @@ struct WorktreesSection: View {
                 // No mark to hover: the slot stays so names line up.
                 Color.clear.frame(width: 22, height: WorktreeListPresentation.rowHeight)
             }
-            HoverScrollingText(text: worktree.branch ?? worktree.name)
+            HoverScrollingText(text: worktree.branch ?? worktree.name, showsFullNameHelp: false)
                 .font(Typography.rowName)
                 .padding(.leading, 2)
                 // Without a mark or an info icon there is no card to hover; the text is still read out.
