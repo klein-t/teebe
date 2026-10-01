@@ -2,6 +2,8 @@ import Foundation
 
 /// Confirms that every changed path coexisted in the target, now or in its history.
 /// Squash merges need content evidence because they do not retain branch ancestry.
+/// Failing that, it confirms that every commit of the branch landed in the target
+/// one by one (see `commitsAreUpstream`).
 /// Later target edits do not undo historical inclusion; a new branch tip is checked afresh.
 /// This reads trees only, without creating commits, running merge drivers or using a network.
 struct GitContentInclusion {
@@ -9,6 +11,10 @@ struct GitContentInclusion {
     /// Proposing is cheap, proving costs a tree comparison each, so the walk
     /// stays bounded and an exhausted budget simply confirms nothing.
     private static let confirmationLimit = 20
+    /// How many commits each side may have for the per-commit check, which hashes
+    /// the patch of every one of them. Matches the history walk above; beyond it
+    /// nothing is confirmed.
+    private static let commitLimit = 1000
 
     let git: GitClient
 
@@ -32,7 +38,9 @@ struct GitContentInclusion {
         // Non-UTF8 names still get the exact current-tree check above; do not convert lossily.
         let paths = desired.keys.compactMap { String(data: $0, encoding: .utf8) }
         guard paths.count == desired.count,
-              paths.reduce(0, { $0 + $1.utf8.count + 1 }) < 64_000 else { return false }
+              paths.reduce(0, { $0 + $1.utf8.count + 1 }) < 64_000 else {
+            return try await commitsAreUpstream(base: String(base), head: head, target: target, repoPath: repoPath)
+        }
         // Walk the whole reachable history, not just the first-parent chain: a
         // squash commit usually lands on an integration branch that reaches the
         // compared branch through a merge commit, so it is never a first parent.
@@ -50,7 +58,41 @@ struct GitContentInclusion {
             let unmatched = try await diff(candidate, head, in: repoPath, limitedTo: paths)
             if unmatched.isEmpty { return true }
         }
-        return false
+        return try await commitsAreUpstream(base: String(base), head: head, target: target, repoPath: repoPath)
+    }
+
+    /// Whether every commit of the branch has a patch-equivalent commit in the target
+    /// since their merge base, as `git cherry` reports it. This covers a branch landed
+    /// commit by commit among other work (picked, rebased or squashed separately),
+    /// where no single target revision holds all of its changes at once.
+    ///
+    /// It is deliberately narrow, because a confirmed branch may be deleted:
+    /// - the branch must have at least one commit and no merge commits, so its
+    ///   content is exactly the sum of the patches checked here (a merge could
+    ///   carry a conflict resolution or other content no patch accounts for);
+    /// - every one of those commits must be matched; one unmatched commit, or one
+    ///   that landed differently (a changed conflict resolution changes its patch),
+    ///   confirms nothing;
+    /// - both sides are bounded by `commitLimit`.
+    /// Patch identity is Git's: a commit is matched only by the same change to the
+    /// same files, ignoring line numbers and whitespace.
+    private func commitsAreUpstream(base: String, head: String, target: String, repoPath: String) async throws -> Bool {
+        let own = try await run(["rev-list", "--parents", "--max-count=\(Self.commitLimit + 1)", "\(base)..\(head)"],
+                                in: repoPath)
+        guard own.succeeded else { throw CleanupError.gitFailed }
+        let commits = own.stdoutString.split(separator: "\n")
+        // One parent each: a merge has more, a root commit has none.
+        guard !commits.isEmpty, commits.count <= Self.commitLimit,
+              commits.allSatisfy({ $0.split(separator: " ").count == 2 }) else { return false }
+        let upstream = try await run(["rev-list", "--count", "\(base)..\(target)"], in: repoPath)
+        guard upstream.succeeded,
+              let count = Int(upstream.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { throw CleanupError.gitFailed }
+        guard count <= Self.commitLimit else { return false }
+        let cherry = try await run(["cherry", target, head, base], in: repoPath)
+        guard cherry.succeeded else { throw CleanupError.gitFailed }
+        let marks = cherry.stdoutString.split(separator: "\n")
+        return marks.count == commits.count && marks.allSatisfy { $0.hasPrefix("- ") }
     }
 
     private struct Version: Equatable {
