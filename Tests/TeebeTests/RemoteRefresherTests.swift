@@ -64,6 +64,77 @@ struct RemoteRefresherTests {
         #expect(app.selector.errorMessage == nil)
     }
 
+    @Test("background fetches leave the SSH agent out; Refresh uses it")
+    func fetchKinds() async {
+        let git = FakeGitClient()
+        let app = await app(git)
+
+        await app.refreshRemotes(force: false)
+        await app.refreshRemotes(force: true)
+
+        #expect(git.fetchKinds == [.automatic, .manual])
+    }
+
+    @Test("Refresh during a background fetch waits for it, then fetches with the agent, without an error")
+    func refreshJoinsBackgroundFetch() async {
+        let git = FakeGitClient()
+        // Only the agent's key opens this remote, so the background fetch fails.
+        git.needsAgent = true
+        let app = await app(git)
+        let gate = Gate()
+        git.fetchGate = { await gate.wait() }
+
+        let background = Task { await app.refreshRemotes(force: false) }
+        while git.fetchedRepos.isEmpty { await Task.yield() }
+        let refresh = Task { await app.refreshRemotes(force: true) }
+        for _ in 0..<50 { await Task.yield() }
+        // Still waiting on the background fetch, not failed on the spot.
+        #expect(app.isFetching)
+        #expect(app.fetchError == nil)
+        #expect(git.fetchKinds == [.automatic])
+
+        await gate.open()
+        await background.value
+        await refresh.value
+        #expect(git.fetchKinds == [.automatic, .manual])
+        #expect(app.fetchError == nil)
+        #expect(!app.isFetching)
+    }
+
+    @Test("overlapping Refreshes share one fetch and its result")
+    func refreshesShareAFetch() async {
+        let git = FakeGitClient()
+        let gate = Gate()
+        git.fetchGate = { await gate.wait() }
+        let refresher = RemoteRefresher(git: git)
+
+        let first = Task { await refresher.fetch(repoPath: "/repo", force: true) }
+        while git.fetchedRepos.isEmpty { await Task.yield() }
+        let second = Task { await refresher.fetch(repoPath: "/repo", force: true) }
+        for _ in 0..<50 { await Task.yield() }
+        await gate.open()
+
+        #expect(await first.value)
+        #expect(await second.value)
+        #expect(git.fetchKinds == [.manual])
+    }
+
+    @Test("a background fetch is skipped while another fetch is running")
+    func backgroundSkipsWhileFetching() async {
+        let git = FakeGitClient()
+        let gate = Gate()
+        git.fetchGate = { await gate.wait() }
+        let refresher = RemoteRefresher(git: git)
+
+        let manual = Task { await refresher.fetch(repoPath: "/repo", force: true) }
+        while git.fetchedRepos.isEmpty { await Task.yield() }
+        #expect(await refresher.fetch(repoPath: "/repo", force: false) == false)
+        await gate.open()
+
+        #expect(await manual.value)
+        #expect(git.fetchKinds == [.manual])
+    }
+
     @Test("a fetch that never answers is abandoned rather than left running")
     func timeout() async {
         let git = FakeGitClient()
