@@ -66,7 +66,7 @@ final class SelectorModel {
     var onSelectionChange: (() -> Void)?
     var onRepositoryChange: (() -> Void)?
     private(set) var isLoading = false
-    private var notificationPreference = true
+    private var notificationPreference = false
     var notificationsEnabled: Bool {
         get { notificationPreference }
         set { setNotificationsEnabled(newValue) }
