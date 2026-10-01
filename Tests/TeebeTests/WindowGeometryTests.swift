@@ -211,8 +211,12 @@ struct WindowGeometryTests {
 
     @Test("a transient error row grows the window so FILES stays inside it", arguments: [true, false])
     func errorRowsKeepFilesInsideTheWindow(filesOpen: Bool) async throws {
-        guard let host = try await GeometryHost.make() else { return }
+        guard let host = try await GeometryHost.make(), let screen = host.window.screen else { return }
         defer { host.tearDown() }
+        // Top of the screen: the most room to grow into, even on a small CI display.
+        var frame = host.window.frame
+        frame.origin.y = screen.visibleFrame.maxY - frame.height
+        host.window.setFrame(frame, display: true)
         host.hooks.setFilesOpen?(filesOpen)
         await host.settleGeometry()
         let normal = host.window.frame.height
@@ -225,7 +229,7 @@ struct WindowGeometryTests {
         await host.settleGeometry()
         host.expectSettled("fetch error shown")
         host.expectFilesInside(height: files.height, "fetch error shown")
-        #expect(host.window.frame.height > normal, "the window did not grow for the fetch error row")
+        #expect(host.window.frame.height > normal || host.roomBelow <= 1, "the window did not grow for the fetch error row")
 
         // The fetch succeeding clears the row: back to the normal height, in one hop.
         host.fixture.addOrigin()
@@ -242,7 +246,7 @@ struct WindowGeometryTests {
         await host.settleGeometry()
         host.expectSettled("error line shown")
         host.expectFilesInside(height: files.height, "error line shown")
-        #expect(host.window.frame.height > normal, "the window did not grow for the error line")
+        #expect(host.window.frame.height > normal || host.roomBelow <= 1, "the window did not grow for the error line")
         host.hooks.reset()
         host.app.setError(nil)
         await host.settleGeometry()
@@ -436,14 +440,22 @@ private final class GeometryHost {
                 sourceLocation: sourceLocation)
     }
 
-    /// FILES, at its full `height`, lies inside the window: its header was not pushed
-    /// below the bottom edge, and it kept its reveal rather than giving it up.
+    /// Room left between the window's bottom edge and the bottom of its screen.
+    var roomBelow: CGFloat {
+        guard let visible = window.screen?.visibleFrame else { return 0 }
+        return window.frame.minY - visible.minY
+    }
+
+    /// FILES lies inside the window: its header was not pushed below the bottom edge,
+    /// and it kept its full `height` unless the window ran out of screen to grow into
+    /// (only then does its reveal give up the difference).
     func expectFilesInside(height: CGFloat, _ step: String, sourceLocation: SourceLocation = #_sourceLocation) {
         let files = hooks.filesFrame ?? .zero
         let bottom = window.contentView?.bounds.height ?? 0
         #expect(files.maxY <= bottom + 1, "\(step): FILES ends at \(files.maxY)pt, the window at \(bottom)pt",
                 sourceLocation: sourceLocation)
-        #expect(abs(files.height - height) <= 1, "\(step): FILES is \(files.height)pt, was \(height)pt",
+        #expect(abs(files.height - height) <= 1 || roomBelow <= 1,
+                "\(step): FILES is \(files.height)pt, was \(height)pt, with \(roomBelow)pt of screen left below",
                 sourceLocation: sourceLocation)
     }
 
