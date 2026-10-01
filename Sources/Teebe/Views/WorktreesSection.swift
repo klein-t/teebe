@@ -139,8 +139,10 @@ struct WorktreesSection: View {
         }
         .clipped()
         .sheet(isPresented: $choosingComparison) {
-            ComparisonBranchSheet(branches: app.mergeStatus.snapshot?.targets.branches ?? [],
-                saved: selector.selectedRepo.flatMap { app.extraMergeTarget(for: $0.path) } ?? "") { ref in
+            let targets = app.mergeStatus.snapshot?.targets
+            let saved = selector.selectedRepo.flatMap { app.extraMergeTarget(for: $0.path) } ?? ""
+            ComparisonBranchSheet(branches: targets?.branches ?? [],
+                saved: targets?.extraBranch(saved)?.ref ?? saved) { ref in
                 if let repo = selector.selectedRepo { app.setExtraMergeTarget(ref.isEmpty ? nil : ref, for: repo.path) }
             }
         }

@@ -32,13 +32,21 @@ public struct CleanupTargets: Equatable, Sendable {
         branches.first { $0.ref == ref }
     }
 
+    /// The branch a saved extra target names: a full ref as the picker saves it, or a
+    /// name typed in Settings (`release`, `origin/release`), origin's copy first.
+    public func extraBranch(_ extra: String?) -> CleanupBranch? {
+        guard let name = extra?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
+        return branch(name) ?? branch("refs/remotes/origin/" + name) ?? branch("refs/heads/" + name)
+            ?? branch("refs/remotes/" + name)
+    }
+
     /// What every worktree is checked against, in display order: the automatic
     /// default, the per-repository extra branch, then the integration branches that
     /// exist (origin's copy preferred over the local one). Integration branches are
     /// one per name; an explicitly chosen extra is kept even when it shares a name,
     /// since a local `dev` can hold merges its origin copy does not have yet.
     public func mergeTargets(extra: String?) -> [CleanupBranch] {
-        let extraBranch = extra.flatMap(branch)
+        let extraBranch = self.extraBranch(extra)
         var result: [CleanupBranch] = []
         func add(_ branch: CleanupBranch?) {
             guard let branch, result.count < Self.mergeTargetLimit, !result.contains(where: {
