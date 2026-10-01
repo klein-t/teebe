@@ -18,7 +18,7 @@ struct CodexCompletionNotificationTests {
         await rig.selector.refreshAgentStates()
         #expect(rig.spy.posted.count == 2)
         #expect(rig.selector.isLowPower)
-        #expect(rig.selector.lowPowerAgentPollInterval == 120)
+        #expect(rig.selector.lowPowerAgentPollInterval == 15)
     }
 
     @Test func startupDisabledAndAbortedTurnsStaySilent() async throws {
