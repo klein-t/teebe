@@ -13,6 +13,8 @@ struct PendingMutation: Equatable {
     var kind: Kind
     var paths: [String]
     var worktreeBusy: Bool
+    var worktreePath: String
+    var loadGeneration: Int
 }
 
 /// The file tree + git status for the selected worktree, plus its mutations.
@@ -163,6 +165,7 @@ final class WorktreeModel {
     // MARK: - Loading
 
     func load(worktreePath: String, repo: Repository?) async {
+        pendingMutation = nil
         loadGeneration += 1
         let generation = loadGeneration
         isLoading = true
@@ -648,7 +651,7 @@ final class WorktreeModel {
     func requestTrashSelected(now: Date = Date()) {
         let paths = orderedSelection()
         guard !paths.isEmpty else { return }
-        pendingMutation = PendingMutation(kind: .trash, paths: paths, worktreeBusy: isBusy(now))
+        requestMutation(kind: .trash, paths: paths, now: now)
     }
 
     /// Find a node by absolute path within the currently displayed (and expanded)
@@ -677,13 +680,13 @@ final class WorktreeModel {
     // MARK: - Non-destructive git (no confirmation)
 
     func stage(_ change: FileChange) async {
-        guard let worktreePath else { return }
+        guard let worktreePath = mutationWorktreePath else { return }
         await perform { try await self.queue?.stage(worktreePath: worktreePath, paths: [change.path]) }
         await refresh()
     }
 
     func unstage(_ change: FileChange) async {
-        guard let worktreePath else { return }
+        guard let worktreePath = mutationWorktreePath else { return }
         await perform { try await self.queue?.unstage(worktreePath: worktreePath, paths: [change.path]) }
         await refresh()
     }
@@ -692,11 +695,24 @@ final class WorktreeModel {
 
     func requestDiscard(_ change: FileChange, now: Date = Date()) {
         let kind: PendingMutation.Kind = change.isUntracked ? .discardUntracked : .discard
-        pendingMutation = PendingMutation(kind: kind, paths: [change.path], worktreeBusy: isBusy(now))
+        requestMutation(kind: kind, paths: [change.path], now: now)
     }
 
     func requestTrash(path: String, now: Date = Date()) {
-        pendingMutation = PendingMutation(kind: .trash, paths: [path], worktreeBusy: isBusy(now))
+        requestMutation(kind: .trash, paths: [path], now: now)
+    }
+
+    private var mutationWorktreePath: String? {
+        // Old rows remain visible while a new worktree loads to keep layout stable.
+        // They must not authorize writes against the newly selected folder.
+        guard !isLoading, let worktreePath, statusPath == worktreePath else { return nil }
+        return worktreePath
+    }
+
+    private func requestMutation(kind: PendingMutation.Kind, paths: [String], now: Date) {
+        guard let worktreePath = mutationWorktreePath else { return }
+        pendingMutation = PendingMutation(kind: kind, paths: paths, worktreeBusy: isBusy(now),
+                                          worktreePath: worktreePath, loadGeneration: loadGeneration)
     }
 
     func cancelPendingMutation() {
@@ -713,7 +729,10 @@ final class WorktreeModel {
     /// confirmation dialog clears `pendingMutation` as it dismisses, so a confirm
     /// deferred into a `Task` would otherwise find it already nil and silently no-op.
     func confirm(_ mutation: PendingMutation) async {
-        guard let worktreePath else { return }
+        // Dialog dismissal may clear presentation before this Task runs. A new
+        // load, even of the same folder, invalidates the captured confirmation.
+        guard let worktreePath, mutation.worktreePath == worktreePath,
+              mutation.loadGeneration == loadGeneration else { return }
         pendingMutation = nil
         await perform {
             switch mutation.kind {

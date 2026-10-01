@@ -24,7 +24,7 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     var statusCallCount: Int { statusLock.lock(); defer { statusLock.unlock() }; return statusCalls }
     /// When set, each `status` call awaits this before returning — lets a test hold a
     /// refresh "in flight" to exercise coalescing of watcher events.
-    var statusGate: (@Sendable () async -> Void)?
+    var statusGate: (@Sendable () async throws -> Void)?
     /// Per-worktree `status` failures (keyed by worktree path).
     var statusErrors: [String: GitError] = [:]
     /// Every directory a `status` or `run` call was made in, in order.
@@ -40,7 +40,7 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     func branches(repoPath: String) async throws -> [Branch] { branchesResult }
     func status(worktreePath: String) async throws -> StatusResult {
         statusLock.lock(); statusCalls += 1; gitDirectories.append(worktreePath); statusLock.unlock()
-        if let statusGate { await statusGate() }
+        if let statusGate { try await statusGate() }
         if let error = statusErrors[worktreePath] { throw error }
         return statusResult
     }
