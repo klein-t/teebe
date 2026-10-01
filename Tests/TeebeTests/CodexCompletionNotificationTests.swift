@@ -210,6 +210,7 @@ struct CodexCompletionNotificationTests {
                     return snapshot
                 },
                 agentTurnEnds: { scanner.turnEnds(forWorktreePaths: $0, now: $1) }, notify: spy.record))
+            selector.notificationsEnabled = true
         }
 
         func record(_ kind: String, turn: String, at date: Date = Date()) throws {
