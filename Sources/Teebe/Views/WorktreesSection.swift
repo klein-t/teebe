@@ -352,7 +352,7 @@ struct WorktreesSection: View {
                     WorktreeMarkView(mark: status.rowMark(grouped: grouped), isSelected: isActive,
                                      paused: selector.isLowPower, phaseKey: worktree.path)
                 }
-                .hoverCard(summary, reveal: reveal) {
+                .hoverCard(summary, reveal: reveal, onReveal: app.worktreeCardRevealed) {
                     WorktreeHoverCard(card: status.card, mark: status.mark, paused: selector.isLowPower,
                                       phaseKey: worktree.path)
                 }
@@ -362,7 +362,7 @@ struct WorktreesSection: View {
                 WorktreeMarkHoverTarget(isSelected: isActive) {
                     WorktreeInfoIcon(isSelected: isActive)
                 }
-                .hoverCard(summary, reveal: reveal) {
+                .hoverCard(summary, reveal: reveal, onReveal: app.worktreeCardRevealed) {
                     WorktreeHoverCard(card: status.card, mark: status.mark, paused: selector.isLowPower,
                                       phaseKey: worktree.path)
                 }
