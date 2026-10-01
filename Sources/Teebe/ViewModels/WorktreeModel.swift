@@ -311,7 +311,7 @@ final class WorktreeModel {
             ignoredPaths = Set(paths ?? [])
             rebuildTree()
             reloadExpandedChildren()
-            scheduleSearch()
+            scheduleSearch(keepingResults: true)
         }
     }
 
@@ -353,13 +353,17 @@ final class WorktreeModel {
 
     /// The task owns a cancellable background scan, not a growing chain of scans
     /// for every keystroke. Query and worktree generations reject stale results.
-    private func scheduleSearch() {
+    /// A watcher refresh keeps the current results on screen until the rescan
+    /// replaces them, so file changes never flash "Searching…" or swap the list.
+    private func scheduleSearch(keepingResults: Bool = false) {
         searchTask?.cancel()
         searchGeneration += 1
-        searchResults = nil
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, let path = worktreePath, !isLoading else { isSearching = false; return }
-        isSearching = true
+        guard !query.isEmpty, let path = worktreePath, !isLoading else { searchResults = nil; isSearching = false; return }
+        if !keepingResults || searchResults == nil {
+            searchResults = nil
+            isSearching = true
+        }
         let generation = searchGeneration
         let builder = makeBuilder(rootPath: path)
         searchTask = Task { [weak self] in
