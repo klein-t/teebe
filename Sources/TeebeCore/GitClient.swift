@@ -41,6 +41,13 @@ public enum GitError: Error, Sendable, Equatable {
     case decodingFailed(String)
 }
 
+/// Who a fetch is for. `.automatic` is the app keeping refs current on its own,
+/// which must never put a prompt in front of anyone; `.manual` is the user asking.
+public enum FetchKind: Sendable, Equatable {
+    case automatic
+    case manual
+}
+
 // MARK: - Status result
 
 /// The outcome of `git status --porcelain=v2 --branch`: the current branch /
@@ -111,7 +118,9 @@ public protocol GitClient: Sendable {
 
     // Remotes
     /// `git fetch --quiet origin`, with an environment that can never prompt.
-    func fetchOrigin(repoPath: String) async throws
+    /// An `.automatic` fetch also leaves the SSH agent out, so an agent that asks
+    /// for approval is never asked on the app's behalf.
+    func fetchOrigin(repoPath: String, kind: FetchKind) async throws
 
     // Low-level escape hatch
     @discardableResult
