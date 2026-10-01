@@ -256,6 +256,7 @@ struct PinnedFolderRows: View, Equatable {
     @Bindable var preview: PreviewModel
     let reveal: (String) -> Void
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
 
     private var worktree: WorktreeModel { app.selector.worktree }
 
@@ -300,9 +301,13 @@ struct PinnedFolderRows: View, Equatable {
     /// The list's own color, opaque, so rows scrolling underneath never show through:
     /// the window's material as it renders there, flattened. A live material here
     /// would blur the rows under it again on every scroll frame. With Reduce
-    /// Transparency the material is solid already, so it is used as is.
+    /// Transparency the material is solid already, so it is used as is. In light
+    /// mode the window is behind-window glass, which never shows the rows under it,
+    /// so the same glass is used and matches the window exactly.
     @ViewBuilder private var listBackground: some View {
-        if reduceTransparency {
+        if colorScheme == .light {
+            BehindWindowGlass()
+        } else if reduceTransparency {
             ZStack {
                 Color(nsColor: .windowBackgroundColor)
                 Rectangle().fill(.regularMaterial)
