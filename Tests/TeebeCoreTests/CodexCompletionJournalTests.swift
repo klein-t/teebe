@@ -83,6 +83,38 @@ struct CodexCompletionJournalTests {
         #expect(restarted.turnEnds(forWorktreePaths: paths, now: epoch.addingTimeInterval(7)).isEmpty)
     }
 
+    @Test func launchDoesNotReadOldRolloutsButStillFindsTheirLaterTurns() throws {
+        let rig = try Fixture(); defer { rig.cleanUp() }
+        let now = Date()
+        let end = line("task_complete", turn: "one", at: now.addingTimeInterval(1))
+        try rig.append(String(end.prefix(end.count / 2)))
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-3_600)],
+                                              ofItemAtPath: rig.file.path)
+        let recent = rig.file.deletingLastPathComponent().appendingPathComponent("rollout-recent.jsonl")
+        try rig.meta.replacingOccurrences(of: #""id":"session""#, with: #""id":"recent""#)
+            .write(to: recent, atomically: true, encoding: .utf8)
+        var opened: [String] = []
+        var summarized: [String] = []
+        let journal = CodexCompletionJournal { url in
+            opened.append(url.lastPathComponent)
+            return try? FileHandle(forReadingFrom: url)
+        }
+        let scanner = CodexRolloutScanner(sessionsRoot: rig.root)
+        func read(at date: Date) -> [AgentTurnEnd] {
+            journal.read(files: [rig.file, recent], paths: ["/repo"], now: date) { url in
+                summarized.append(url.lastPathComponent)
+                return scanner.summary(of: url, id: CodexRolloutScanner.threadID(of: url))
+            }
+        }
+        #expect(read(at: now).isEmpty)
+        #expect(opened.isEmpty)
+        #expect(summarized == ["rollout-recent.jsonl"])
+        try rig.append(String(end.suffix(end.count - end.count / 2)) + "\n")
+        let ends = read(at: now.addingTimeInterval(2))
+        #expect(ends.map(\.id) == ["codex:session:one"])
+        #expect(ends.first?.worktreePath == "/repo")
+    }
+
     @Test func deliveryRejectsHistoryDeduplicatesAndResetsProjectBoundary() {
         var delivery = AgentTurnDelivery()
         delivery.watch(["/repo"], now: epoch)
