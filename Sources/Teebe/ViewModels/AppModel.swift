@@ -546,6 +546,9 @@ final class AppModel {
             return
         }
         newWorktree = nil
+        // The sheet can be cancelled while git works. If the user has moved to
+        // another project since, leave them there: the new row is listed on return.
+        guard selector.selectedRepo?.path == repo.path else { return }
         // The folder exists now, so standardizing matches the form `git worktree
         // list` reports (firmlinks resolved) and the new row gets selected.
         await selector.selectRepo(repo, preferredWorktreePath: PathUtil.standardized(path))
