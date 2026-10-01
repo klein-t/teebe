@@ -1,18 +1,12 @@
 import SwiftUI
 import AppKit
 
-/// The main window's background. Light mode gets a translucent near-white that
-/// picks up the desktop behind the window, the way Finder does; dark mode keeps
-/// the material it always had.
+/// The main window's background: a translucent glass that picks up the desktop
+/// behind the window, the way Finder does. It is near-white in light mode and a
+/// deep grey in dark mode, and follows live appearance changes on its own.
 struct WindowBackdrop: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
-        if colorScheme == .light {
-            BehindWindowGlass().ignoresSafeArea()
-        } else {
-            Rectangle().fill(.regularMaterial)
-        }
+        BehindWindowGlass().ignoresSafeArea()
     }
 }
 
@@ -23,7 +17,9 @@ struct WindowBackdrop: View {
 struct BehindWindowGlass: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
-        view.material = .headerView   // near-white, not the grayer sidebar material
+        // Near-white in light mode, deep grey in dark; the sidebar material is
+        // grayer in light and lets more of the desktop's color through in dark.
+        view.material = .headerView
         view.blendingMode = .behindWindow
         view.state = .followsWindowActiveState
         return view
