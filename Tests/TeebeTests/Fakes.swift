@@ -61,7 +61,10 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
         let startPoint: String?
     }
     private(set) var addedWorktrees: [AddedWorktree] = []
+    /// When set, each add awaits this first, so a test can act while one is in flight.
+    var addWorktreeGate: (@Sendable () async -> Void)?
     func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool, startPoint: String?) async throws {
+        if let addWorktreeGate { await addWorktreeGate() }
         addedWorktrees.append(AddedWorktree(path: path, branch: branch, createBranch: createBranch, startPoint: startPoint))
     }
     /// Every `removeWorktree` call's worktree path, in order.
