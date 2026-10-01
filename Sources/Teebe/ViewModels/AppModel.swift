@@ -119,7 +119,7 @@ final class AppModel {
         self.floatOnTop = false
         self.appearance = .system
         self.terminal = TerminalChoice(rawValue: self.state.terminalApp ?? "") ?? .terminal
-        self.agentNotifications = self.state.agentNotifications ?? true
+        self.agentNotifications = self.state.agentNotifications ?? false
         self.notificationSound = self.state.notificationSound ?? true
         self.selector.notificationsEnabled = self.agentNotifications
         AgentNotifier.soundEnabled = self.notificationSound
@@ -262,7 +262,7 @@ final class AppModel {
             installClaudeHook()
         case .ask:
             let alert = NSAlert()
-            alert.messageText = "Notify instantly, use less battery?"
+            alert.messageText = "Improve Claude Code activity detection?"
             alert.informativeText = """
             Add a local signal to Claude Code so Teebe checks its status promptly, \
             even while hidden. This optional hook is for Claude Code only. Codex \
