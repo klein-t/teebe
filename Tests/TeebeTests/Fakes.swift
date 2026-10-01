@@ -77,20 +77,30 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     // while the test reads the record from the main actor.
     private let remoteLock = NSLock()
     private var fetches: [String] = []
+    private var kinds: [FetchKind] = []
     var fetchedRepos: [String] { remoteLock.lock(); defer { remoteLock.unlock() }; return fetches }
+    var fetchKinds: [FetchKind] { remoteLock.lock(); defer { remoteLock.unlock() }; return kinds }
     /// When set, `fetchOrigin` throws it — a remote that is unreachable.
     var fetchError: GitError?
+    /// A remote reachable only with a key held by the SSH agent: automatic
+    /// fetches, which leave the agent out, fail.
+    var needsAgent = false
     /// When set, each fetch awaits this before returning, so a test can hold one
     /// in flight long enough to watch it time out.
     var fetchGate: (@Sendable () async -> Void)?
 
     /// Recorded synchronously: locking inside an async function is not allowed.
-    private func record(fetch path: String) { remoteLock.lock(); fetches.append(path); remoteLock.unlock() }
+    private func record(fetch path: String, kind: FetchKind) {
+        remoteLock.lock(); fetches.append(path); kinds.append(kind); remoteLock.unlock()
+    }
 
-    func fetchOrigin(repoPath: String) async throws {
-        record(fetch: repoPath)
+    func fetchOrigin(repoPath: String, kind: FetchKind) async throws {
+        record(fetch: repoPath, kind: kind)
         if let fetchGate { await fetchGate() }
         if let fetchError { throw fetchError }
+        if needsAgent, kind == .automatic {
+            throw GitError.commandFailed(command: ["git", "fetch"], exitCode: 128, stderr: "Permission denied (publickey)")
+        }
     }
     /// Scripted stdout for `git rev-parse --git-common-dir` (the repo's git common
     /// dir). When nil, `run` returns empty stdout and callers fall back to `.git`.

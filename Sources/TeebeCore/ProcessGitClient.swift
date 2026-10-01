@@ -111,7 +111,7 @@ public struct ProcessGitClient: GitClient {
 
     // MARK: - Remotes
 
-    public func fetchOrigin(repoPath: String) async throws {
+    public func fetchOrigin(repoPath: String, kind: FetchKind) async throws {
         // A read of the remote, so it stays interruptible. The extra environment
         // makes every credential path fail fast rather than waiting on a prompt,
         // through the SSH command the repository already uses.
@@ -119,7 +119,8 @@ public struct ProcessGitClient: GitClient {
         let sshCommand = configured.flatMap { $0.succeeded ? $0.stdoutString : nil }?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let environment = Self.fetchEnvironment(inherited: ProcessInfo.processInfo.environment,
-                                                sshCommand: sshCommand?.isEmpty == false ? sshCommand : nil)
+                                                sshCommand: sshCommand?.isEmpty == false ? sshCommand : nil,
+                                                kind: kind)
         let result = try await run(Self.fetchArguments, in: repoPath, extraEnvironment: environment)
         guard result.succeeded else {
             throw Self.mapError(arguments: result.arguments, directory: repoPath, result: result)
@@ -136,12 +137,23 @@ public struct ProcessGitClient: GitClient {
     /// `core.sshCommand`, or `GIT_SSH_COMMAND`, which Git prefers) is kept and only
     /// gets the batch option; a `GIT_SSH` program is left alone, since setting a
     /// command would replace it.
-    static func fetchEnvironment(inherited: [String: String], sshCommand: String?) -> [String: String] {
+    ///
+    /// An `.automatic` fetch also runs without the SSH agent, both the one in
+    /// `SSH_AUTH_SOCK` and one named by `IdentityAgent` in the SSH config: agents
+    /// such as 1Password's or Secretive ask for approval on every use, and batch
+    /// mode does not stop that. Keys the agent alone holds then fail the fetch,
+    /// which is silent; the user's own Refresh goes through the agent.
+    static func fetchEnvironment(inherited: [String: String], sshCommand: String?, kind: FetchKind) -> [String: String] {
         var environment = ["SSH_ASKPASS_REQUIRE": "never"]
+        var options = " -o BatchMode=yes"
+        if kind == .automatic {
+            environment["SSH_AUTH_SOCK"] = ""
+            options += " -o IdentityAgent=none"
+        }
         if let command = inherited["GIT_SSH_COMMAND"].flatMap({ $0.isEmpty ? nil : $0 }) ?? sshCommand {
-            environment["GIT_SSH_COMMAND"] = command + " -o BatchMode=yes"
+            environment["GIT_SSH_COMMAND"] = command + options
         } else if inherited["GIT_SSH"] == nil {
-            environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+            environment["GIT_SSH_COMMAND"] = "ssh" + options
         }
         return environment
     }
