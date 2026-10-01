@@ -217,7 +217,7 @@ struct ProcessGitClientTests {
         defer { fixture.cleanup() }
         fixture.commitFile("a.txt", "base")
         await #expect(throws: GitError.self) {
-            try await git.fetchOrigin(repoPath: fixture.repoPath)
+            try await git.fetchOrigin(repoPath: fixture.repoPath, kind: .automatic)
         }
     }
 
@@ -232,7 +232,7 @@ struct ProcessGitClientTests {
         #expect(fixture.git(["for-each-ref", "refs/remotes/origin/gone"], in: clone).contains("gone"))
         fixture.git(["branch", "-D", "gone"])
 
-        try await git.fetchOrigin(repoPath: clone.path)
+        try await git.fetchOrigin(repoPath: clone.path, kind: .automatic)
         #expect(fixture.git(["for-each-ref", "refs/remotes/origin/gone"], in: clone).isEmpty)
     }
 
@@ -253,27 +253,74 @@ struct ProcessGitClientTests {
         fixture.git(["config", "core.sshCommand", ssh.path + " -i /tmp/acme-key"])
 
         await #expect(throws: GitError.self) {
-            try await git.fetchOrigin(repoPath: fixture.repoPath)
+            try await git.fetchOrigin(repoPath: fixture.repoPath, kind: .automatic)
         }
         let calls = (try? String(contentsOf: record, encoding: .utf8)) ?? ""
         #expect(calls.contains("-i /tmp/acme-key"))
         #expect(calls.contains("-o BatchMode=yes"))
     }
 
+    @Test("an automatic fetch leaves the SSH agent out; a manual one still uses it")
+    func automaticFetchSkipsTheAgent() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let bin = fixture.root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let record = fixture.root.appendingPathComponent("ssh-calls.txt")
+        let ssh = bin.appendingPathComponent("ssh")
+        let script = "#!/bin/sh\necho \"$@ sock=[${SSH_AUTH_SOCK-unset}]\" >> '\(record.path)'\nexit 255\n"
+        try script.write(to: ssh, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+        fixture.git(["remote", "add", "origin", "ssh://example.invalid/repo.git"])
+        fixture.git(["config", "core.sshCommand", ssh.path + " -i /tmp/acme-key"])
+
+        await #expect(throws: GitError.self) {
+            try await git.fetchOrigin(repoPath: fixture.repoPath, kind: .automatic)
+        }
+        let automatic = (try? String(contentsOf: record, encoding: .utf8)) ?? ""
+        #expect(automatic.contains("-i /tmp/acme-key"))
+        #expect(automatic.contains("-o BatchMode=yes"))
+        #expect(automatic.contains("-o IdentityAgent=none"))
+        #expect(automatic.contains("sock=[]"))
+
+        try FileManager.default.removeItem(at: record)
+        await #expect(throws: GitError.self) {
+            try await git.fetchOrigin(repoPath: fixture.repoPath, kind: .manual)
+        }
+        let manual = (try? String(contentsOf: record, encoding: .utf8)) ?? ""
+        #expect(manual.contains("-o BatchMode=yes"))
+        #expect(!manual.contains("IdentityAgent"))
+        #expect(manual.contains("sock=[\(ProcessInfo.processInfo.environment["SSH_AUTH_SOCK"] ?? "unset")]"))
+    }
+
     @Test("the fetch environment never prompts and never replaces the user's SSH command")
     func fetchEnvironment() {
         let batch = "-o BatchMode=yes"
-        #expect(ProcessGitClient.fetchEnvironment(inherited: [:], sshCommand: nil)
+        #expect(ProcessGitClient.fetchEnvironment(inherited: [:], sshCommand: nil, kind: .manual)
             == ["GIT_SSH_COMMAND": "ssh \(batch)", "SSH_ASKPASS_REQUIRE": "never"])
-        let configured = ProcessGitClient.fetchEnvironment(inherited: [:], sshCommand: "ssh -i ~/.ssh/work")
+        let configured = ProcessGitClient.fetchEnvironment(inherited: [:], sshCommand: "ssh -i ~/.ssh/work", kind: .manual)
         #expect(configured["GIT_SSH_COMMAND"] == "ssh -i ~/.ssh/work \(batch)")
         // Git prefers the environment's command over the configured one.
-        let inherited = ProcessGitClient.fetchEnvironment(inherited: ["GIT_SSH_COMMAND": "ssh -F cfg"], sshCommand: "ssh -i k")
+        let inherited = ProcessGitClient.fetchEnvironment(
+            inherited: ["GIT_SSH_COMMAND": "ssh -F cfg"], sshCommand: "ssh -i k", kind: .manual)
         #expect(inherited["GIT_SSH_COMMAND"] == "ssh -F cfg \(batch)")
         // A GIT_SSH program is used only when no command is set; setting one would replace it.
-        #expect(ProcessGitClient.fetchEnvironment(inherited: ["GIT_SSH": "/opt/acme/ssh"], sshCommand: nil)
+        #expect(ProcessGitClient.fetchEnvironment(inherited: ["GIT_SSH": "/opt/acme/ssh"], sshCommand: nil, kind: .manual)
             == ["SSH_ASKPASS_REQUIRE": "never"])
         #expect(ProcessGitClient.fetchArguments == ["fetch", "--quiet", "--prune", "origin"])
+    }
+
+    @Test("an automatic fetch environment has no SSH agent, whichever SSH it runs")
+    func automaticFetchEnvironment() {
+        let options = "-o BatchMode=yes -o IdentityAgent=none"
+        let agent = "/tmp/agent.sock"
+        #expect(ProcessGitClient.fetchEnvironment(inherited: ["SSH_AUTH_SOCK": agent], sshCommand: nil, kind: .automatic)
+            == ["GIT_SSH_COMMAND": "ssh \(options)", "SSH_ASKPASS_REQUIRE": "never", "SSH_AUTH_SOCK": ""])
+        let configured = ProcessGitClient.fetchEnvironment(inherited: [:], sshCommand: "ssh -i ~/.ssh/work", kind: .automatic)
+        #expect(configured["GIT_SSH_COMMAND"] == "ssh -i ~/.ssh/work \(options)")
+        #expect(ProcessGitClient.fetchEnvironment(inherited: ["GIT_SSH": "/opt/acme/ssh"], sshCommand: nil, kind: .automatic)
+            == ["SSH_ASKPASS_REQUIRE": "never", "SSH_AUTH_SOCK": ""])
     }
 
     @Test("status on a non-git directory throws notAGitRepository")
