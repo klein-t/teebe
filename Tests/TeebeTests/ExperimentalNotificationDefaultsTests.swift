@@ -15,10 +15,21 @@ struct ExperimentalNotificationDefaultsTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("state.json")
-        try Data("{}".utf8).write(to: file)
+        let data = Data("""
+        {"repositories":[{"path":"/legacy"}],"showChangedOnly":false,
+         "showIgnored":false,"floatOnTop":false,"lastSelectedRepoPath":"/legacy","terminalApp":"cmux"}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(AppState.self, from: data)
+        #expect(decoded.agentNotifications == nil)
+        #expect(decoded.repositories == [PersistedRepository(path: "/legacy")])
+        #expect(decoded.lastSelectedRepoPath == "/legacy")
+        try data.write(to: file)
         let store = AppStateStore(url: file)
         #expect(store.load().agentNotifications == nil)
+        #expect(store.load().repositories == decoded.repositories)
+        #expect(store.load().lastSelectedRepoPath == "/legacy")
         let legacy = AppModel(environment: makeTestEnvironment(store: store))
+        #expect(legacy.terminal == .cmux)
         #expect(!legacy.agentNotifications)
         #expect(!legacy.selector.notificationsEnabled)
     }
