@@ -573,7 +573,8 @@ final class AppModel {
             form.errorMessage = "Couldn't create worktree: \(WorktreeModel.describe(error))"
             return
         }
-        newWorktree = nil
+        // Close only this form's sheet: it may have been cancelled and another opened.
+        if newWorktree === form { newWorktree = nil }
         // The sheet can be cancelled while git works. If the user has moved to
         // another project since, leave them there: the new row is listed on return.
         guard selector.selectedRepo?.path == repo.path else { return }

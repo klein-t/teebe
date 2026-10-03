@@ -227,6 +227,34 @@ struct GitContentInclusionTests {
         #expect(try await !check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
     }
 
+    @Test("a commit that landed only with different whitespace keeps the branch unconfirmed")
+    func whitespaceOnlyMatch() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("app.py", "def f():\n    return 1\n")
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.writeFile("app.py", "def f():\n  return 1\n", in: folder)
+        fixture.stage(in: folder)
+        fixture.commit("two-space indent", in: folder)
+        fixture.commitFile("app.py", "def f():\n\treturn 1\n")
+        let check = GitContentInclusion(git: ProcessGitClient())
+        #expect(try await !check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
+    }
+
+    @Test("an empty commit on the branch is never matched by one on the target")
+    func emptyCommitOnBranch() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        let feature = landedOneByOne(fixture)
+        fixture.git(["commit", "-q", "--allow-empty", "-m", "empty"], in: feature.folder)
+        fixture.git(["cherry-pick", feature.first])
+        fixture.commitFile("one.txt", "rewritten")
+        fixture.git(["cherry-pick", feature.second])
+        fixture.git(["commit", "-q", "--allow-empty", "-m", "other empty"])
+        let check = GitContentInclusion(git: ProcessGitClient())
+        #expect(try await !check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
+    }
+
     @Test("a merge commit on the branch is not confirmed commit by commit")
     func mergeCommitOnBranch() async throws {
         let fixture = try GitFixture()
