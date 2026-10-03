@@ -61,8 +61,8 @@ struct GitContentInclusion {
         return try await commitsAreUpstream(base: String(base), head: head, target: target, repoPath: repoPath)
     }
 
-    /// Whether every commit of the branch has a patch-equivalent commit in the target
-    /// since their merge base, as `git cherry` reports it. This covers a branch landed
+    /// Whether every commit of the branch has a commit with the same patch in the
+    /// target since their merge base. This covers a branch landed
     /// commit by commit among other work (picked, rebased or squashed separately),
     /// where no single target revision holds all of its changes at once.
     ///
@@ -74,8 +74,9 @@ struct GitContentInclusion {
     ///   that landed differently (a changed conflict resolution changes its patch),
     ///   confirms nothing;
     /// - both sides are bounded by `commitLimit`.
-    /// Patch identity is Git's: a commit is matched only by the same change to the
-    /// same files, ignoring line numbers and whitespace.
+    /// A commit is matched only by the same change to the same files, whitespace
+    /// included (Git's own patch-id ignores it, so a re-indent would match a
+    /// different re-indent). An empty commit has no change to match.
     private func commitsAreUpstream(base: String, head: String, target: String, repoPath: String) async throws -> Bool {
         let own = try await run(["rev-list", "--parents", "--max-count=\(Self.commitLimit + 1)", "\(base)..\(head)"],
                                 in: repoPath)
@@ -89,10 +90,62 @@ struct GitContentInclusion {
               let count = Int(upstream.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines))
         else { throw CleanupError.gitFailed }
         guard count <= Self.commitLimit else { return false }
-        let cherry = try await run(["cherry", target, head, base], in: repoPath)
-        guard cherry.succeeded else { throw CleanupError.gitFailed }
-        let marks = cherry.stdoutString.split(separator: "\n")
-        return marks.count == commits.count && marks.allSatisfy { $0.hasPrefix("- ") }
+        let mine = try await patches("\(base)..\(head)", in: repoPath)
+        let landed = Set(try await patches("\(base)..\(target)", in: repoPath).compactMap { $0 })
+        return mine.count == commits.count && mine.allSatisfy { $0.map(landed.contains) ?? false }
+    }
+
+    /// The patch of each non-merge commit in `range`, newest first, or nil for a
+    /// commit that changes nothing. Whitespace is kept; only what differs when the
+    /// same change is applied elsewhere is dropped: hunk line numbers and function
+    /// context, and the blob ids of text files (binary files keep theirs, as their
+    /// patch says nothing else about the content).
+    private func patches(_ range: String, in repoPath: String) async throws -> [Data?] {
+        let log = try await run([
+            // Blank context lines keep their leading space, so empty lines only separate.
+            "-c", "diff.suppressBlankEmpty=false",
+            "log", "-p", "--no-merges", "--format=%x00%H", "--no-color", "--no-show-signature",
+            "--full-index", "--no-renames", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none",
+            "--max-count=\(Self.commitLimit)", range
+        ], in: repoPath)
+        guard log.succeeded else { throw CleanupError.gitFailed }
+        var result: [Data?] = []
+        var patch: [Data] = []
+        var file: [Data] = []
+        var started = false
+        func endFile() {
+            let binary = file.contains { $0.starts(with: Data("Binary files ".utf8)) }
+            for line in file {
+                guard !binary, line.starts(with: Data("index ".utf8)) else { patch.append(line); continue }
+                // "index <old>..<new>[ <mode>]": keep only the mode.
+                let fields = line.split(separator: UInt8(ascii: " "))
+                patch.append(Data("index".utf8) + (fields.count == 3 ? Data(" ".utf8) + fields[2] : Data()))
+            }
+            file = []
+        }
+        func endCommit() {
+            endFile()
+            if started { result.append(patch.isEmpty ? nil : Data(patch.joined(separator: [10]))) }
+            patch = []
+        }
+        for line in log.standardOutput.split(separator: 10).map({ Data($0) }) {
+            try Task.checkCancellation()
+            if line.first == 0 {
+                endCommit()
+                started = true
+            } else if line.starts(with: Data("diff ".utf8)) {
+                endFile()
+                file = [line]
+            } else if line.starts(with: Data("@@".utf8)), !file.isEmpty {
+                file.append(Data("@@".utf8))
+            } else if !file.isEmpty {
+                file.append(line)
+            } else {
+                throw CleanupError.gitFailed
+            }
+        }
+        endCommit()
+        return result
     }
 
     private struct Version: Equatable {
