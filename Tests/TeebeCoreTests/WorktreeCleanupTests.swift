@@ -367,6 +367,7 @@ struct WorktreeCleanupTests {
         #expect(!FileManager.default.fileExists(atPath: dev.path))
         #expect(!fixture.git(["rev-parse", "--verify", "dev"]).isEmpty)
     }
+
     /// Commits only a reflog still reaches, as a reset leaves them: merged then reset
     /// back past a new commit, or reset onto the target over one.
     @Test("commits only the worktree's or branch's reflog reaches survive removing both")
