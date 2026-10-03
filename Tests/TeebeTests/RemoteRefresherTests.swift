@@ -57,8 +57,10 @@ struct RemoteRefresherTests {
         git.fetchError = .commandFailed(command: ["git", "fetch"], exitCode: 128, stderr: "Host key verification failed")
         let app = await app(git)
 
+        let revision = app.selector.mergeRevision
         await app.refreshRemotes(force: false)
 
+        #expect(app.selector.mergeRevision == revision)
         #expect(git.fetchedRepos == ["/repo"])
         #expect(app.errorMessage == nil)
         #expect(app.selector.errorMessage == nil)
@@ -162,6 +164,34 @@ struct RemoteRefresherTests {
         let revision = app.selector.mergeRevision
         await app.selector.handleRepoWatchEvent(["/repo/.git/refs/remotes/origin/main"])
         #expect(app.selector.mergeRevision == revision + 1)
+    }
+
+    @Test("a successful background fetch invalidates merge checks without a watcher event")
+    func fetchInvalidatesMergeChecksInLowPower() async {
+        let git = FakeGitClient()
+        let app = await app(git)
+        await app.selector.setLowPower(true)
+        let revision = app.selector.mergeRevision
+
+        await app.refreshRemotes(force: false)
+
+        #expect(git.fetchedRepos == ["/repo"])
+        #expect(app.selector.mergeRevision > revision)
+    }
+
+    @Test("a completed fetch cannot invalidate a repository selected later")
+    func fetchCompletionIsRepositoryScoped() async {
+        let git = FakeGitClient()
+        let app = await app(git)
+        let gate = Gate()
+        git.fetchGate = { await gate.wait() }
+        let fetch = Task { await app.refreshRemotes(force: false) }
+        while git.fetchedRepos.isEmpty { await Task.yield() }
+        await app.selector.selectRepo(Repository(path: "/another"))
+        let revision = app.selector.mergeRevision
+        await gate.open()
+        await fetch.value
+        #expect(app.selector.mergeRevision == revision)
     }
 
     @Test("a successful fetch refreshes the sync arrows and remote facts")

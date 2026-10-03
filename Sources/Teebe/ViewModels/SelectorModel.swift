@@ -112,6 +112,10 @@ final class SelectorModel {
     /// Low-power mode (window occluded): every FSEvents watcher is stopped and
     /// the app rides on the hook ping plus a slow poll. See `setLowPower`.
     private(set) var isLowPower = false
+    private var visibilityGeneration = UUID()
+    private var visibleRefs: (repoPath: String, output: Data)?
+    private var hiddenRefsChanged = false
+    private var hiddenRefs: (repoPath: String, output: Data)?
     /// Poll cadences for the time-only agent transitions (stall/idle-out).
     /// Vars so tests can shrink them.
     var agentPollInterval: TimeInterval = 30
@@ -282,11 +286,15 @@ final class SelectorModel {
     /// `prune`) rewrites `worktrees/…` there, which `handleRepoWatchEvent` filters
     /// for; routine index/ref writes in the primary checkout are ignored.
     private func startRepoWatching(_ repo: Repository) async {
+        let generation = visibilityGeneration
         repoWatcher?.stop()
         let commonDir = await resolveGitCommonDir(for: repo)
-        // Another pick may have started its own watcher meanwhile: keep exactly one,
-        // and only for the repo that is still selected.
-        guard selectedRepo?.path == repo.path else { return }
+        // Another pick or a visibility change may have happened meanwhile: keep
+        // exactly one watcher, and only for the repo that is still selected.
+        guard visibilityGeneration == generation, !isLowPower, selectedRepo?.path == repo.path else { return }
+        let refs = try? await environment.git.run(["show-ref"], in: repo.path)
+        guard visibilityGeneration == generation, !isLowPower, selectedRepo?.path == repo.path else { return }
+        visibleRefs = refs.flatMap { $0.succeeded ? (repo.path, $0.standardOutput) : nil }
         repoWatcher?.stop()
         worktreesAdminDir = (commonDir as NSString).appendingPathComponent("worktrees")
         let watcher = environment.makeWatcher()
@@ -327,6 +335,10 @@ final class SelectorModel {
             await refreshWorktreeInfo()
         }
     }
+
+    /// Remote fetches and visibility changes can happen while FSEvents is stopped.
+    /// Restart merge checks explicitly instead of relying on an event we may miss.
+    func invalidateMergeChecks() { mergeRevision += 1 }
 
     /// Re-discover the repo's worktrees + branches in place — the manual Refresh
     /// button and the auto-detect watcher both land here. Unlike `selectRepo` it
@@ -436,10 +448,9 @@ final class SelectorModel {
     }
 
     /// Adopt a freshly discovered worktree list. Merge ancestry can only have moved
-    /// when the set of checkouts changed or one of their HEADs did, so only that
-    /// bumps `mergeRevision`. Re-discovering the same trees — which is what a manual
-    /// Refresh, a selection change, or leaving low power (alt-tab) does — reuses the
-    /// last scan instead of restarting a full N-worktree check.
+    /// when the set of checkouts changed or one of their HEADs did, so discovery
+    /// bumps `mergeRevision` only then. Fetch completion and leaving low power
+    /// invalidate separately because comparison refs may move with unchanged HEADs.
     private func applyDiscovered(_ discovered: [Worktree]) {
         func identity(_ trees: [Worktree]) -> [String] { trees.map { $0.path + "\u{0}" + $0.head } }
         if identity(discovered) != identity(worktrees) { mergeRevision += 1 }
@@ -642,7 +653,18 @@ final class SelectorModel {
         guard on != isLowPower else { return }
         isLowPower = on
         if agentPollTask != nil { startAgentPolling() }
+        let generation = UUID()
+        visibilityGeneration = generation
         if on {
+            hiddenRefs = nil
+            if let repo = selectedRepo {
+                // A debounced event may be dropped when the watcher stops. Compare
+                // against the earlier visible baseline as well as the return read.
+                let refs = try? await environment.git.run(["show-ref"], in: repo.path)
+                guard visibilityGeneration == generation, selectedRepo?.path == repo.path else { return }
+                hiddenRefsChanged = visibleRefs?.repoPath != repo.path || refs?.succeeded != true || visibleRefs?.output != refs?.standardOutput
+                hiddenRefs = refs.flatMap { $0.succeeded ? (repo.path, $0.standardOutput) : nil }
+            }
             repoWatcher?.stop()
             agentWatcher?.stop()
             agentWatcher = nil
@@ -650,11 +672,28 @@ final class SelectorModel {
             worktree.pauseWatching()
         } else {
             if let repo = selectedRepo { await startRepoWatching(repo) }
+            guard visibilityGeneration == generation else { return }
             startAgentWatcher()
             startWorktreeActivity()
             await worktree.resumeWatching()
+            guard visibilityGeneration == generation else { return }
+            guard await invalidateMergeChecksIfRefsMovedWhileHidden(generation: generation) else { return }
             await refreshWorktrees()
         }
+    }
+
+    /// On return from low power, restart merge checks if refs moved while hidden.
+    /// False when a newer visibility change or project pick took over meanwhile.
+    private func invalidateMergeChecksIfRefsMovedWhileHidden(generation: UUID) async -> Bool {
+        guard let repo = selectedRepo else { return true }
+        let refs = try? await environment.git.run(["show-ref"], in: repo.path)
+        guard visibilityGeneration == generation, selectedRepo?.path == repo.path else { return false }
+        if hiddenRefsChanged || hiddenRefs?.repoPath != repo.path || refs?.succeeded != true || hiddenRefs?.output != refs?.standardOutput {
+            invalidateMergeChecks()
+        }
+        hiddenRefs = nil
+        hiddenRefsChanged = false
+        return true
     }
 
     /// A Claude Code hook pinged. Hooks run a beat before Claude Code records
