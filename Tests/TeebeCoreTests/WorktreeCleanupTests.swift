@@ -367,6 +367,7 @@ struct WorktreeCleanupTests {
         #expect(!FileManager.default.fileExists(atPath: dev.path))
         #expect(!fixture.git(["rev-parse", "--verify", "dev"]).isEmpty)
     }
+
     @Test("a Git repository with commits of its own inside ignored files keeps the worktree")
     func nestedRepositoryInIgnoredFiles() async throws {
         let fixture = try GitFixture()
