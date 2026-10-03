@@ -6,11 +6,20 @@ import TeebeCore
 @MainActor
 @Suite("Experimental notification defaults", .serialized)
 struct ExperimentalNotificationDefaultsTests {
-    @Test func freshProfileAndMissingSavedKeyAreOff() throws {
-        let fresh = AppModel(environment: makeTestEnvironment())
+    @Test func freshProfileIsOffAndStaysOffOnRelaunch() throws {
+        let environment = makeTestEnvironment()
+        let fresh = AppModel(environment: environment)
         #expect(AppState().agentNotifications == nil)
         #expect(!fresh.agentNotifications)
         #expect(!fresh.selector.notificationsEnabled)
+        #expect(environment.store.load().agentNotifications == nil)
+        // The first launch records the running version; relaunching changes nothing.
+        WhatsNewModel(version: "0.8.0", changelogMarkdown: nil, store: environment.store).presentIfUpdated()
+        #expect(!AppModel(environment: environment).agentNotifications)
+        #expect(environment.store.load().agentNotifications == nil)
+    }
+
+    @Test func legacyStateWithoutSavedKeyKeepsNotificationsOn() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -30,8 +39,56 @@ struct ExperimentalNotificationDefaultsTests {
         #expect(store.load().lastSelectedRepoPath == "/legacy")
         let legacy = AppModel(environment: makeTestEnvironment(store: store))
         #expect(legacy.terminal == .cmux)
-        #expect(!legacy.agentNotifications)
-        #expect(!legacy.selector.notificationsEnabled)
+        #expect(legacy.agentNotifications)
+        #expect(legacy.notificationSound)
+        #expect(legacy.selector.notificationsEnabled)
+        #expect(store.load().agentNotifications == true)
+        #expect(store.load().repositories == decoded.repositories)
+    }
+
+    /// 0.7.0 and earlier always posted notifications and never saved a choice.
+    @Test(arguments: ["0.7.0", "0.4.0"])
+    func upgradeFromAlwaysOnVersionKeepsNotificationsOn(lastSeen: String) throws {
+        let store = Self.store(lastSeenVersion: lastSeen, notifications: nil)
+        let environment = makeTestEnvironment(store: store)
+        let app = AppModel(environment: environment)
+        #expect(app.agentNotifications)
+        #expect(app.notificationSound)
+        #expect(app.selector.notificationsEnabled)
+        #expect(store.load().agentNotifications == true)
+        #expect(store.load().notificationSound == true)
+        #expect(store.load().lastSeenVersion == lastSeen)
+        // Once migrated, the user's later choice is never flipped back on.
+        WhatsNewModel(version: "0.8.0", changelogMarkdown: nil, store: store).presentIfUpdated()
+        app.agentNotifications = false
+        #expect(!AppModel(environment: environment).agentNotifications)
+        #expect(store.load().agentNotifications == false)
+    }
+
+    @Test(arguments: [false, true])
+    func upgradeNeverOverridesSavedChoice(enabled: Bool) throws {
+        let store = Self.store(lastSeenVersion: "0.7.0", notifications: enabled, repositories: ["/repo"])
+        let app = AppModel(environment: makeTestEnvironment(store: store))
+        #expect(app.agentNotifications == enabled)
+        #expect(store.load().agentNotifications == enabled)
+    }
+
+    @Test func profileThatAlreadyRanTheNewVersionIsNotMigrated() throws {
+        let store = Self.store(lastSeenVersion: "0.8.0", notifications: nil, repositories: ["/repo"])
+        let app = AppModel(environment: makeTestEnvironment(store: store))
+        #expect(!app.agentNotifications)
+        #expect(store.load().agentNotifications == nil)
+    }
+
+    private static func store(lastSeenVersion: String?, notifications: Bool?,
+                              repositories: [String] = []) -> AppStateStore {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let store = AppStateStore(url: root.appendingPathComponent("state.json"))
+        var state = AppState(repositories: repositories.map(PersistedRepository.init(path:)),
+                             lastSeenVersion: lastSeenVersion)
+        state.agentNotifications = notifications
+        try? store.save(state)
+        return store
     }
 
     @Test(arguments: [false, true])
