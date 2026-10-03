@@ -273,7 +273,7 @@ final class AppModel {
             alert.informativeText = """
             Add a local signal to Claude Code so Teebe checks its status promptly, \
             even while hidden. This optional hook is for Claude Code only. Codex \
-            activity is also detected, with checks up to two minutes apart while hidden. \
+            activity is also detected, with checks every 15 seconds while hidden. \
             No session content is sent anywhere. You can install or repair the hook later in Settings.
             """
             alert.addButton(withTitle: "Add Hook")

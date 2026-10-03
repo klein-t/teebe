@@ -115,7 +115,10 @@ final class SelectorModel {
     /// Poll cadences for the time-only agent transitions (stall/idle-out).
     /// Vars so tests can shrink them.
     var agentPollInterval: TimeInterval = 30
-    var lowPowerAgentPollInterval: TimeInterval = 120
+    var lowPowerAgentPollInterval: TimeInterval = 15
+    @ObservationIgnored var waitForAgentPoll: (TimeInterval) async throws -> Void = {
+        try await Task.sleep(for: .seconds($0))
+    }
     /// Delay before the catch-up re-derive that follows a hook ping.
     var agentPingSettle: TimeInterval = 2
     /// How long a worktree stays working after its last file change or busy
@@ -574,10 +577,20 @@ final class SelectorModel {
             Task { @MainActor in await self?.handleAgentPing() }
         }
         agentPingListener = listener
+        startAgentPolling()
+    }
+
+    private func startAgentPolling() {
+        let previous = agentPollTask
+        previous?.cancel()
         agentPollTask = Task { [weak self] in
+            // A visibility change reschedules sleep, but an in-flight scan must
+            // finish before its replacement starts another polling cycle.
+            await previous?.value
             while !Task.isCancelled {
-                guard let interval = self?.currentAgentPollInterval else { return }
-                try? await Task.sleep(for: .seconds(interval))
+                guard let interval = self?.currentAgentPollInterval,
+                      let wait = self?.waitForAgentPoll else { return }
+                try? await wait(interval)
                 guard !Task.isCancelled else { return }
                 await self?.refreshAgentStates()
             }
@@ -628,6 +641,7 @@ final class SelectorModel {
     func setLowPower(_ on: Bool) async {
         guard on != isLowPower else { return }
         isLowPower = on
+        if agentPollTask != nil { startAgentPolling() }
         if on {
             repoWatcher?.stop()
             agentWatcher?.stop()
