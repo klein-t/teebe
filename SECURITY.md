@@ -25,7 +25,7 @@ coordinate disclosure.
 
 ## Scope & threat model
 
-Teebe is a local, sandboxed macOS app that browses git repositories and
+Teebe is a local macOS app that browses git repositories and
 worktrees on your machine. It:
 
 - Stores **no credentials and no secrets**. Persisted state is limited to UI

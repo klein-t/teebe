@@ -18,6 +18,10 @@ struct ShortcutGroup: Identifiable {
 /// changes in `RootView`/`FilesSection` so the sheet stays accurate.
 enum ShortcutsCatalog {
     static let groups: [ShortcutGroup] = [
+        ShortcutGroup(title: "App", items: [
+            ShortcutItem(keys: "⌘,", action: "Settings"),
+            ShortcutItem(keys: "⌘/", action: "Keyboard Shortcuts")
+        ]),
         ShortcutGroup(title: "Sections", items: [
             ShortcutItem(keys: "⌘1 / ⌘2 / ⌘3", action: "Focus Worktrees / Changes / Files (again to collapse)"),
             ShortcutItem(keys: "Tab / ⇧Tab", action: "Cycle the active section")
@@ -27,7 +31,8 @@ enum ShortcutsCatalog {
             ShortcutItem(keys: "→", action: "Expand folder / go to first child"),
             ShortcutItem(keys: "←", action: "Collapse folder / go to parent"),
             ShortcutItem(keys: "Return", action: "Open file · switch worktree · open change"),
-            ShortcutItem(keys: "Space", action: "Quick Look a file / peek a change's diff")
+            ShortcutItem(keys: "Space", action: "Quick Look a file / peek a change's diff / show a worktree's status"),
+            ShortcutItem(keys: "↑ / ↓", action: "While previewing: previous / next item")
         ]),
         ShortcutGroup(title: "Select files", items: [
             ShortcutItem(keys: "⇧↑ / ⇧↓", action: "Extend the selection"),
@@ -38,6 +43,7 @@ enum ShortcutsCatalog {
         ShortcutGroup(title: "Files actions", items: [
             ShortcutItem(keys: "⌘F", action: "Jump to search"),
             ShortcutItem(keys: "⌘⇧C", action: "Copy selection as @-refs"),
+            ShortcutItem(keys: "⌘⌥C", action: "Copy full paths"),
             ShortcutItem(keys: "⌘⌫", action: "Move selection to Trash")
         ]),
         ShortcutGroup(title: "Search", items: [

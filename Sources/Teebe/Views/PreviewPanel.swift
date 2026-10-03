@@ -24,10 +24,30 @@ struct PreviewPanel: View {
         .focusEffectDisabled()
         .focused($focused)
         .onAppear { focused = true }
+        .onDisappear { preview.close() }
         .onChange(of: preview.currentPath) { focused = true }
         // Space toggles the peek shut (Quick Look convention); Esc does too.
         .onKeyPress(.space) { close(); return .handled }
+        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { step($0.key) }
         .onExitCommand { close() }
+    }
+
+    /// Arrow keys while the peek is key: move the list selection (Finder-style) and
+    /// show the newly selected file.
+    private func step(_ key: KeyEquivalent) -> KeyPress.Result {
+        let arrow: PeekArrow
+        switch key {
+        case .upArrow: arrow = .up
+        case .downArrow: arrow = .down
+        case .leftArrow: arrow = .left
+        default: arrow = .right
+        }
+        let worktree = app.selector.worktree
+        guard let node = worktree.stepPeek(arrow, in: app.activeSection) else { return .ignored }
+        if !node.isDirectory, let worktreePath = worktree.worktreePath {
+            Task { await preview.update(for: node, worktreePath: worktreePath) }
+        }
+        return .handled
     }
 
     private func close() {
@@ -61,7 +81,7 @@ struct PreviewPanel: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
-                .help("Unified or side-by-side")
+                .hoverHelp("Choose unified or side-by-side diff", highlight: false)
             }
         }
         .font(.system(size: 12, design: .monospaced))
@@ -72,18 +92,23 @@ struct PreviewPanel: View {
     @ViewBuilder
     private var content: some View {
         switch preview.content {
+        case .loading:
+            ProgressView("Loading preview…")
+        case .tooLarge(let url):
+            VStack(spacing: 12) {
+                ContentUnavailableView("Too large to preview", systemImage: "doc.text",
+                    description: Text("Open this file in another app to view its full contents."))
+                Button("Open in default app") {
+                    app.open(FileNode(path: url.path, isDirectory: false))
+                }
+            }
+            .padding()
         case .empty:
             ContentUnavailableView("Select a file and press space", systemImage: "eye")
         case .diff(let file):
             DiffContentView(file: file, splitView: splitView)
         case .text(let text):
-            ScrollView {
-                Text(text)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-            }
+            PreviewTextView(text: text)
         case .quickLook(let url):
             VStack(spacing: 8) {
                 Image(systemName: "doc")

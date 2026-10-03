@@ -24,36 +24,103 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     var statusCallCount: Int { statusLock.lock(); defer { statusLock.unlock() }; return statusCalls }
     /// When set, each `status` call awaits this before returning — lets a test hold a
     /// refresh "in flight" to exercise coalescing of watcher events.
-    var statusGate: (@Sendable () async -> Void)?
+    var statusGate: (@Sendable () async throws -> Void)?
+    /// Per-worktree `status` failures (keyed by worktree path).
+    var statusErrors: [String: GitError] = [:]
+    /// Every directory a `status` or `run` call was made in, in order.
+    private var gitDirectories: [String] = []
+    var touchedDirectories: [String] { statusLock.lock(); defer { statusLock.unlock() }; return gitDirectories }
 
+    var beforeWorktrees: (@Sendable () async -> Void)?
     func worktrees(repoPath: String) async throws -> [Worktree] {
+        if let beforeWorktrees { await beforeWorktrees() }
         if let worktreesError { throw worktreesError }
         return worktreesResult
     }
     func branches(repoPath: String) async throws -> [Branch] { branchesResult }
     func status(worktreePath: String) async throws -> StatusResult {
-        statusLock.lock(); statusCalls += 1; statusLock.unlock()
-        if let statusGate { await statusGate() }
+        statusLock.lock(); statusCalls += 1; gitDirectories.append(worktreePath); statusLock.unlock()
+        if let statusGate { try await statusGate() }
+        if let error = statusErrors[worktreePath] { throw error }
         return statusResult
     }
-    func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? { workingDiffResult }
+    var workingDiffHandler: (@Sendable (String) async -> DiffFile?)?
+    func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? {
+        if let workingDiffHandler { return await workingDiffHandler(path) }
+        return workingDiffResult
+    }
     func stage(worktreePath: String, paths: [String]) async throws { stagedPaths.append(paths) }
     func unstage(worktreePath: String, paths: [String]) async throws { unstagedPaths.append(paths) }
     func discardWorking(worktreePath: String, paths: [String]) async throws { discardedWorking.append(paths) }
     func discardUntracked(worktreePath: String, paths: [String]) async throws { discardedUntracked.append(paths) }
     func commit(worktreePath: String, message: String) async throws { commitMessages.append(message) }
-    func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool) async throws {}
-    func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws {}
+    struct AddedWorktree: Equatable {
+        let path: String
+        let branch: String?
+        let createBranch: Bool
+        let startPoint: String?
+    }
+    private(set) var addedWorktrees: [AddedWorktree] = []
+    /// When set, each add awaits this first, so a test can act while one is in flight.
+    var addWorktreeGate: (@Sendable () async -> Void)?
+    func addWorktree(repoPath: String, path: String, branch: String?, createBranch: Bool, startPoint: String?) async throws {
+        if let addWorktreeGate { await addWorktreeGate() }
+        addedWorktrees.append(AddedWorktree(path: path, branch: branch, createBranch: createBranch, startPoint: startPoint))
+    }
+    /// Every `removeWorktree` call's worktree path, in order.
+    private(set) var removedWorktrees: [String] = []
+    /// Per-worktree `removeWorktree` failures (keyed by worktree path).
+    var removeWorktreeErrors: [String: GitError] = [:]
+    func removeWorktree(repoPath: String, worktreePath: String, force: Bool) async throws {
+        removedWorktrees.append(worktreePath)
+        if let error = removeWorktreeErrors[worktreePath] { throw error }
+    }
+
+    // Fetches are recorded under a lock: they are called from detached work
+    // while the test reads the record from the main actor.
+    private let remoteLock = NSLock()
+    private var fetches: [String] = []
+    private var kinds: [FetchKind] = []
+    var fetchedRepos: [String] { remoteLock.lock(); defer { remoteLock.unlock() }; return fetches }
+    var fetchKinds: [FetchKind] { remoteLock.lock(); defer { remoteLock.unlock() }; return kinds }
+    /// When set, `fetchOrigin` throws it — a remote that is unreachable.
+    var fetchError: GitError?
+    /// A remote reachable only with a key held by the SSH agent: automatic
+    /// fetches, which leave the agent out, fail.
+    var needsAgent = false
+    /// When set, each fetch awaits this before returning, so a test can hold one
+    /// in flight long enough to watch it time out.
+    var fetchGate: (@Sendable () async -> Void)?
+
+    /// Recorded synchronously: locking inside an async function is not allowed.
+    private func record(fetch path: String, kind: FetchKind) {
+        remoteLock.lock(); fetches.append(path); kinds.append(kind); remoteLock.unlock()
+    }
+
+    func fetchOrigin(repoPath: String, kind: FetchKind) async throws {
+        record(fetch: repoPath, kind: kind)
+        if let fetchGate { await fetchGate() }
+        if let fetchError { throw fetchError }
+        if needsAgent, kind == .automatic {
+            throw GitError.commandFailed(command: ["git", "fetch"], exitCode: 128, stderr: "Permission denied (publickey)")
+        }
+    }
     /// Scripted stdout for `git rev-parse --git-common-dir` (the repo's git common
     /// dir). When nil, `run` returns empty stdout and callers fall back to `.git`.
     var gitCommonDirOutput: String?
+    var showRefOutput = ""
+    var showRefExitCode: Int32 = 0
+    var runGate: (@Sendable ([String], String) async -> Void)?
     @discardableResult
     func run(_ arguments: [String], in directory: String) async throws -> GitInvocationResult {
+        statusLock.lock(); gitDirectories.append(directory); statusLock.unlock()
+        if let runGate { await runGate(arguments, directory) }
         var stdout = Data()
         if arguments == ["rev-parse", "--git-common-dir"], let gitCommonDirOutput {
             stdout = Data(gitCommonDirOutput.utf8)
         }
-        return GitInvocationResult(arguments: arguments, exitCode: 0, standardOutput: stdout, standardError: "")
+        if arguments == ["show-ref"] { stdout = Data(showRefOutput.utf8) }
+        return GitInvocationResult(arguments: arguments, exitCode: arguments == ["show-ref"] ? showRefExitCode : 0, standardOutput: stdout, standardError: "")
     }
 }
 
@@ -82,8 +149,10 @@ actor Gate {
 final class FakeFileOpener: FileOpener, @unchecked Sendable {
     private(set) var opened: [URL] = []
     private(set) var revealed: [URL] = []
-    func open(_ url: URL) throws { opened.append(url) }
-    func open(_ url: URL, withApplicationAt appURL: URL) throws {}
+    /// Each open's app (nil for the default app), parallel to `opened`.
+    private(set) var apps: [URL?] = []
+    func open(_ url: URL) throws { opened.append(url); apps.append(nil) }
+    func open(_ url: URL, withApplicationAt appURL: URL) throws { opened.append(url); apps.append(appURL) }
     func reveal(_ url: URL) { revealed.append(url) }
 }
 
@@ -202,9 +271,23 @@ func makeTestEnvironment(
     monitor: WorktreeActivityMonitor = WorktreeActivityMonitor(),
     makeWatcher: (@MainActor () -> FileSystemWatcher)? = nil,
     agentStatuses: (@Sendable ([String], Date) -> [String: AgentActivityState])? = nil,
+    agentTurnEnds: @escaping @Sendable ([String], Date) -> [AgentTurnEnd] = { _, _ in [] },
     agentProjectsRootPath: String? = nil,
+    agentExtraWatchPaths: [String] = [],
+    processActivity: (@Sendable ([String], Date) -> Set<String>)? = nil,
+    worktreesInUse: @escaping @Sendable ([String], Date) -> Set<String> = { _, _ in [] },
     notify: (@MainActor (String, String) -> Void)? = nil,
-    agentPing: AgentPingListening? = nil
+    agentPing: AgentPingListening? = nil,
+    folderExists: @escaping @Sendable (String) -> Bool = { _ in true },
+    /// Defaults to "whatever `folderExists` says isn't there": fake paths are
+    /// never on disk, so the real check would read every one as deleted.
+    folderIsGone: (@Sendable (String) -> Bool)? = nil,
+    isVolumeMounted: @escaping @Sendable (String) -> Bool = { _ in true },
+    /// Defaults to nothing held: fake paths have no record on disk to read.
+    holdsUnsavedWork: @escaping @Sendable (Worktree, String) async -> Bool = { _, _ in false },
+    /// Defaults to picking a fake app, as if the user chose one every time.
+    chooseApp: @escaping @MainActor (URL?, String, URL?) -> URL? = { _, _, _ in URL(fileURLWithPath: "/Applications/Editor.app") },
+    appExists: @escaping @Sendable (URL) -> Bool = { _ in true }
 ) -> AppEnvironment {
     let storeURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("tb-test-\(UUID().uuidString)")
@@ -217,8 +300,18 @@ func makeTestEnvironment(
         activityMonitor: monitor,
         makeWatcher: makeWatcher ?? { FakeWatcher() },
         agentStatuses: agentStatuses ?? { _, _ in [:] },
+        agentTurnEnds: agentTurnEnds,
         agentProjectsRootPath: agentProjectsRootPath,
+        agentExtraWatchPaths: agentExtraWatchPaths,
+        processActivity: processActivity,
+        worktreesInUse: worktreesInUse,
         notify: notify ?? { _, _ in },
-        makeAgentPingListener: { agentPing ?? FakeAgentPing() }
+        makeAgentPingListener: { agentPing ?? FakeAgentPing() },
+        folderExists: folderExists,
+        folderIsGone: folderIsGone ?? { !folderExists($0) },
+        isVolumeMounted: isVolumeMounted,
+        holdsUnsavedWork: holdsUnsavedWork,
+        chooseApp: chooseApp,
+        appExists: appExists
     )
 }

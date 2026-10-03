@@ -6,7 +6,7 @@ struct ShortcutsCatalogTests {
     @Test("has the expected groups in order")
     func groupTitles() {
         let titles = ShortcutsCatalog.groups.map(\.title)
-        #expect(titles == ["Sections", "Navigate", "Select files", "Files actions", "Search"])
+        #expect(titles == ["App", "Sections", "Navigate", "Select files", "Files actions", "Search"])
     }
 
     @Test("every row has non-empty keys and an action")

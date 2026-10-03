@@ -3,15 +3,74 @@ import Observation
 import AppKit
 import TeebeCore
 
+/// Shared wording for the checked menu items and Settings.
+enum WorktreePreferences {
+    static let groupingTitle = "Group by status"
+    static let groupingHelp = "Group worktrees into Uncommitted changes, Not merged and Safe to delete. "
+        + "When off, keep a flat list; each row still shows its status."
+    static let fetchTitle = "Fetch automatically"
+    static let fetchHelp = "Fetch origin when you return to the app or select a project, at most once every five minutes. Refresh always works."
+    static let extraTargetTitle = "Also check merges against"
+    static let extraTargetHelp = "Merges are checked against up to four branches: the default branch, the one chosen "
+        + "here, then dev, develop, main and master when they exist. "
+        + "Choose one for this repository, such as a release branch."
+}
+
 /// Root view model: owns the added repositories, persistence, and the selector.
 @MainActor
 @Observable
 final class AppModel {
     private(set) var repositories: [Repository] = []
+    let preferences: PreferencesModel
+    var groupWorktreesByMergeStatus: Bool {
+        get { preferences.effective.groupByStatus ?? false }
+        set { preferences.set(\.groupByStatus, newValue) }
+    }
+    /// How the worktree list is ordered, within each group when grouped.
+    var worktreeSortOrder: WorktreeSortOrder {
+        get { WorktreeSortOrder(rawValue: preferences.effective.worktreeSort ?? "") ?? .folder }
+        set { preferences.set(\.worktreeSort, newValue.rawValue) }
+    }
+    /// Fetch remote refs in the background, so merge results reflect what was
+    /// pushed rather than what was last pulled by hand.
+    var fetchAutomatically: Bool {
+        get { preferences.effective.fetchAutomatically ?? true }
+        set { preferences.set(\.fetchAutomatically, newValue) }
+    }
+    /// Bumped when a repository's extra merge target changes, so the scan reruns.
+    private(set) var mergeTargetRevision = 0
+    /// "Also delete the branch" in the removal confirmation; the last choice sticks.
+    var deleteBranchOnRemove: Bool { didSet { persist() } }
     var floatOnTop: Bool { didSet { persist() } }
     /// Light / dark override, or follow the system. Applied app-wide via `NSApp.appearance`.
     var appearance: AppearanceMode { didSet { appearance.apply(); persist() } }
+    var terminal: TerminalChoice { didSet { persist() } }
+    var agentNotifications: Bool { didSet { selector.notificationsEnabled = agentNotifications; persist() } }
+    var notificationSound: Bool { didSet { AgentNotifier.soundEnabled = notificationSound; persist() } }
+    private(set) var hookInstalled = false
+    private(set) var hooksDisabled = false
+    private(set) var hookMessage: String?
+    private(set) var notificationTestMessage: String?
+    private(set) var isFetching = false
+    private(set) var fetchError: String?
     private(set) var errorMessage: String?
+    /// The New Worktree sheet's form while it is up; nil when it is closed.
+    var newWorktree: NewWorktreeModel?
+    /// A worktree row's card asked for from the keyboard: the row, and a count
+    /// that changes on every request so asking again shows it again. nil once shown.
+    private(set) var worktreeCardReveal: (path: String, count: Int)?
+    private var worktreeCardRevealCount = 0
+
+    /// Show this row's status card now, as hovering its mark would.
+    func revealWorktreeCard(for path: String) {
+        worktreeCardRevealCount += 1
+        worktreeCardReveal = (path, worktreeCardRevealCount)
+    }
+
+    /// The requested card is up: the request is spent, so a redrawn row can't show it again.
+    func worktreeCardRevealed() {
+        worktreeCardReveal = nil
+    }
 
     /// Which section the keyboard currently drives — arrows, Enter and Space act on
     /// it, and its header shows the active accent. Moved by ⌘1/⌘2/⌘3, Tab/⇧Tab, or by
@@ -25,6 +84,20 @@ final class AppModel {
 
     let environment: AppEnvironment
     let selector: SelectorModel
+    let mergeStatus: WorktreeMergeModel
+    let remoteRefresher: RemoteRefresher
+    /// The app each file type opens with (asked on first open, then remembered).
+    let openWith: OpenWithModel
+
+    /// The group-header actions. Built on first use because they need the finished
+    /// model back; one instance, so a removal in flight is visible everywhere.
+    @ObservationIgnored private var groupActionsStorage: WorktreeGroupActions?
+    var groupActions: WorktreeGroupActions {
+        if let groupActionsStorage { return groupActionsStorage }
+        let actions = WorktreeGroupActions(app: self)
+        groupActionsStorage = actions
+        return actions
+    }
 
     /// In-memory copy of the persisted state, loaded once at init and written back
     /// on change. Avoids a disk read-modify-write on every persist/layout update,
@@ -34,19 +107,93 @@ final class AppModel {
     /// True only while `bootstrap()` hydrates the model from `state`; suppresses the
     /// `persist()` that property assignments would otherwise trigger during load.
     @ObservationIgnored private var isHydrating = false
+    @ObservationIgnored private var isApplyingPreferences = false
 
-    init(environment: AppEnvironment) {
+    /// 0.7.0 and earlier always posted agent notifications with sound and saved no
+    /// choice, so keep them on for those users while new installs start with them off.
+    /// A recorded version older than 0.8.0, or (from before versions were recorded)
+    /// saved repositories, marks such a profile. A saved choice always wins, and the
+    /// migrated choice is saved, so this runs once.
+    private static func keepingNotificationsOnForUpgrade(_ state: AppState) -> AppState? {
+        guard state.agentNotifications == nil else { return nil }
+        let isUpgrade = state.lastSeenVersion.map { SemVer.isGreater("0.8.0", than: $0) }
+            ?? !state.repositories.isEmpty
+        guard isUpgrade else { return nil }
+        var migrated = state
+        migrated.agentNotifications = true
+        migrated.notificationSound = migrated.notificationSound ?? true
+        return migrated
+    }
+
+    /// `mergeService` is the scanner behind the worktree groups; tests hand in a
+    /// scripted one instead of a real repository.
+    init(environment: AppEnvironment, mergeService: WorktreeCleanupChecking? = nil) {
         self.environment = environment
-        self.state = environment.store.load()
+        var loaded = environment.store.load()
+        if let migrated = Self.keepingNotificationsOnForUpgrade(loaded) {
+            loaded = migrated
+            try? environment.store.save(migrated)
+        }
+        self.state = loaded
+        self.preferences = PreferencesModel(state: self.state)
         self.selector = SelectorModel(environment: environment)
+        self.mergeStatus = WorktreeMergeModel(service: mergeService ?? WorktreeCleanupService(git: environment.git))
+        self.remoteRefresher = RemoteRefresher(git: environment.git)
+        self.openWith = OpenWithModel(environment: environment, apps: self.state.openWithApps ?? [:],
+            projectApps: self.state.openWithAppsByRepo ?? [:],
+            policy: OpenWithModel.Policy(rawValue: self.state.openWithPolicy ?? "") ?? .system,
+            defaultApp: self.state.defaultFileApp)
+        self.deleteBranchOnRemove = self.state.deleteBranchOnRemove ?? false
         self.floatOnTop = false
         self.appearance = .system
+        self.terminal = TerminalChoice(rawValue: self.state.terminalApp ?? "") ?? .terminal
+        self.agentNotifications = self.state.agentNotifications ?? false
+        self.notificationSound = self.state.notificationSound ?? true
+        self.selector.notificationsEnabled = self.agentNotifications
+        AgentNotifier.soundEnabled = self.notificationSound
         // Persist whenever the selection changes, and clear any stale global error —
         // navigating to a different repo/worktree should dismiss the banner.
         self.selector.onSelectionChange = { [weak self] in
+            self?.rememberSelectedRepository()
             self?.persist()
             self?.setError(nil)
         }
+        // Deleted worktrees are never forgotten while a removal is running.
+        self.selector.isRemovalRunning = { [weak self] in self?.groupActionsStorage?.isWorking == true }
+        self.openWith.onChange = { [weak self] in self?.persist() }
+        self.preferences.onChange = { [weak self] in
+            guard let self else { return }
+            self.applyFilePreferences()
+            self.mergeTargetRevision += 1
+            self.persist()
+        }
+        self.selector.onRepositoryChange = { [weak self] in
+            guard let self else { return }
+            self.preferences.repositoryPath = self.selector.selectedRepo?.path
+            self.openWith.repositoryPath = self.selector.selectedRepo?.path
+            self.applyFilePreferences()
+        }
+        self.applyFilePreferences()
+        self.selector.worktree.onFilePreferencesChange = { [weak self] in self?.saveFileOverrides() }
+    }
+
+    private func applyFilePreferences() {
+        guard !isApplyingPreferences else { return }
+        isApplyingPreferences = true
+        defer { isApplyingPreferences = false }
+        let values = preferences.effective
+        selector.worktree.showIgnored = values.showIgnored ?? false
+        selector.worktree.sortOrder = FileSortOrder(rawValue: values.fileSort ?? "") ?? .name
+    }
+
+    private func saveFileOverrides() {
+        guard !isApplyingPreferences else { return }
+        isApplyingPreferences = true
+        defer { isApplyingPreferences = false }
+        let values = preferences.effective
+        let files = selector.worktree
+        if files.showIgnored != (values.showIgnored ?? false) { preferences.set(\.showIgnored, files.showIgnored) }
+        if files.sortOrder.rawValue != (values.fileSort ?? "name") { preferences.set(\.fileSort, files.sortOrder.rawValue) }
     }
 
     /// Single entry point for the global error banner. Replaces any existing
@@ -69,16 +216,16 @@ final class AppModel {
         isHydrating = true
         floatOnTop = state.floatOnTop
         appearance = AppearanceMode(rawValue: state.appearance ?? "") ?? .system
-        repositories = state.repositories.map { Repository(path: $0.path) }
+        repositories = RepositoryHistory.unique(state.repositories.map(\.path))
         selector.setRepositories(repositories)
         // Snapshot the restore targets before selecting anything: selection triggers
         // persist(), which overwrites these fields of the shared `state`.
-        let lastRepoPath = state.lastSelectedRepoPath
+        let lastRepoPath = state.lastSelectedRepoPath.map { PathUtil.standardized(($0 as NSString).standardizingPath) }
         let lastWorktreePath = state.lastSelectedWorktreePath
         let target = lastRepoPath.flatMap { last in repositories.first { $0.path == last } }
             ?? repositories.first
         isHydrating = false
-        guard let target else { return }
+        guard let target else { persist(); return }
         // One shot: the saved worktree (when it still exists) is selected directly,
         // never primary-then-saved — the double load crashed the first layout pass.
         await selector.selectRepo(target, preferredWorktreePath: lastWorktreePath)
@@ -104,6 +251,31 @@ final class AppModel {
         }
     }
 
+    func refreshHookStatus() {
+        hookInstalled = ClaudeHookInstaller.isInstalled()
+        hooksDisabled = ClaudeHookInstaller.hooksDisabled()
+    }
+
+    func installClaudeHook() {
+        do {
+            _ = try ClaudeHookInstaller.install()
+            state.hookOfferResponse = "accepted"
+            refreshHookStatus()
+            hookMessage = hooksDisabled
+                ? "Installed, but Claude Code has all hooks disabled. Enable hooks there to receive instant updates."
+                : "Installed. Restart existing Claude Code sessions to load the hook."
+            persist()
+        } catch { hookMessage = "Couldn’t update Claude Code settings. Existing settings were kept." }
+        refreshHookStatus()
+    }
+
+    func testNotification() {
+        notificationTestMessage = "Sending…"
+        AgentNotifier.post(title: "Teebe test", body: "Agent notifications can reach this Mac.") { [weak self] result in
+            self?.notificationTestMessage = result
+        }
+    }
+
     /// Launch-time hook setup: offer once, then keep the user's choice. An
     /// accepted hook that later disappears (settings rewritten by another tool)
     /// is repaired without asking again.
@@ -115,25 +287,23 @@ final class AppModel {
         case .none:
             return
         case .repair:
-            try? ClaudeHookInstaller.install()
+            installClaudeHook()
         case .ask:
             let alert = NSAlert()
-            alert.messageText = "Notify instantly, use less battery?"
+            alert.messageText = "Improve Claude Code activity detection?"
             alert.informativeText = """
-            teebe can add a tiny hook to Claude Code (~/.claude/settings.json) that \
-            pings it the moment an agent finishes. With the hook, teebe stops all \
-            background file watching while its window is covered — near-zero CPU — \
-            and "agent needs you" notifications become instant. The hook is one \
-            `notifyutil` command; it sends no data anywhere.
+            Add a local signal to Claude Code so Teebe checks its status promptly, \
+            even while hidden. This optional hook is for Claude Code only. Codex \
+            activity is also detected, with checks every 15 seconds while hidden. \
+            No session content is sent anywhere. You can install or repair the hook later in Settings.
             """
             alert.addButton(withTitle: "Add Hook")
             alert.addButton(withTitle: "No Thanks")
             let accepted = alert.runModal() == .alertFirstButtonReturn
             state.hookOfferResponse = accepted ? "accepted" : "declined"
-            try? environment.store.save(state)
+            saveState()
             if accepted {
-                do { try ClaudeHookInstaller.install() }
-                catch { setError("Couldn't update ~/.claude/settings.json — hook not added.") }
+                do { try ClaudeHookInstaller.install() } catch { setError("Couldn't update ~/.claude/settings.json — hook not added.") }
             }
         }
     }
@@ -158,6 +328,11 @@ final class AppModel {
             setError("Not a git repository: \(standardized)")
             return false
         }
+        // Validation suspends; another add may have completed while it ran.
+        if let existing = repositories.first(where: { $0.path == standardized }) {
+            await selector.selectRepo(existing)
+            return false
+        }
         let repo = Repository(path: standardized)
         repositories.append(repo)
         selector.setRepositories(repositories)
@@ -166,22 +341,44 @@ final class AppModel {
         return true
     }
 
+    private func rememberSelectedRepository() {
+        guard let selected = selector.selectedRepo,
+              let index = repositories.firstIndex(where: { $0.path == selected.path }),
+              index != repositories.count - 1 else { return }
+        repositories.append(repositories.remove(at: index))
+        selector.setRepositories(repositories)
+    }
+
+    var recentRepositories: [Repository] { Array(repositories.reversed()) }
+
+    func repositoryTitle(_ repo: Repository) -> String {
+        RepositoryHistory.title(for: repo, among: repositories)
+    }
+
     func removeRepository(_ repo: Repository) {
         repositories.removeAll { $0.path == repo.path }
         selector.setRepositories(repositories)
         if selector.selectedRepo?.path == repo.path {
             selector.clearSelection()
         }
+        // Drop everything else keyed by this repository, or the saved state grows a
+        // tail of entries for projects the user removed long ago.
+        state.cleanupTargetByRepo?[repo.path] = nil
+        state.layoutByRepo?[repo.path] = nil
+        state.worktreeParentByRepo?[repo.path] = nil
+        preferences.remove(repo.path)
+        openWith.removeProject(repo.path)
         persist()
     }
 
     // MARK: - File activation (double-click / context menu)
 
-    /// Open a file in its native app (D1). Directories are ignored.
+    /// Open a file in its native app (D1): the app remembered for its type, asking
+    /// which one the first time. Directories are ignored.
     func open(_ node: FileNode) {
         guard !node.isDirectory else { return }
         do {
-            try environment.opener.open(URL(fileURLWithPath: node.path))
+            try openWith.open(URL(fileURLWithPath: node.path))
             setError(nil)
         } catch {
             setError("Couldn't open \(node.name)")
@@ -192,20 +389,34 @@ final class AppModel {
         environment.opener.reveal(URL(fileURLWithPath: node.path))
     }
 
+    /// Open With…: pick the app, open the file with it, and remember it for the type.
     func openWith(_ node: FileNode) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        panel.allowedContentTypes = [.application]
-        panel.prompt = "Open With"
-        guard panel.runModal() == .OK, let appURL = panel.url else { return }
-        try? environment.opener.open(URL(fileURLWithPath: node.path), withApplicationAt: appURL)
+        guard !node.isDirectory else { return }
+        do {
+            try openWith.chooseAndOpen(URL(fileURLWithPath: node.path))
+            setError(nil)
+        } catch {
+            setError("Couldn't open \(node.name)")
+        }
     }
 
-    func copyPath(_ node: FileNode) {
+    private(set) var quickLookRequest: (path: String, count: Int)?
+
+    func requestQuickLook(_ node: FileNode) {
+        guard !node.isDirectory else { return }
+        quickLookRequest = (node.path, (quickLookRequest?.count ?? 0) + 1)
+    }
+
+    func copyPath(_ node: FileNode, relative: Bool = false) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(node.path, forType: .string)
+        NSPasteboard.general.setString(relative ? selector.worktree.relativePath(of: node) : node.path, forType: .string)
+    }
+
+    func copySelectedPaths() {
+        let paths = selector.worktree.orderedSelection()
+        guard activeSection == .files, !paths.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(paths.joined(separator: "\n"), forType: .string)
     }
 
     /// ⌘⇧C: copy the FILES selection to the clipboard as Claude-ready `@`-refs, ready
@@ -220,7 +431,28 @@ final class AppModel {
     /// ⌘F: ask the FILES search field to take focus. The view observes this counter
     /// and focuses on change (a token rather than a bool so repeat presses re-fire).
     private(set) var searchFocusRequest = 0
-    func focusSearch() { searchFocusRequest += 1 }
+    func focusSearch() {
+        focusFiles()
+        searchFocusRequest += 1
+    }
+
+    /// Clicking search and invoking its shortcut share the same keyboard owner.
+    func focusFiles() {
+        activeSection = .files
+        selector.worktree.selectionSource = .files
+    }
+
+    @discardableResult
+    func focusFileResults() -> FileNode? {
+        focusFiles()
+        return selector.worktree.selectCurrentOrFirstVisibleFile()
+    }
+
+    /// Return in search opens only a visible result, or does nothing with no matches.
+    func activateSearchResult() {
+        guard let node = focusFileResults() else { return }
+        if node.isDirectory { selector.worktree.toggleExpand(node) } else { open(node) }
+    }
 
     func rename(_ node: FileNode) {
         guard let newName = promptForName(title: "Rename", initial: node.name), newName != node.name else { return }
@@ -285,55 +517,158 @@ final class AppModel {
         Task { await addRepository(path: url.path) }
     }
 
-    /// Choose a directory for a new linked worktree (branch = folder name).
-    func presentNewWorktreePanel() {
+    /// Open the New Worktree sheet for the selected repository. The sheet's form
+    /// state lives in `newWorktree` for as long as it is up.
+    func presentNewWorktree() {
         guard let repo = selector.selectedRepo else { return }
-        let panel = NSSavePanel()
-        panel.prompt = "Create Worktree"
-        panel.nameFieldStringValue = "worktree"
+        let comparison = mergeStatus.snapshot?.targets.automatic?.name
+        let primaryBranch = selector.worktrees.first(where: \.isPrimary)?.branch
+        let parent = WorktreeLocation.parentFolder(
+            repoPath: repo.path, remembered: preferences.effective(for: repo.path).worktreeParent,
+            worktrees: selector.worktrees)
+        newWorktree = NewWorktreeModel(repo: repo, branches: selector.branches,
+                                       comparisonBranch: comparison, primaryBranch: primaryBranch,
+                                       parentFolder: parent,
+                                       registeredPaths: Set(selector.worktrees.map(\.path)))
+    }
+
+    /// Pick the folder new worktrees go in. Directories only, and new ones can be
+    /// made from inside the panel.
+    func chooseWorktreeLocation(for form: NewWorktreeModel) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.directoryURL = URL(fileURLWithPath: form.parentFolder)
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let branch = url.lastPathComponent
-        Task {
-            do {
-                try await environment.worktreeService.addWorktree(in: repo, at: url.path, branch: branch, createBranch: true)
-                await selector.selectRepo(repo)
-            } catch {
-                errorMessage = "Couldn't create worktree: \(WorktreeModel.describe(error))"
-            }
+        setWorktreeParent(url.path, for: form)
+    }
+
+    /// Use `path` as the folder for this worktree and remember it for the repository.
+    func setWorktreeParent(_ path: String, for form: NewWorktreeModel) {
+        form.setParentFolder(path)
+        var byRepo = state.worktreeParentByRepo ?? [:]
+        byRepo[form.repo.path] = path
+        state.worktreeParentByRepo = byRepo
+        preferences.setWorktreeParent(path, for: form.repo.path)
+        persist()
+    }
+
+    /// Create the worktree the sheet describes. On success the repository is
+    /// re-read and the new worktree selected; on failure the message goes back to
+    /// the form so the sheet can stay open.
+    func createWorktree(_ form: NewWorktreeModel) async {
+        let repo = form.repo
+        let path = form.location
+        form.isCreating = true
+        form.errorMessage = nil
+        defer { form.isCreating = false }
+        do {
+            try await environment.worktreeService.addWorktree(
+                in: repo, at: path, branch: form.trimmedBranch,
+                createBranch: form.isCreatingBranch, startPoint: form.resolvedStartPoint)
+        } catch {
+            form.errorMessage = "Couldn't create worktree: \(WorktreeModel.describe(error))"
+            return
+        }
+        // Close only this form's sheet: it may have been cancelled and another opened.
+        if newWorktree === form { newWorktree = nil }
+        // The sheet can be cancelled while git works. If the user has moved to
+        // another project since, leave them there: the new row is listed on return.
+        guard selector.selectedRepo?.path == repo.path else { return }
+        // The folder exists now, so standardizing matches the form `git worktree
+        // list` reports (firmlinks resolved) and the new row gets selected.
+        await selector.selectRepo(repo, preferredWorktreePath: PathUtil.standardized(path))
+    }
+
+    /// Bring the selected repository's remote refs up to date. The setting gates
+    /// background fetches only; explicit Refresh also bypasses the rate limit. Writing
+    /// refs also invalidates merge checks explicitly: the repository watcher may
+    /// be stopped in low power. The rows' sync facts are re-read here too.
+    func refreshRemotes(force: Bool, now: Date = Date()) async {
+        guard force || fetchAutomatically, let repo = selector.selectedRepo else { return }
+        if force {
+            guard !isFetching else { return }
+            isFetching = true
+            fetchError = nil
+        }
+        defer { if force { isFetching = false } }
+        let succeeded = await remoteRefresher.fetch(repoPath: repo.path, force: force, now: now)
+        guard selector.selectedRepo?.path == repo.path else { return }
+        if succeeded {
+            selector.invalidateMergeChecks()
+            await selector.refreshWorktreeInfo()
+        } else if force {
+            fetchError = "Couldn’t fetch origin. Check your connection and repository access."
         }
     }
 
-    func removeWorktree(_ worktree: Worktree) {
-        guard let repo = selector.selectedRepo else { return }
-        Task {
-            do {
-                try await environment.worktreeService.removeWorktree(in: repo, worktree: worktree, force: false)
-                await selector.selectRepo(repo)
-            } catch {
-                errorMessage = "Couldn't remove worktree: \(WorktreeModel.describe(error))"
-            }
-        }
+    /// The branch (full ref, e.g. `refs/heads/release/2`) this repository's
+    /// worktrees are also checked against, beyond the automatic default and the
+    /// integration branches. nil when none is set.
+    func extraMergeTarget(for repoPath: String) -> String? {
+        let ref = preferences.effective(for: repoPath).comparisonRef
+        return ref?.isEmpty == false ? ref : nil
+    }
+
+    /// Set or clear (nil) the extra merge target; the merge check reruns.
+    func setExtraMergeTarget(_ ref: String?, for repoPath: String) {
+        preferences.setComparison(ref, for: repoPath)
     }
 
     func revealPath(_ path: String) {
         environment.opener.reveal(URL(fileURLWithPath: path))
     }
 
-    /// Open the worktree directory in Terminal.
+    func chooseWorktreeParentDefault(forProject: Bool = false) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Folder"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if forProject { preferences.set(\.worktreeParent, url.path) } else { preferences.defaults.worktreeParent = url.path }
+    }
+
     func openTerminal(at path: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-a", "Terminal", path]
-        try? process.run()
+        let choice = terminal
+        Task {
+            let succeeded = await Task.detached { choice.launch(at: path) }.value
+            if !succeeded { setError("Couldn’t open \(choice.title). Check that it is installed.") }
+        }
     }
 
     func persist() {
         guard !isHydrating else { return }
         state.repositories = repositories.map { PersistedRepository(path: $0.path) }
+        state.defaultPreferences = preferences.defaults
+        state.projectPreferences = preferences.projects
+        state.showChangedOnly = false
+        state.showIgnored = preferences.defaults.showIgnored ?? false
         state.floatOnTop = floatOnTop
+        state.showMergeStatus = preferences.defaults.groupByStatus
+        state.worktreeSortOrder = preferences.defaults.worktreeSort == "folder" ? nil : preferences.defaults.worktreeSort
+        state.fetchAutomatically = preferences.defaults.fetchAutomatically
+        state.deleteBranchOnRemove = deleteBranchOnRemove
         state.appearance = appearance == .system ? nil : appearance.rawValue
+        state.terminalApp = terminal.rawValue
+        state.agentNotifications = agentNotifications
+        state.notificationSound = notificationSound
+        state.openWithApps = openWith.apps.isEmpty ? nil : openWith.apps
+        state.openWithAppsByRepo = openWith.projectApps
+        state.openWithPolicy = openWith.policy.rawValue
+        state.defaultFileApp = openWith.defaultApp
         state.lastSelectedRepoPath = selector.selectedRepo?.path
         state.lastSelectedWorktreePath = selector.selectedWorktree?.path
+        saveState()
+    }
+
+    private func saveState() {
+        // WhatsNewModel owns this marker and may have advanced it since we
+        // loaded our in-memory preferences. Never restore the previous version.
+        state.lastSeenVersion = environment.store.load().lastSeenVersion
         try? environment.store.save(state)
     }
 
@@ -351,6 +686,6 @@ final class AppModel {
         var byRepo = state.layoutByRepo ?? [:]
         byRepo[path] = layout
         state.layoutByRepo = byRepo
-        try? environment.store.save(state)
+        saveState()
     }
 }

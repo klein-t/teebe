@@ -13,19 +13,23 @@ struct AgentStatusModelTests {
         spy: NotificationSpy = NotificationSpy(),
         git: FakeGitClient = FakeGitClient(),
         box: WatcherBox? = nil,
-        projectsRoot: String? = nil
+        projectsRoot: String? = nil,
+        extraWatchPaths: [String] = []
     ) -> SelectorModel {
         git.worktreesResult = [
             Worktree(path: "/repo", branch: "main", isPrimary: true),
             Worktree(path: "/repo-wt", branch: "feat/x")
         ]
-        return SelectorModel(environment: makeTestEnvironment(
+        let selector = SelectorModel(environment: makeTestEnvironment(
             git: git,
             makeWatcher: box.map { b in { b.make() } },
             agentStatuses: states.provider,
             agentProjectsRootPath: projectsRoot,
+            agentExtraWatchPaths: extraWatchPaths,
             notify: spy.record
         ))
+        selector.notificationsEnabled = true
+        return selector
     }
 
     @Test("refreshWorktreeInfo picks up each worktree's agent state")
@@ -99,11 +103,30 @@ struct AgentStatusModelTests {
 
         // A session-log change re-derives states via the cheap path.
         states["/repo-wt"] = .working
-        await selector.handleAgentWatchEvent()
+        await selector.handleAgentWatchEvent(["/fake/.claude/projects/-repo-wt/s.jsonl"])
         #expect(selector.info(for: selector.worktrees[1]).agentState == .working)
 
         selector.clearSelection()
         #expect(watcher?.isWatching == false)
+    }
+
+    @Test("the agent watcher also covers Claude Code's live session registry")
+    func registryWatched() async {
+        // A permission prompt flips the registry to waiting without writing a
+        // session-log line, so only a registry watch sees it at once.
+        let box = WatcherBox()
+        let selector = makeSelector(states: FakeAgentStates(), box: box, projectsRoot: "/fake/.claude/projects")
+        await selector.selectRepo(repo)
+        #expect(box.watching("/fake/.claude/projects")?.watchedPaths.contains("/fake/.claude/sessions") == true)
+    }
+
+    @Test("the agent watcher also covers other harnesses' session folders (Codex rollouts)")
+    func codexSessionsWatched() async {
+        let box = WatcherBox()
+        let selector = makeSelector(states: FakeAgentStates(), box: box, projectsRoot: "/fake/.claude/projects",
+                                    extraWatchPaths: ["/fake/.codex/sessions"])
+        await selector.selectRepo(repo)
+        #expect(box.watching("/fake/.claude/projects")?.watchedPaths.contains("/fake/.codex/sessions") == true)
     }
 
     @Test("without a projects root no agent watcher is started")

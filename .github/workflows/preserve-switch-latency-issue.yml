@@ -1,0 +1,52 @@
+name: Preserve unresolved switch latency
+
+on:
+  issues:
+    types: [closed]
+  push:
+    branches: [dev]
+    paths: [.github/workflows/preserve-switch-latency-issue.yml]
+
+permissions:
+  issues: write
+  pull-requests: read
+
+jobs:
+  preserve:
+    if: github.event_name == 'push' || github.event.issue.number == 179
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const legacyCommit = '93f9dceb74bfa8c72add79abee855c42ddd3b6aa';
+            for (let attempt = 0; attempt < 7; attempt++) {
+              const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: 204 });
+              if (pr.base.ref !== 'dev') return;
+              if (!pr.merged || !pr.merged_at) {
+                if (attempt < 6) await new Promise(resolve => setTimeout(resolve, 15000));
+                continue;
+              }
+              const mergeTime = Date.parse(pr.merged_at);
+              const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: 179 });
+              if (issue.state === 'closed') {
+                const events = await github.paginate(github.rest.issues.listEvents, {
+                  owner, repo, issue_number: 179, per_page: 100
+                });
+                const latest = events.filter(event => ['closed', 'reopened'].includes(event.event)).at(-1);
+                if (latest?.event === 'closed') {
+                  const integrationCommit = [legacyCommit, pr.merge_commit_sha].includes(latest.commit_id);
+                  const integrationTime = Math.abs(Date.parse(latest.created_at) - mergeTime) <= 300000;
+                  if (integrationCommit && integrationTime) {
+                    await github.rest.issues.update({ owner, repo, issue_number: 179, state: 'open' });
+                    core.info('Preserved unresolved cold-switch latency after the reviewed integration.');
+                    return;
+                  }
+                  // A manual or later closure belongs to its author and must be preserved.
+                  if (!integrationCommit || !integrationTime) return;
+                }
+              }
+              if (attempt < 6) await new Promise(resolve => setTimeout(resolve, 15000));
+            }

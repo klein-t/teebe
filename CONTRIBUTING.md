@@ -25,24 +25,56 @@ so a working `git` must be on your `PATH`.
 This repo uses a feature → `dev` → `main` branch model, and feature work happens
 in **git worktrees**. In short:
 
-1. Branch off **`dev`** (the default branch) into a worktree, using a descriptive
-   prefix: `feat/…`, `fix/…`, `chore/…`, `docs/…`, `test/…`:
+1. Open or reuse an issue describing the problem and acceptance criteria.
+2. Create an isolated sibling worktree from updated `origin/dev`, for example:
    ```sh
-   git switch dev && git pull
-   git worktree add ../teebe-<name> -b feat/<name> dev
+   git fetch origin
+   git worktree add ../teebe-files -b fix/123-file-preview origin/dev
    ```
-2. Keep changes focused. This codebase is test-first: add or update tests for
-   any behavior change in `TeebeCore` or the view models.
-3. Run `swift test` and `swiftlint lint` locally before pushing.
-4. Open a pull request into **`dev`** (never directly into `main`). CI (build,
-   test, lint, CodeQL) must be green before merge.
-5. `main` is release-only: it's updated by merging `dev`, then tagging `vX.Y.Z`
-   to cut a release.
+3. Keep one coherent purpose per commit and one independently reviewable outcome
+   per PR. Include regression tests with behavior changes.
+4. Run `swift build`, `swift test`, and `swiftlint lint`. Lint must have no errors
+   or new warnings; report existing warning debt rather than claiming zero
+   warnings. For UI changes, verify the packaged app as well as native tests.
+5. Open the PR into `dev`, linking its issue. Required checks are Build & Test
+   (macOS), SwiftLint, and PR Title. CodeQL is currently manual-only, not a
+   required merge gate. Verify checks on the final head before merging.
+6. Squash new independent feature PRs, using the curated PR title as the commit
+   subject. Existing dependent stacks may use merge commits deliberately.
+   `dev` to `main` releases require a regular merge commit, never squash.
+7. `main` is release-only. Update version and changelog, verify the packaged
+   artifact, and follow the release process below before publishing.
 
-## Commit messages
+## Commit and PR titles
 
-Use short, imperative summaries (e.g. `Fix peek top-gap`). Group related work
-into a single commit where it makes sense.
+Use English [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
+`type(scope): imperative description`. Scope is optional and names a stable area.
+Allowed types: `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `build`, `ci`,
+`chore`, and `revert`.
+
+Aim for at most 72 characters. Describe the behavior or problem, without a
+trailing period, emoji, `WIP`, or vague summaries such as `fix bugs`. Use Draft
+PRs for unfinished work. Mark actual compatibility breaks with `!` or a
+`BREAKING CHANGE:` footer and explain migration. Do not rewrite existing
+published history just to change its naming.
+
+```
+fix(files): use native Quick Look from the context menu
+feat(settings): add per-project preference overrides
+ci: validate pull request titles
+```
+
+## PR descriptions and evidence
+
+Lead with the problem and resulting behavior. Include checks actually run,
+results, and material limitations. A simple change needs only a short summary
+and validation. Distinguish automated tests, simulated dependencies, native UI
+checks, and packaged-app verification. Do not mark pending checks as passing.
+
+Use `Fixes #123` when the PR fully resolves the issue, otherwise `Refs #123`.
+Declare necessary dependencies with `Depends on #123`; inspect the final diff
+for duplicated or unrelated changes before integration. Rewrite the title and
+body if scope changes. Exclude chronological work logs and private tooling notes.
 
 ## Architecture
 

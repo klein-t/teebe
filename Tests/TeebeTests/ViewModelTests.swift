@@ -6,6 +6,59 @@ import TeebeCore
 @MainActor
 @Suite("AppModel")
 struct AppModelTests {
+    @Test("saved grouping preferences survive independently of automatic fetching", arguments: [true, false])
+    func savedGrouping(grouped: Bool) throws {
+        let env = makeTestEnvironment()
+        try env.store.save(AppState(showMergeStatus: grouped, fetchAutomatically: false))
+        let app = AppModel(environment: env)
+        #expect(app.groupWorktreesByMergeStatus == grouped)
+        #expect(!app.fetchAutomatically)
+        app.groupWorktreesByMergeStatus.toggle()
+        let restored = AppModel(environment: env)
+        #expect(restored.groupWorktreesByMergeStatus == !grouped)
+        #expect(!restored.fetchAutomatically)
+    }
+
+    @Test("startup deduplicates history, restores selection, and defaults to a flat worktree list")
+    func historyMigration() async throws {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/a", branch: "main", isPrimary: true)]
+        let env = makeTestEnvironment(git: git)
+        try env.store.save(AppState(repositories: [PersistedRepository(path: "/a"), PersistedRepository(path: "/b"),
+                                                  PersistedRepository(path: "/a/")], lastSelectedRepoPath: "/a/"))
+        let app = AppModel(environment: env)
+        await app.bootstrap()
+        #expect(app.repositories.count == 2)
+        #expect(app.selector.selectedRepo?.path == "/a")
+        #expect(app.recentRepositories.first?.path == "/a")
+        #expect(env.store.load().repositories.count == 2)
+        #expect(!app.groupWorktreesByMergeStatus)
+        app.groupWorktreesByMergeStatus = true
+        app.floatOnTop = true
+        let restored = AppModel(environment: env)
+        await restored.bootstrap()
+        #expect(restored.groupWorktreesByMergeStatus)
+        #expect(restored.preferences.defaults.groupByStatus == false)
+        await app.selector.selectRepo(Repository(path: "/b"))
+        #expect(app.recentRepositories.first?.path == "/b")
+        #expect(app.repositories.count == 2)
+    }
+
+    @Test("concurrent adds cannot append the same repository twice")
+    func concurrentAdd() async {
+        let gate = AddRepositoryGate()
+        let git = FakeGitClient()
+        git.beforeWorktrees = { await gate.enter() }
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+        let first = Task { await app.addRepository(path: "/repo") }
+        let second = Task { await app.addRepository(path: "/repo") }
+        while await gate.arrivals < 2 { await Task.yield() }
+        await gate.open()
+        let results = await [first.value, second.value]
+        #expect(results.filter { $0 }.count == 1)
+        #expect(app.repositories.map(\.path) == ["/repo"])
+    }
+
     @Test("adding a valid git repo records and persists it")
     func addRepo() async {
         let git = FakeGitClient()
@@ -100,6 +153,17 @@ struct AppModelTests {
 @MainActor
 @Suite("SelectorModel")
 struct SelectorModelTests {
+    @Test("target ref changes refresh merge icons but ordinary index writes do not")
+    func mergeRefEvents() async {
+        let selector = SelectorModel(environment: makeTestEnvironment())
+        await selector.selectRepo(Repository(path: "/repo"))
+        let revision = selector.mergeRevision
+        await selector.handleRepoWatchEvent(["/repo/.git/index"])
+        #expect(selector.mergeRevision == revision)
+        await selector.handleRepoWatchEvent(["/repo/.git/refs/remotes/origin/dev"])
+        #expect(selector.mergeRevision == revision + 1)
+    }
+
     @Test("selecting a repo loads worktrees + branches and focuses primary")
     func selectRepo() async {
         let git = FakeGitClient()
@@ -123,6 +187,38 @@ struct SelectorModelTests {
         #expect(SelectorModel.WorktreeInfo(ahead: 1).hasSync == true)
         #expect(SelectorModel.WorktreeInfo(behind: 2).hasSync == true)
         #expect(SelectorModel.WorktreeInfo(ahead: 1, behind: 2).hasSync == true)
+    }
+
+    @Test("sync arrows count only against the remote copy of the same branch")
+    func worktreeInfoSameBranchOnly() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo", branch: "feature", isPrimary: true)]
+        git.statusResult = StatusResult(branch: "feature", upstream: "origin/dev", ahead: 3, behind: 1)
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
+        await selector.selectRepo(Repository(path: "/repo"))
+        let tracking = selector.info(for: git.worktreesResult[0])
+        #expect(tracking.remote == .otherUpstream("origin/dev", isGone: false))
+        #expect(!tracking.hasSync)
+
+        git.statusResult = StatusResult(branch: "feature", upstream: "origin/feature", ahead: 3, behind: 1)
+        await selector.refreshWorktreeInfo()
+        let same = selector.info(for: git.worktreesResult[0])
+        #expect(same.remote == .sameBranch(remote: "origin", ahead: 3, behind: 1))
+        #expect(same.ahead == 3 && same.behind == 1)
+
+        // No upstream: not on origin only when origin has no branch of that name,
+        // as the repository's remote branches say after a push or fetch.
+        git.statusResult = StatusResult(branch: "feature")
+        git.branchesResult = [Branch(name: "origin/main", isRemote: true)]
+        await selector.refreshWorktrees()
+        #expect(selector.info(for: git.worktreesResult[0]).remote == .notOnRemote("origin"))
+        git.branchesResult.append(Branch(name: "origin/feature", isRemote: true))
+        await selector.refreshWorktrees()
+        #expect(selector.info(for: git.worktreesResult[0]).remote == .noUpstream)
+        // A failed read is not a fact about the remote.
+        git.statusErrors[git.worktreesResult[0].path] = .notAGitRepository(path: "/repo")
+        await selector.refreshWorktreeInfo()
+        #expect(selector.info(for: git.worktreesResult[0]).remote == .unknown)
     }
 
     @Test("a failed repo selection surfaces a human-readable error, not a raw Swift error")
@@ -180,7 +276,7 @@ struct SelectorModelTests {
         #expect(selector.info(for: git.worktreesResult[0]).isLive == false)
 
         // Once the window elapses, the dot goes idle again.
-        selector.refreshLiveState(now: t.addingTimeInterval(5))
+        selector.refreshLiveState(now: t.addingTimeInterval(GenericActivity.window))
         #expect(selector.info(for: git.worktreesResult[1]).isLive == false)
     }
 
@@ -200,8 +296,44 @@ struct SelectorModelTests {
         // No further file events: the periodic agent poll is the only thing that
         // runs, and it must also let the live flag expire — otherwise the dot
         // (and its repeat-forever pulse animation) runs until the next rescan.
-        await selector.refreshAgentStates(now: t.addingTimeInterval(30))
+        await selector.refreshAgentStates(now: t.addingTimeInterval(GenericActivity.window + 30))
         #expect(selector.info(for: git.worktreesResult[0]).isLive == false)
+    }
+
+    @Test("edits, selection changes and focus returns reuse the last merge scan")
+    func mergeScanTriggers() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [
+            Worktree(path: "/repo", branch: "main", head: "aaa", isPrimary: true),
+            Worktree(path: "/repo-wt", branch: "feature", head: "bbb")
+        ]
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
+        await selector.selectRepo(Repository(path: "/repo"))
+        let before = selector.mergeRevision
+
+        // A busy agent fires a watcher batch every 250 ms. File content cannot
+        // change merge ancestry, so ten batches must not restart the scan even once.
+        for _ in 0..<10 { await selector.worktree.handleFileSystemEvent() }
+        #expect(selector.mergeRevision == before)
+
+        // Nor may clicking another worktree, or the window un-occluding on alt-tab.
+        await selector.selectWorktree(git.worktreesResult[1])
+        #expect(selector.mergeRevision == before)
+        for _ in 0..<2 {
+            await selector.setLowPower(true)
+            await selector.setLowPower(false)
+        }
+        #expect(selector.mergeRevision == before)
+
+        // A new checkout does move ancestry, so that one scans.
+        git.worktreesResult.append(Worktree(path: "/repo-new", branch: "new", head: "ccc"))
+        await selector.refreshWorktrees()
+        #expect(selector.mergeRevision == before + 1)
+
+        // And so does a commit in an existing checkout.
+        git.worktreesResult[1].head = "ddd"
+        await selector.refreshWorktrees()
+        #expect(selector.mergeRevision == before + 2)
     }
 
     @Test("refreshWorktreeInfo computes live state alongside sync counts")
@@ -372,20 +504,27 @@ struct WorktreeModelTests {
         #expect(aNode?.change?.worktreeStatus == .modified)
     }
 
-    @Test("changed filter derives a tree from the change list")
-    func changedFilter() async {
+    @Test("Files keeps unchanged rows while Changes contains only modified files")
+    func fullFileTree() async throws {
         let (dir, cleanup) = tempDir(); defer { cleanup() }
+        for name in ["changed.swift", "unchanged.swift"] {
+            try Data().write(to: URL(fileURLWithPath: dir + "/" + name))
+        }
         let git = FakeGitClient()
         git.statusResult = StatusResult(changes: [
-            FileChange(path: "src/changed.swift", worktreeStatus: .modified),
+            FileChange(path: "changed.swift", worktreeStatus: .modified),
         ])
         let model = WorktreeModel(environment: makeTestEnvironment(git: git))
         await model.load(worktreePath: dir, repo: Repository(path: dir))
-        model.filter = .changed
-
-        let display = model.displayRoot
-        let src = display?.children?.first { $0.name == "src" }
-        #expect(src?.children?.first?.name == "changed.swift")
+        #expect(model.visibleRows.map(\.node.name) == ["changed.swift", "unchanged.swift"])
+        #expect(model.visibleRows.first?.node.change?.worktreeStatus == .modified)
+        #expect(model.visibleRows.last?.node.change == nil)
+        #expect(model.changes.map(\.path) == ["changed.swift"])
+        git.statusResult = StatusResult()
+        await model.refresh()
+        #expect(model.visibleRows.map(\.node.name) == ["changed.swift", "unchanged.swift"])
+        #expect(model.changes.isEmpty)
+        #expect(model.visibleRows.allSatisfy { $0.node.change == nil })
     }
 
     @Test("stage forwards to the serial queue")
@@ -760,4 +899,11 @@ struct LastWindowClosedTests {
         #expect(!AppDelegate.hasVisibleWindow([(visible: false, isPanel: false), (visible: true, isPanel: true)]))
         #expect(!AppDelegate.hasVisibleWindow([]))
     }
+}
+
+private actor AddRepositoryGate {
+    private let gate = Gate()
+    private(set) var arrivals = 0
+    func enter() async { arrivals += 1; await gate.wait() }
+    func open() async { await gate.open() }
 }

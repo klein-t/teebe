@@ -9,24 +9,40 @@ import Sparkle
 /// the user's preference; the menu command below drives a manual check.
 @MainActor
 final class UpdaterController: ObservableObject {
-    private let controller: SPUStandardUpdaterController
+    private var controller: SPUStandardUpdaterController?
+    private let updater: SPUUpdater
 
     /// Mirrors `canCheckForUpdates` so the menu item disables itself while a
     /// check is already in flight.
     @Published var canCheckForUpdates = false
 
-    init() {
-        controller = SPUStandardUpdaterController(
+    @Published private(set) var automaticallyChecksForUpdates = false
+
+    convenience init() {
+        let controller = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
-        controller.updater.publisher(for: \.canCheckForUpdates)
+        self.init(updater: controller.updater)
+        self.controller = controller
+    }
+
+    init(updater: SPUUpdater) {
+        self.updater = updater
+        updater.publisher(for: \.automaticallyChecksForUpdates)
+            .assign(to: &$automaticallyChecksForUpdates)
+        updater.publisher(for: \.canCheckForUpdates)
             .assign(to: &$canCheckForUpdates)
     }
 
+    /// Sparkle persists this choice and resets its background check schedule.
+    func setAutomaticallyChecksForUpdates(_ enabled: Bool) {
+        updater.automaticallyChecksForUpdates = enabled
+    }
+
     func checkForUpdates() {
-        controller.updater.checkForUpdates()
+        updater.checkForUpdates()
     }
 }
 
