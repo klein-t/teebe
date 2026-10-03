@@ -657,19 +657,19 @@ final class SelectorModel {
         visibilityGeneration = generation
         if on {
             hiddenRefs = nil
+            stopLiveWatchers()
             if let repo = selectedRepo {
                 // A debounced event may be dropped when the watcher stops. Compare
                 // against the earlier visible baseline as well as the return read.
                 let refs = try? await environment.git.run(["show-ref"], in: repo.path)
-                guard visibilityGeneration == generation, selectedRepo?.path == repo.path else { return }
-                hiddenRefsChanged = visibleRefs?.repoPath != repo.path || refs?.succeeded != true || visibleRefs?.output != refs?.standardOutput
+                guard visibilityGeneration == generation else { return }
+                // A project picked during the read may have started watchers again.
+                guard selectedRepo?.path == repo.path else { stopLiveWatchers(); return }
+                // Keep a change seen during an earlier hide whose return check never ran.
+                hiddenRefsChanged = hiddenRefsChanged || visibleRefs?.repoPath != repo.path
+                    || refs?.succeeded != true || visibleRefs?.output != refs?.standardOutput
                 hiddenRefs = refs.flatMap { $0.succeeded ? (repo.path, $0.standardOutput) : nil }
             }
-            repoWatcher?.stop()
-            agentWatcher?.stop()
-            agentWatcher = nil
-            stopWorktreeActivity()
-            worktree.pauseWatching()
         } else {
             if let repo = selectedRepo { await startRepoWatching(repo) }
             guard visibilityGeneration == generation else { return }
@@ -680,6 +680,15 @@ final class SelectorModel {
             guard await invalidateMergeChecksIfRefsMovedWhileHidden(generation: generation) else { return }
             await refreshWorktrees()
         }
+    }
+
+    /// The FSEvents streams low power turns off.
+    private func stopLiveWatchers() {
+        repoWatcher?.stop()
+        agentWatcher?.stop()
+        agentWatcher = nil
+        stopWorktreeActivity()
+        worktree.pauseWatching()
     }
 
     /// On return from low power, restart merge checks if refs moved while hidden.
