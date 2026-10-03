@@ -367,4 +367,81 @@ struct WorktreeCleanupTests {
         #expect(!FileManager.default.fileExists(atPath: dev.path))
         #expect(!fixture.git(["rev-parse", "--verify", "dev"]).isEmpty)
     }
+    /// Commits only a reflog still reaches, as a reset leaves them: merged then reset
+    /// back past a new commit, or reset onto the target over one.
+    @Test("commits only the worktree's or branch's reflog reaches survive removing both")
+    func reflogOnlyCommitsKept() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let backFolder = fixture.addWorktree(name: "back", branch: "back")
+        fixture.commitAndFastForward(branch: "back", in: backFolder)
+        let ontoFolder = fixture.addWorktree(name: "onto", branch: "onto")
+        var lost: [String: String] = [:]
+        for (branch, folder) in [("back", backFolder), ("onto", ontoFolder)] {
+            fixture.writeFile(branch + ".txt", "committed, then reset away", in: folder)
+            fixture.stage(in: folder)
+            fixture.commit("work on " + branch, in: folder)
+            lost[branch] = fixture.git(["rev-parse", "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        fixture.git(["reset", "-q", "--hard", "HEAD~1"], in: backFolder)
+        fixture.commitFile("main.txt", "main moves on")
+        fixture.git(["reset", "-q", "--hard", "main"], in: ontoFolder)
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        let entries = try await service.scan(repoPath: fixture.repoPath, extraTarget: nil).entries
+        for branch in ["back", "onto"] {
+            let entry = try #require(entries.first { $0.worktree.branch == branch })
+            #expect(entry.canRemove(includingIgnored: false))
+            let outcome = try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: false, deleteBranch: true)
+            #expect(outcome == .deleted)
+        }
+        let unreachable = fixture.git(["fsck", "--unreachable", "--no-progress"])
+        let reachable = fixture.git(["rev-list", "--all"])
+        for (branch, commit) in lost {
+            #expect(!unreachable.contains(commit))
+            #expect(reachable.contains(commit))
+            #expect(!fixture.git(["for-each-ref", "--contains", commit, WorktreeCleanupService.backupRefPrefix + branch + "/"])
+                .isEmpty)
+        }
+    }
+
+    @Test("removal keeps no backup when nothing would be lost, and drops backups past their lifetime")
+    func reflogBackupsPruned() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let tree = fixture.git(["rev-parse", "HEAD^{tree}"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        func backup(_ name: String, daysAgo: Int) {
+            let date = "\(Int(Date().timeIntervalSince1970) - daysAgo * 86_400) +0000"
+            fixture.git(["update-ref", WorktreeCleanupService.backupRefPrefix + name,
+                         datedCommit(fixture, tree: tree, message: name, date: date)])
+        }
+        backup("old/1", daysAgo: 91)
+        backup("recent/1", daysAgo: 10)
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.commitAndFastForward(branch: "feature", in: folder)
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        let entry = try #require(try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
+            .entries.first { $0.worktree.branch == "feature" })
+        #expect(try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: false, deleteBranch: true)
+            == .deleted)
+        let backups = fixture.git(["for-each-ref", "--format=%(refname)", WorktreeCleanupService.backupRefPrefix])
+        #expect(backups == WorktreeCleanupService.backupRefPrefix + "recent/1\n")
+    }
+}
+
+private func datedCommit(_ fixture: GitFixture, tree: String, message: String, date: String) -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", tree, "-m", message]
+    process.currentDirectoryURL = fixture.repoURL
+    var environment = ProcessInfo.processInfo.environment
+    environment["GIT_COMMITTER_DATE"] = date
+    process.environment = environment
+    let output = Pipe()
+    process.standardOutput = output
+    try? process.run()
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return (String(bytes: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 }
