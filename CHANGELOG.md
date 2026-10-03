@@ -32,7 +32,8 @@ All notable changes to teebe are documented here. The format is based on
   inside a worktree.
 - **Agent notification controls.** Settings now has switches for completion
   notifications and their sound, a Test Notification button, and the status of
-  the optional Claude Code hook. Notifications are off until you turn them on.
+  the optional Claude Code hook. Notifications are off by default for new
+  installs, and stay on if you already had teebe.
 - **Search the whole repository.** File search in Files now reaches folders
   you haven't opened yet, without blocking the window.
 - **More file commands.** Copy a file's full or relative path, collapse every
@@ -93,8 +94,9 @@ All notable changes to teebe are documented here. The format is based on
 - A status card opened from the keyboard kept popping up again on its own.
 - Error and notice rows pushed Files below the bottom of the window. The window
   now grows to fit them.
-- Discard, stage and unstage could act on a different worktree if you switched
-  while a confirmation was open.
+- Discard, stage and unstage could act on the wrong worktree while a newly
+  selected one was still loading, and an open discard confirmation could apply
+  to the worktree you switched to.
 - Installing the Claude Code hook could overwrite other hook settings it
   didn't understand. Those settings are now left untouched.
 - A settings file that couldn't be read could be overwritten and lose your

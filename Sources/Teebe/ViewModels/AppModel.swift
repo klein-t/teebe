@@ -109,11 +109,32 @@ final class AppModel {
     @ObservationIgnored private var isHydrating = false
     @ObservationIgnored private var isApplyingPreferences = false
 
+    /// 0.7.0 and earlier always posted agent notifications with sound and saved no
+    /// choice, so keep them on for those users while new installs start with them off.
+    /// A recorded version older than 0.8.0, or (from before versions were recorded)
+    /// saved repositories, marks such a profile. A saved choice always wins, and the
+    /// migrated choice is saved, so this runs once.
+    private static func keepingNotificationsOnForUpgrade(_ state: AppState) -> AppState? {
+        guard state.agentNotifications == nil else { return nil }
+        let isUpgrade = state.lastSeenVersion.map { SemVer.isGreater("0.8.0", than: $0) }
+            ?? !state.repositories.isEmpty
+        guard isUpgrade else { return nil }
+        var migrated = state
+        migrated.agentNotifications = true
+        migrated.notificationSound = migrated.notificationSound ?? true
+        return migrated
+    }
+
     /// `mergeService` is the scanner behind the worktree groups; tests hand in a
     /// scripted one instead of a real repository.
     init(environment: AppEnvironment, mergeService: WorktreeCleanupChecking? = nil) {
         self.environment = environment
-        self.state = environment.store.load()
+        var loaded = environment.store.load()
+        if let migrated = Self.keepingNotificationsOnForUpgrade(loaded) {
+            loaded = migrated
+            try? environment.store.save(migrated)
+        }
+        self.state = loaded
         self.preferences = PreferencesModel(state: self.state)
         self.selector = SelectorModel(environment: environment)
         self.mergeStatus = WorktreeMergeModel(service: mergeService ?? WorktreeCleanupService(git: environment.git))
