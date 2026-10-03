@@ -209,6 +209,51 @@ struct WindowGeometryTests {
                 "restoring a low frame pushed the window below the screen: \(host.window.frame)")
     }
 
+    @Test("a transient error row grows the window so FILES stays inside it", arguments: [true, false])
+    func errorRowsKeepFilesInsideTheWindow(filesOpen: Bool) async throws {
+        guard let host = try await GeometryHost.make(), let screen = host.window.screen else { return }
+        defer { host.tearDown() }
+        // Top of the screen: the most room to grow into, even on a small CI display.
+        var frame = host.window.frame
+        frame.origin.y = screen.visibleFrame.maxY - frame.height
+        host.window.setFrame(frame, display: true)
+        host.hooks.setFilesOpen?(filesOpen)
+        await host.settleGeometry()
+        let normal = host.window.frame.height
+        let files = try #require(host.hooks.filesFrame)
+
+        // The fixture has no origin, so an explicit fetch fails and shows its row.
+        host.hooks.reset()
+        await host.app.refreshRemotes(force: true)
+        #expect(host.app.fetchError != nil)
+        await host.settleGeometry()
+        host.expectSettled("fetch error shown")
+        host.expectFilesInside(height: files.height, "fetch error shown")
+        #expect(host.window.frame.height > normal || host.roomBelow <= 1, "the window did not grow for the fetch error row")
+
+        // The fetch succeeding clears the row: back to the normal height, in one hop.
+        host.fixture.addOrigin()
+        host.hooks.reset()
+        await host.app.refreshRemotes(force: true)
+        #expect(host.app.fetchError == nil)
+        await host.settleGeometry()
+        host.expectSettled("fetch error cleared")
+        #expect(abs(host.window.frame.height - normal) <= 1)
+
+        // The bottom error line, shown and dismissed.
+        host.hooks.reset()
+        host.app.setError("Something went wrong")
+        await host.settleGeometry()
+        host.expectSettled("error line shown")
+        host.expectFilesInside(height: files.height, "error line shown")
+        #expect(host.window.frame.height > normal || host.roomBelow <= 1, "the window did not grow for the error line")
+        host.hooks.reset()
+        host.app.setError(nil)
+        await host.settleGeometry()
+        host.expectSettled("error line cleared")
+        #expect(abs(host.window.frame.height - normal) <= 1)
+    }
+
     @Test("selecting, collapsing, dragging and an AppKit resize each settle in one resize")
     func geometryStaysInStepWithTheLayout() async throws {
         guard let host = try await GeometryHost.make() else { return }   // no display (headless CI)
@@ -296,7 +341,7 @@ private final class GeometryHost {
     let app: AppModel
     let hooks: GeometryTestHooks
     let window: NSWindow
-    private let fixture: WorktreeFixture
+    let fixture: WorktreeFixture
 
     private init(app: AppModel, hooks: GeometryTestHooks, window: NSWindow, fixture: WorktreeFixture) {
         self.app = app
@@ -392,6 +437,25 @@ private final class GeometryHost {
         #expect(isSettled, "\(step): window is \(window.frame.height)pt, layout asks for \(target)pt",
                 sourceLocation: sourceLocation)
         #expect(hooks.resizes <= 1, "\(step): \(hooks.resizes) window resizes, expected at most one",
+                sourceLocation: sourceLocation)
+    }
+
+    /// Room left between the window's bottom edge and the bottom of its screen.
+    var roomBelow: CGFloat {
+        guard let visible = window.screen?.visibleFrame else { return 0 }
+        return window.frame.minY - visible.minY
+    }
+
+    /// FILES lies inside the window: its header was not pushed below the bottom edge,
+    /// and it kept its full `height` unless the window ran out of screen to grow into
+    /// (only then does its reveal give up the difference).
+    func expectFilesInside(height: CGFloat, _ step: String, sourceLocation: SourceLocation = #_sourceLocation) {
+        let files = hooks.filesFrame ?? .zero
+        let bottom = window.contentView?.bounds.height ?? 0
+        #expect(files.maxY <= bottom + 1, "\(step): FILES ends at \(files.maxY)pt, the window at \(bottom)pt",
+                sourceLocation: sourceLocation)
+        #expect(abs(files.height - height) <= 1 || roomBelow <= 1,
+                "\(step): FILES is \(files.height)pt, was \(height)pt, with \(roomBelow)pt of screen left below",
                 sourceLocation: sourceLocation)
     }
 
@@ -516,6 +580,9 @@ private struct WorktreeFixture {
     }
 
     func cleanup() { try? FileManager.default.removeItem(at: root) }
+
+    /// Point `origin` at the repository itself, so a fetch has somewhere to succeed.
+    func addOrigin() { git(["remote", "add", "origin", repoPath], in: URL(fileURLWithPath: repoPath)) }
 
     private func add(worktree name: String, branch: String, from repo: URL) -> URL {
         let url = root.appendingPathComponent(name, isDirectory: true)

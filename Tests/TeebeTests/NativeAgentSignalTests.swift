@@ -18,6 +18,7 @@ struct NativeAgentSignalTests {
             agentStatuses: states.provider, agentProjectsRootPath: "/fake/projects",
             notify: spy.record, agentPing: listener))
         selector.agentPingSettle = 0.02
+        selector.notificationsEnabled = true
         await selector.selectRepo(Repository(path: "/repo"))
         await selector.setLowPower(true)
         states["/repo"] = .needsAttention
@@ -43,6 +44,7 @@ struct NativeAgentSignalTests {
         let selector = SelectorModel(environment: makeTestEnvironment(git: git,
             agentStatuses: states.provider, agentProjectsRootPath: "/claude/projects",
             agentExtraWatchPaths: ["/codex/sessions"], notify: spy.record))
+        selector.notificationsEnabled = true
         await selector.selectRepo(Repository(path: "/repo"))
         states["/repo"] = .needsAttention
         await selector.handleAgentWatchEvent(["/codex/sessions/2026/09/29/rollout.jsonl"])
