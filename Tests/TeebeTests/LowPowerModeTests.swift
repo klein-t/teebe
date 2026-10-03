@@ -201,6 +201,55 @@ struct LowPowerModeTests {
         #expect(rig.selector.mergeRevision == refreshed)
     }
 
+    /// Counts `show-ref` reads so a test can hold one specific read.
+    private actor RefReads {
+        private var count = 0
+        func next() -> Int { count += 1; return count }
+    }
+
+    @Test("a ref change seen while hidden survives hiding again before the return check runs")
+    func hiddenRefChangeSurvivesQuickRehide() async {
+        let rig = await makeRig()
+        let revision = rig.selector.mergeRevision
+        rig.git.showRefOutput = "new-oid refs/heads/main\n"
+        await rig.selector.setLowPower(true)
+        // Hold the return check's read (the second one on the way back), after the
+        // visible baseline was already re-read with the new refs.
+        let reads = RefReads()
+        let started = Gate()
+        let finish = Gate()
+        rig.git.runGate = { args, _ in
+            guard args == ["show-ref"] else { return }
+            if await reads.next() == 2 { await started.open(); await finish.wait() }
+        }
+        let showing = Task { await rig.selector.setLowPower(false) }
+        await started.wait()
+        await rig.selector.setLowPower(true)
+        await finish.open()
+        await showing.value
+        #expect(rig.selector.mergeRevision == revision)
+        await rig.selector.setLowPower(false)
+        #expect(rig.selector.mergeRevision > revision)
+    }
+
+    @Test("hiding stops every watcher even when the project changes during the hidden ref read")
+    func repoSwitchDuringHideStillStopsWatchers() async {
+        let rig = await makeRig()
+        let started = Gate()
+        let finish = Gate()
+        rig.git.runGate = { args, _ in
+            if args == ["show-ref"] { await started.open(); await finish.wait() }
+        }
+        let hiding = Task { await rig.selector.setLowPower(true) }
+        await started.wait()
+        rig.git.runGate = nil
+        await rig.selector.selectRepo(Repository(path: "/another"))
+        await finish.open()
+        await hiding.value
+        #expect(rig.selector.isLowPower)
+        #expect(rig.box.watchers.allSatisfy { !$0.isWatching })
+    }
+
     @Test("setLowPower is idempotent")
     func idempotent() async {
         let rig = await makeRig()
