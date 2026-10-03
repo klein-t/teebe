@@ -4,6 +4,103 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-10-03
+
+### Added
+- **Worktree status at a glance.** Each worktree shows a single mark: an
+  animated orb while a coding agent is working in it, an orange dot for
+  uncommitted changes, a ring when its commits are not merged yet, and a green
+  check when it is merged and safe to delete. Hover the mark for a short card
+  that explains it.
+- **Automatic merge detection.** teebe checks every worktree against your
+  default branch plus dev, develop, main and master, and an extra comparison
+  branch you can choose. Squash merges and branches merged commit by commit
+  count as merged; brand new branches never do.
+- **Grouping, sorting and cleanup.** Group worktrees by state (uncommitted, not
+  merged, safe to delete) and sort them by status, name or folder. Remove a
+  single worktree from the bin on its row, or every worktree that is safe to
+  delete in one step, after a confirmation that lists each one. The branch can
+  be deleted along with it.
+- **New Worktree sheet.** Create a worktree on a new or existing branch, pick
+  its starting point and choose where its folder goes. The location is
+  suggested from your existing worktrees and remembered.
+- **Background fetch.** teebe can quietly fetch from origin in the background
+  so sync arrows and merge status stay current. Refresh fetches right away and
+  tells you when the remote can't be reached, with a Retry button.
+- **Claude Code and Codex activity.** Worktrees show when Claude Code or Codex
+  is working or waiting in them, along with activity from other tools working
+  inside a worktree.
+- **Agent notification controls.** Settings now has switches for completion
+  notifications and their sound, a Test Notification button, and the status of
+  the optional Claude Code hook. Notifications are off until you turn them on.
+- **Search the whole repository.** File search in Files now reaches folders
+  you haven't opened yet, without blocking the window.
+- **More file commands.** Copy a file's full or relative path, collapse every
+  open folder in one click, and press Space for Quick Look.
+- **Pinned folders.** While you scroll through Files, the open folders you are
+  inside stay pinned at the top.
+- **Open files your way.** The first time you open a file type, teebe asks
+  which app to use and remembers it. Settings lists remembered file types so
+  you can change or forget them.
+- **Arrow keys while previewing.** While a preview is open, the arrow keys move
+  to the previous or next file, and Left and Right collapse and expand folders.
+- **Global defaults, project overrides.** Settings holds your defaults, and
+  choices made inside a project apply to that project only, until you return
+  it to the defaults. This covers the terminal (Terminal or cmux), how files
+  open, the comparison branch and where new worktrees go.
+- A setting to turn automatic update checks off. Check for Updates still works
+  when they are off.
+- Hover explanations for file status badges, toolbar buttons and group
+  headings. They also work while another app is in front.
+
+### Changed
+- **Translucent window background.** The window now has a translucent,
+  Finder-style background in both light and dark mode.
+- Lower CPU use: agent animations stop drawing when they are scrolled out of
+  view or the window is hidden, and background scanning does less work.
+- teebe starts faster when you have many old Codex sessions.
+- Switching worktrees keeps the previous changes on screen until the new ones
+  have loaded, so the window no longer jumps.
+- While teebe is hidden, Codex completions are checked every 15 seconds, so
+  short turns are noticed promptly.
+
+### Fixed
+- Opening a very large text file could freeze the app for many seconds. Large
+  previews now open right away, with an option to open the file in its default
+  app.
+- Moving through Files could leave several rows highlighted at once.
+- File search keeps keyboard focus, follows your .gitignore rules, remembers
+  your filters and no longer flickers while the worktree refreshes.
+- Agent notifications never appeared as banners while teebe was in front.
+- Switching projects quickly could show the previous project's worktrees.
+- Merge status could stay stale after a fetch or a branch change made while
+  teebe was hidden.
+- Background fetches could trigger surprise approval prompts from SSH agents
+  such as 1Password or Secretive. They now run without the agent and stay
+  silent; Refresh still uses it. Clicking Refresh during a background fetch
+  waits for it instead of reporting an error.
+- A new branch created with a worktree tracked its starting branch, so a plain
+  `git push` could fail or push to the wrong branch. New branches now start
+  without an upstream.
+- If you switched projects while a new worktree was being created, teebe
+  jumped back to the project it was created in.
+- A comparison branch typed by name in Settings was never checked.
+- A worktree with an unfinished rebase, merge or similar Git operation could
+  be offered for removal. It is now never removable, and a worktree that
+  couldn't be checked says so instead of looking clean.
+- The removal confirmation now says clearly how many ignored files will be
+  deleted for good.
+- A status card opened from the keyboard kept popping up again on its own.
+- Error and notice rows pushed Files below the bottom of the window. The window
+  now grows to fit them.
+- Discard, stage and unstage could act on a different worktree if you switched
+  while a confirmation was open.
+- Installing the Claude Code hook could overwrite other hook settings it
+  didn't understand. Those settings are now left untouched.
+- A settings file that couldn't be read could be overwritten and lose your
+  projects and preferences. It is now kept aside.
+- What's New could appear again for a release you had already seen.
+
 ## [0.7.0] - 2026-09-02
 
 ### Added
