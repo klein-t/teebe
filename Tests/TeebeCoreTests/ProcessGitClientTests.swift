@@ -300,11 +300,11 @@ struct ProcessGitClientTests {
         #expect(ProcessGitClient.fetchEnvironment(inherited: [:], sshCommand: nil, kind: .manual)
             == ["GIT_SSH_COMMAND": "ssh \(batch)", "SSH_ASKPASS_REQUIRE": "never"])
         let configured = ProcessGitClient.fetchEnvironment(inherited: [:], sshCommand: "ssh -i ~/.ssh/work", kind: .manual)
-        #expect(configured["GIT_SSH_COMMAND"] == "ssh -i ~/.ssh/work \(batch)")
+        #expect(configured?["GIT_SSH_COMMAND"] == "ssh -i ~/.ssh/work \(batch)")
         // Git prefers the environment's command over the configured one.
         let inherited = ProcessGitClient.fetchEnvironment(
             inherited: ["GIT_SSH_COMMAND": "ssh -F cfg"], sshCommand: "ssh -i k", kind: .manual)
-        #expect(inherited["GIT_SSH_COMMAND"] == "ssh -F cfg \(batch)")
+        #expect(inherited?["GIT_SSH_COMMAND"] == "ssh -F cfg \(batch)")
         // A GIT_SSH program is used only when no command is set; setting one would replace it.
         #expect(ProcessGitClient.fetchEnvironment(inherited: ["GIT_SSH": "/opt/acme/ssh"], sshCommand: nil, kind: .manual)
             == ["SSH_ASKPASS_REQUIRE": "never"])
@@ -318,9 +318,9 @@ struct ProcessGitClientTests {
         #expect(ProcessGitClient.fetchEnvironment(inherited: ["SSH_AUTH_SOCK": agent], sshCommand: nil, kind: .automatic)
             == ["GIT_SSH_COMMAND": "ssh \(options)", "SSH_ASKPASS_REQUIRE": "never", "SSH_AUTH_SOCK": ""])
         let configured = ProcessGitClient.fetchEnvironment(inherited: [:], sshCommand: "ssh -i ~/.ssh/work", kind: .automatic)
-        #expect(configured["GIT_SSH_COMMAND"] == "ssh -i ~/.ssh/work \(options)")
+        #expect(configured?["GIT_SSH_COMMAND"] == "ssh \(options) -i ~/.ssh/work")
         #expect(ProcessGitClient.fetchEnvironment(inherited: ["GIT_SSH": "/opt/acme/ssh"], sshCommand: nil, kind: .automatic)
-            == ["SSH_ASKPASS_REQUIRE": "never", "SSH_AUTH_SOCK": ""])
+            == ["GIT_SSH_COMMAND": "'/opt/acme/ssh' \(options)", "SSH_ASKPASS_REQUIRE": "never", "SSH_AUTH_SOCK": ""])
     }
 
     @Test("status on a non-git directory throws notAGitRepository")

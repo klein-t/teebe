@@ -126,9 +126,14 @@ public struct ProcessGitClient: GitClient {
         let configured = try? await run(["config", "--get", "core.sshCommand"], in: repoPath)
         let sshCommand = configured.flatMap { $0.succeeded ? $0.stdoutString : nil }?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let environment = Self.fetchEnvironment(inherited: ProcessInfo.processInfo.environment,
-                                                sshCommand: sshCommand?.isEmpty == false ? sshCommand : nil,
-                                                kind: kind)
+        // nil: an automatic fetch through this SSH program could still reach the
+        // agent, so it does not run at all. Like any automatic failure, that is silent.
+        guard let environment = Self.fetchEnvironment(inherited: ProcessInfo.processInfo.environment,
+                                                      sshCommand: sshCommand?.isEmpty == false ? sshCommand : nil,
+                                                      kind: kind) else {
+            throw GitError.commandFailed(command: Self.fetchArguments, exitCode: -1,
+                                         stderr: "The SSH program is not ssh, so it may use the SSH agent.")
+        }
         let result = try await run(Self.fetchArguments, in: repoPath, extraEnvironment: environment)
         guard result.succeeded else {
             throw Self.mapError(arguments: result.arguments, directory: repoPath, result: result)
@@ -143,27 +148,107 @@ public struct ProcessGitClient: GitClient {
     /// fails instead of asking for a passphrase or a host key, and no askpass
     /// dialog. The user's own SSH command (a per-repository key in
     /// `core.sshCommand`, or `GIT_SSH_COMMAND`, which Git prefers) is kept and only
-    /// gets the batch option; a `GIT_SSH` program is left alone, since setting a
-    /// command would replace it.
+    /// gets the batch option; for a `.manual` fetch a `GIT_SSH` program is left
+    /// alone, since setting a command would replace it.
     ///
     /// An `.automatic` fetch also runs without the SSH agent, both the one in
-    /// `SSH_AUTH_SOCK` and one named by `IdentityAgent` in the SSH config: agents
-    /// such as 1Password's or Secretive ask for approval on every use, and batch
-    /// mode does not stop that. Keys the agent alone holds then fail the fetch,
-    /// which is silent; the user's own Refresh goes through the agent.
-    static func fetchEnvironment(inherited: [String: String], sshCommand: String?, kind: FetchKind) -> [String: String] {
+    /// `SSH_AUTH_SOCK` and one named by `IdentityAgent`: agents such as 1Password's
+    /// or Secretive ask for approval on every use, and batch mode does not stop
+    /// that. ssh keeps the first value it is given for an option, so the options go
+    /// straight after the program, ahead of the user's own arguments and of the SSH
+    /// config. That needs a program that is recognizably ssh; with any other (a
+    /// wrapper script, plink) there is no telling what reaches the agent, so the
+    /// result is nil and the fetch does not run. Keys the agent alone holds also
+    /// fail the fetch, which is silent; the user's own Refresh goes through the agent.
+    static func fetchEnvironment(inherited: [String: String], sshCommand: String?, kind: FetchKind) -> [String: String]? {
         var environment = ["SSH_ASKPASS_REQUIRE": "never"]
-        var options = " -o BatchMode=yes"
-        if kind == .automatic {
-            environment["SSH_AUTH_SOCK"] = ""
-            options += " -o IdentityAgent=none"
+        let command = inherited["GIT_SSH_COMMAND"].flatMap { $0.isEmpty ? nil : $0 } ?? sshCommand
+        guard kind == .automatic else {
+            if let command {
+                environment["GIT_SSH_COMMAND"] = command + " -o BatchMode=yes"
+            } else if inherited["GIT_SSH"] == nil {
+                environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+            }
+            return environment
         }
-        if let command = inherited["GIT_SSH_COMMAND"].flatMap({ $0.isEmpty ? nil : $0 }) ?? sshCommand {
-            environment["GIT_SSH_COMMAND"] = command + options
-        } else if inherited["GIT_SSH"] == nil {
-            environment["GIT_SSH_COMMAND"] = "ssh" + options
-        }
+        guard let agentless = agentlessSSHCommand(command: command, program: inherited["GIT_SSH"]) else { return nil }
+        environment["SSH_AUTH_SOCK"] = ""
+        environment["GIT_SSH_COMMAND"] = agentless
         return environment
+    }
+
+    static let agentlessOptions = "-o BatchMode=yes -o IdentityAgent=none"
+
+    /// The SSH command an automatic fetch runs, in the order Git picks one: a
+    /// command (from the environment or `core.sshCommand`), else a `GIT_SSH`
+    /// program, else plain `ssh`. nil when the program is not recognizably ssh.
+    static func agentlessSSHCommand(command: String?, program: String?) -> String? {
+        if let command {
+            guard let (word, rest) = sshProgramWord(in: command) else { return nil }
+            return word + " " + agentlessOptions + rest
+        }
+        if let program, !program.isEmpty {
+            guard (program as NSString).lastPathComponent == "ssh" else { return nil }
+            return "'" + program.replacingOccurrences(of: "'", with: "'\\''") + "' " + agentlessOptions
+        }
+        return "ssh " + agentlessOptions
+    }
+
+    /// Splits a shell command into its first word, as written, and the rest, when
+    /// that word names a program called `ssh`. nil when the shell would expand the
+    /// word or read it as anything but a plain path (a variable, a glob, an
+    /// assignment, an operator), since then what actually runs can't be known.
+    static func sshProgramWord(in command: String) -> (word: Substring, rest: Substring)? {
+        let text = command.drop { $0.isWhitespace }
+        var value = ""
+        var quote: Character?
+        var index = text.startIndex
+        while index < text.endIndex, quote != nil || !text[index].isWhitespace {
+            if quote == nil {
+                guard let next = unquotedStep(text, at: index, quote: &quote, value: &value) else { return nil }
+                index = next
+            } else {
+                guard quotedStep(text[index], quote: &quote, value: &value) else { return nil }
+                index = text.index(after: index)
+            }
+        }
+        guard quote == nil, (value as NSString).lastPathComponent == "ssh" else { return nil }
+        return (text[..<index], text[index...])
+    }
+
+    private static let shellSpecial = Set("$`;|&<>(){}*?[=#")
+
+    /// One character inside quotes. Expansions in double quotes are refused, and
+    /// so are backslashes there, rather than reproduce which ones the shell keeps.
+    private static func quotedStep(_ char: Character, quote: inout Character?, value: inout String) -> Bool {
+        if char == quote {
+            quote = nil
+        } else if quote == "\"" && "$`\\".contains(char) {
+            return false
+        } else {
+            value.append(char)
+        }
+        return true
+    }
+
+    /// One character outside quotes; returns where the next one starts.
+    private static func unquotedStep(
+        _ text: Substring, at index: Substring.Index, quote: inout Character?, value: inout String
+    ) -> Substring.Index? {
+        let char = text[index]
+        let after = text.index(after: index)
+        if char == "'" || char == "\"" {
+            quote = char
+        } else if char == "\\" {
+            guard after < text.endIndex, !text[after].isNewline else { return nil }
+            value.append(text[after])
+            return text.index(after: after)
+        } else if shellSpecial.contains(char) {
+            return nil
+        } else {
+            value.append(char)
+        }
+        return after
     }
 
     // MARK: - Low-level
