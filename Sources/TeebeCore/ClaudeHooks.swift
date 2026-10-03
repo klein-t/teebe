@@ -31,6 +31,8 @@ public enum ClaudeHookInstaller {
     public enum InstallError: Error {
         /// The settings file exists but is not valid JSON — refuse to touch it.
         case unreadableSettings
+        /// Existing hook configuration cannot be merged without losing data.
+        case invalidHooks
     }
 
     /// Whether every event already carries the teebe ping.
@@ -84,6 +86,7 @@ public enum ClaudeHookInstaller {
             else { throw InstallError.unreadableSettings }
             settings = json
         }
+        try validateHooks(in: settings)
         guard let merged = settingsInstallingPing(into: settings) else { return false }
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -91,6 +94,22 @@ public enum ClaudeHookInstaller {
             withJSONObject: merged, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: .atomic)
         return true
+    }
+
+    /// Refuse unexpected shapes instead of replacing an existing configuration
+    /// with empty defaults. Unknown events and keys are preserved verbatim.
+    private static func validateHooks(in settings: [String: Any]) throws {
+        guard let rawHooks = settings["hooks"] else { return }
+        guard let hooks = rawHooks as? [String: Any] else { throw InstallError.invalidHooks }
+        for event in events {
+            guard let rawGroups = hooks[event] else { continue }
+            guard let groups = rawGroups as? [[String: Any]] else { throw InstallError.invalidHooks }
+            for group in groups {
+                if let rawCommands = group["hooks"], rawCommands as? [[String: Any]] == nil {
+                    throw InstallError.invalidHooks
+                }
+            }
+        }
     }
 
     private static func groupHasPing(_ group: [String: Any]) -> Bool {
