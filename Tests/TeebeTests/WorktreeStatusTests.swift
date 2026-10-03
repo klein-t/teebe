@@ -49,6 +49,8 @@ struct WorktreeStatusTests {
         // Git could be hiding local work: no ✓.
         #expect(status(entry(merged: [dev]) { $0.hasUncheckedFiles = true }).mark == .notMerged)
         #expect(status(entry(merged: [dev]) { $0.hasSubmodules = true }).mark == .notMerged)
+        // A repository with commits of its own inside ignored files would go with the folder.
+        #expect(status(entry(merged: [dev]) { $0.hasIgnoredFiles = true; $0.hasNestedRepository = true }).mark == .notMerged)
         // Ignored files don't block the ✓.
         #expect(status(entry(merged: [dev]) { $0.hasIgnoredFiles = true }).mark == .merged)
     }
@@ -261,6 +263,8 @@ struct WorktreeStatusTests {
         #expect(subtitle(entry { $0.operation = .rebase }) == "Rebase in progress.")
         #expect(subtitle(entry(detached) { $0.operation = .rebase; $0.problem = "Detached HEAD" }) == "Rebase in progress.")
         #expect(subtitle(entry { $0.hasSubmodules = true }) == "It contains a submodule, so Teebe won’t remove it.")
+        #expect(subtitle(entry { $0.hasNestedRepository = true })
+                == "Its ignored files hold a Git repository with commits of its own, so Teebe won’t remove it.")
         #expect(subtitle(entry { $0.hasUncheckedFiles = true })
                 == "Some files are marked unchanged in Git, so Teebe won’t remove it.")
         #expect(subtitle(entry { $0.mergeStatus = .unknown; $0.isInspected = false }) == "Couldn’t check this worktree.")
@@ -341,6 +345,8 @@ struct WorktreeStatusTests {
         #expect(facts(skipped) == ["No uncommitted changes", "Merged into dev", "Couldn’t check remote"])
         #expect(status(entry(merged: [dev]) { $0.hasSubmodules = true }).card.subtitle
                 == "Merged, but it contains a submodule.")
+        #expect(status(entry(merged: [dev]) { $0.hasNestedRepository = true }).card.subtitle
+                == "Merged, but its ignored files hold a Git repository with commits of its own.")
         // Ignored files are ordinary clutter on hover; they only matter at removal.
         let ignored = status(entry(merged: [dev]) { $0.hasIgnoredFiles = true; $0.ignoredPaths = [".build/"] })
         #expect(facts(ignored) == ["No uncommitted changes", "Merged into dev", "Couldn’t check remote"])
