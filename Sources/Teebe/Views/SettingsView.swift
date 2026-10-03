@@ -167,7 +167,15 @@ struct SettingsView: View {
                 }
             }
             Section("Agent notifications") {
-                Toggle("Notify when an agent needs you", isOn: $app.agentNotifications)
+                Toggle(isOn: $app.agentNotifications) {
+                    HStack {
+                        Text("Notify when an agent needs you")
+                        Text("Experimental").font(Typography.secondary).foregroundStyle(.secondary)
+                    }
+                }
+                Text("Off by default. Notification delivery is still being tested.")
+                    .font(Typography.secondary).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Toggle("Play a sound", isOn: $app.notificationSound).disabled(!app.agentNotifications)
                 HStack {
                     Button("Test Notification") { app.testNotification() }.disabled(!app.agentNotifications)

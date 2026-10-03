@@ -38,6 +38,7 @@ struct LowPowerModeTests {
             notify: spy.record,
             agentPing: ping
         ))
+        selector.notificationsEnabled = true
         await selector.selectRepo(repo)
         return Rig(git: git, selector: selector, states: states, spy: spy, box: box, ping: ping)
     }

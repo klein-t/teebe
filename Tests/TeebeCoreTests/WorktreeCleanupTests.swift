@@ -42,6 +42,23 @@ struct WorktreeCleanupTests {
         #expect(CleanupTargets.parse(ref("refs/heads/feature")).mergeTargets(extra: nil).isEmpty)
     }
 
+    @Test("a typed extra branch name resolves to the ref it names, origin's copy first")
+    func extraBranchByName() {
+        func ref(_ name: String) -> String { "\(name)\u{0}s\u{0}\u{0}\n" }
+        let both = CleanupTargets.parse(ref("refs/heads/main") + ref("refs/heads/release")
+            + ref("refs/remotes/origin/release") + ref("refs/remotes/upstream/hotfix"))
+        #expect(both.extraBranch("release")?.ref == "refs/remotes/origin/release")
+        #expect(both.extraBranch(" release ")?.ref == "refs/remotes/origin/release")
+        #expect(both.extraBranch("refs/heads/release")?.ref == "refs/heads/release")
+        #expect(both.extraBranch("upstream/hotfix")?.ref == "refs/remotes/upstream/hotfix")
+        #expect(both.extraBranch("gone") == nil)
+        #expect(both.extraBranch("") == nil)
+        #expect(both.extraBranch(nil) == nil)
+        let localOnly = CleanupTargets.parse(ref("refs/heads/main") + ref("refs/heads/release"))
+        #expect(localOnly.extraBranch("release")?.ref == "refs/heads/release")
+        #expect(localOnly.mergeTargets(extra: "release").map(\.ref) == ["refs/heads/main", "refs/heads/release"])
+    }
+
     @Test("regular and squash merges are confirmed by the appropriate evidence")
     func mergeKinds() async throws {
         let fixture = try GitFixture()
