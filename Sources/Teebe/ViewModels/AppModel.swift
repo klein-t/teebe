@@ -57,12 +57,19 @@ final class AppModel {
     /// The New Worktree sheet's form while it is up; nil when it is closed.
     var newWorktree: NewWorktreeModel?
     /// A worktree row's card asked for from the keyboard: the row, and a count
-    /// that changes on every request so asking again shows it again.
+    /// that changes on every request so asking again shows it again. nil once shown.
     private(set) var worktreeCardReveal: (path: String, count: Int)?
+    private var worktreeCardRevealCount = 0
 
     /// Show this row's status card now, as hovering its mark would.
     func revealWorktreeCard(for path: String) {
-        worktreeCardReveal = (path, (worktreeCardReveal?.count ?? 0) + 1)
+        worktreeCardRevealCount += 1
+        worktreeCardReveal = (path, worktreeCardRevealCount)
+    }
+
+    /// The requested card is up: the request is spent, so a redrawn row can't show it again.
+    func worktreeCardRevealed() {
+        worktreeCardReveal = nil
     }
 
     /// Which section the keyboard currently drives — arrows, Enter and Space act on
@@ -119,7 +126,7 @@ final class AppModel {
         self.floatOnTop = false
         self.appearance = .system
         self.terminal = TerminalChoice(rawValue: self.state.terminalApp ?? "") ?? .terminal
-        self.agentNotifications = self.state.agentNotifications ?? true
+        self.agentNotifications = self.state.agentNotifications ?? false
         self.notificationSound = self.state.notificationSound ?? true
         self.selector.notificationsEnabled = self.agentNotifications
         AgentNotifier.soundEnabled = self.notificationSound
@@ -262,7 +269,7 @@ final class AppModel {
             installClaudeHook()
         case .ask:
             let alert = NSAlert()
-            alert.messageText = "Notify instantly, use less battery?"
+            alert.messageText = "Improve Claude Code activity detection?"
             alert.informativeText = """
             Add a local signal to Claude Code so Teebe checks its status promptly, \
             even while hidden. This optional hook is for Claude Code only. Codex \
@@ -546,6 +553,9 @@ final class AppModel {
             return
         }
         newWorktree = nil
+        // The sheet can be cancelled while git works. If the user has moved to
+        // another project since, leave them there: the new row is listed on return.
+        guard selector.selectedRepo?.path == repo.path else { return }
         // The folder exists now, so standardizing matches the form `git worktree
         // list` reports (firmlinks resolved) and the new row gets selected.
         await selector.selectRepo(repo, preferredWorktreePath: PathUtil.standardized(path))

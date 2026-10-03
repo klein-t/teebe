@@ -4,36 +4,66 @@ import Foundation
 /// status tail, this preserves every turn ending between checks, even when later
 /// output pushes an earlier completion out of the status scanner's tail window.
 final class CodexCompletionJournal: @unchecked Sendable {
+    /// Rollouts written longer ago than this at launch are not read then: any
+    /// targets they hold are already past the attribution window. They are read
+    /// from where they ended only once they grow.
+    static let seedWindow = WorktreeAttribution.targetWindow
+
     private let lock = NSLock()
+    private let open: (URL) -> FileHandle?
     private var beganAt: Date?
+    private var reading = false
     private var cursors: [URL: Cursor] = [:]
     private var endings: [String: Ending] = [:]
 
+    init(open: @escaping (URL) -> FileHandle? = { try? FileHandle(forReadingFrom: $0) }) {
+        self.open = open
+    }
+
+    /// File I/O runs outside the lock; a read that overlaps one in progress
+    /// returns the endings known so far instead of reading the files again.
     func read(files: [URL], paths: [String], now: Date,
               summary: (URL) -> CodexThreadSummary?) -> [AgentTurnEnd] {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        guard !reading else { defer { lock.unlock() }; return attributed(paths: paths) }
+        reading = true
         let baseline = beganAt == nil
         if baseline { beganAt = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970 * 1_000) / 1_000) }
         let boundary = beganAt ?? now
+        var previous = cursors
+        lock.unlock()
+
+        var next: [URL: Cursor] = [:]
+        var found: [Ending] = []
         for url in files {
             guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
                   let size = (attributes[.size] as? NSNumber)?.uint64Value,
                   let inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value else { continue }
-            var cursor = cursors[url] ?? Cursor(seed: summary(url), inode: inode)
+            var cursor: Cursor
             if baseline {
-                cursor.startAtEnd(of: url, size: size)
+                let mtime = attributes[.modificationDate] as? Date ?? now
+                cursor = now.timeIntervalSince(mtime) < Self.seedWindow
+                    ? Cursor(seed: summary(url), inode: inode) : Cursor(inode: inode)
+                cursor.startAtEnd(size: size)
             } else {
+                cursor = previous.removeValue(forKey: url) ?? Cursor(seed: summary(url), inode: inode)
                 if cursor.inode != inode || size < cursor.offset { cursor = Cursor(seed: nil, inode: inode) }
-                for ending in cursor.read(url, size: size) where ending.date >= boundary {
-                    endings[ending.id] = ending
-                }
+                if size > cursor.offset, !cursor.seeded { cursor.adopt(summary(url)) }
+                found += cursor.read(url, size: size, open: open).filter { $0.date >= boundary }
             }
-            cursors[url] = cursor
+            next[url] = cursor
         }
-        let present = Set(files)
-        cursors = cursors.filter { present.contains($0.key) }
+
+        lock.lock(); defer { lock.unlock() }
+        reading = false
+        cursors = next
+        for ending in found { endings[ending.id] = ending }
         endings = endings.filter { now.timeIntervalSince($0.value.date) < 86_400 }
-        return endings.values.compactMap { ending in
+        return attributed(paths: paths)
+    }
+
+    private func attributed(paths: [String]) -> [AgentTurnEnd] {
+        endings.values.compactMap { ending in
             guard let owner = WorktreeAttribution.owner(targets: ending.targets, cwd: ending.cwd, among: paths) else { return nil }
             return AgentTurnEnd(id: ending.id, worktreePath: owner, endedAt: ending.date, completed: ending.completed)
         }
@@ -57,6 +87,10 @@ final class CodexCompletionJournal: @unchecked Sendable {
         var cwd: String?
         var turnID: String?
         var targets: [(String, Date)] = []
+        /// False for a rollout left unread at launch: identity is taken once it grows.
+        var seeded = true
+        /// Set at launch: `offset` may sit inside an unfinished line.
+        var findLineStart = false
 
         init(seed: CodexThreadSummary?, inode: UInt64) {
             self.inode = inode
@@ -66,29 +100,51 @@ final class CodexCompletionJournal: @unchecked Sendable {
             targets = (seed?.targets ?? []).map { ($0, seed?.lastActivity ?? .distantPast) }
         }
 
-        /// Keep an unfinished line at startup so an append that finishes it is
-        /// still parseable. Finished historical records are never read here.
-        mutating func startAtEnd(of url: URL, size: UInt64) {
+        init(inode: UInt64) {
+            self.init(seed: nil, inode: inode)
+            seeded = false
+        }
+
+        /// Its targets are left out: they predate the appended records, which
+        /// bring their own.
+        mutating func adopt(_ seed: CodexThreadSummary?) {
+            seeded = true
+            sessionID = seed?.id ?? ""
+            isUser = seed?.role == .user
+            cwd = seed?.cwd
+        }
+
+        /// Start at the end without reading: finished historical records are
+        /// never read, and an unfinished line is found once the file grows.
+        mutating func startAtEnd(size: UInt64) {
             offset = size
-            guard size > 0, let handle = try? FileHandle(forReadingFrom: url) else { return }
-            defer { try? handle.close() }
-            guard (try? handle.seek(toOffset: size - 1)) != nil,
+            findLineStart = size > 0
+        }
+
+        /// Step back to the start of the line `offset` sits inside, so an append
+        /// that finishes it is still parseable.
+        private mutating func rewindToLineStart(_ handle: FileHandle) {
+            guard (try? handle.seek(toOffset: offset - 1)) != nil,
                   let last = try? handle.read(upToCount: 1), last.first != 10 else { return }
-            let count = min(size, 8 * 1_024 * 1_024)
-            guard (try? handle.seek(toOffset: size - count)) != nil,
+            let count = min(offset, 8 * 1_024 * 1_024)
+            guard (try? handle.seek(toOffset: offset - count)) != nil,
                   let data = try? handle.read(upToCount: Int(count)) else { return }
             if let newline = data.lastIndex(of: 10) {
-                partial = Data(data.suffix(from: newline + 1))
-            } else if count == size {
-                partial = data
+                offset -= UInt64(data.distance(from: newline, to: data.endIndex) - 1)
+            } else if count == offset {
+                offset = 0
             } else {
                 droppingLine = true
             }
         }
 
-        mutating func read(_ url: URL, size: UInt64) -> [Ending] {
-            guard size > offset, let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        mutating func read(_ url: URL, size: UInt64, open: (URL) -> FileHandle?) -> [Ending] {
+            guard size > offset, let handle = open(url) else { return [] }
             defer { try? handle.close() }
+            if findLineStart {
+                findLineStart = false
+                rewindToLineStart(handle)
+            }
             guard (try? handle.seek(toOffset: offset)) != nil else { return [] }
             var result: [Ending] = []
             while offset < size {

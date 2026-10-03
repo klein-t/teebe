@@ -5,6 +5,17 @@ import AppKit
 /// the Settings test checks the OS permission and reports delivery errors.
 enum AgentNotifier {
     @MainActor static var soundEnabled = true
+    /// macOS hides a notification when its app is frontmost unless the app says
+    /// otherwise; agent notices matter just as much while Teebe is in front.
+    static let foregroundPresentation: UNNotificationPresentationOptions = [.banner, .sound, .list]
+    /// Notification Center keeps only a weak reference to its delegate.
+    private static let presenter = ForegroundPresenter()
+
+    /// Call before launch finishes, so a notification arriving at launch is covered.
+    @MainActor static func showWhileFrontmost() {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        UNUserNotificationCenter.current().delegate = presenter
+    }
 
     @MainActor static func post(title: String, body: String) {
         post(title: title, body: body, completion: { _ in })
@@ -28,9 +39,16 @@ enum AgentNotifier {
             content.sound = sound ? .default : nil
             center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)) { error in
                 Task { @MainActor in
-                    completion(error == nil ? "Sent to Notification Center. Focus may silence the banner." : "macOS couldn’t deliver the notification.")
+                    completion(error == nil ? "Sent. A banner should appear now; if not, check Teebe in Notification Settings." : "macOS couldn’t deliver the notification.")
                 }
             }
         }
+    }
+}
+
+private final class ForegroundPresenter: NSObject, UNUserNotificationCenterDelegate, Sendable {
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler(AgentNotifier.foregroundPresentation)
     }
 }

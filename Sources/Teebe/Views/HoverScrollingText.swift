@@ -4,6 +4,7 @@ import SwiftUI
 /// end until the pointer leaves. No timer or animation runs for unhovered rows.
 struct HoverScrollingText: View {
     let text: String
+    var showsFullNameHelp = true
     @Environment(\.rowHovered) private var hovered
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var available: CGFloat = 0
@@ -32,7 +33,7 @@ struct HoverScrollingText: View {
                     .accessibilityHidden(true)
             }
             .clipped()
-            .help(text)
+            .modifier(FullNameHelp(text: showsFullNameHelp ? text : nil))
             .task(id: ScrollIdentity(text: text, scrolling: scrolling, distance: distance)) {
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
@@ -48,5 +49,12 @@ struct HoverScrollingText: View {
         let text: String
         let scrolling: Bool
         let distance: CGFloat
+    }
+}
+
+private struct FullNameHelp: ViewModifier {
+    let text: String?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let text { content.help(text) } else { content }
     }
 }

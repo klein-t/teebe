@@ -65,7 +65,7 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
         try throwIfNeeded(); removedWorktrees.append((worktreePath, force))
     }
 
-    func fetchOrigin(repoPath: String) async throws { try throwIfNeeded(); fetchedRepos.append(repoPath) }
+    func fetchOrigin(repoPath: String, kind: FetchKind) async throws { try throwIfNeeded(); fetchedRepos.append(repoPath) }
 
     @discardableResult
     func run(_ arguments: [String], in directory: String) async throws -> GitInvocationResult {

@@ -136,6 +136,24 @@ struct ClaudeHookInstallerTests {
         #expect(ClaudeHookInstaller.isInstalled(in: json))
     }
 
+    @Test("valid JSON with malformed hook configuration is left untouched")
+    func malformedHooksUntouched() throws {
+        let samples = [
+            #"{"hooks":"custom"}"#,
+            #"{"hooks":{"Stop":{"command":"audit.sh"}}}"#,
+            #"{"hooks":{"Stop":[{"hooks":"audit.sh"}]}}"#,
+            #"{"hooks":{"Stop":[{"hooks":["audit.sh"]}]}}"#
+        ]
+        for contents in samples {
+            let url = tempSettingsURL()
+            defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try contents.write(to: url, atomically: true, encoding: .utf8)
+            #expect(throws: (any Error).self) { try ClaudeHookInstaller.install(at: url) }
+            #expect(try String(contentsOf: url, encoding: .utf8) == contents)
+        }
+    }
+
     @Test("a malformed settings file throws and is left untouched")
     func malformedFileUntouched() throws {
         let url = tempSettingsURL()

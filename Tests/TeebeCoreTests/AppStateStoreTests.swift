@@ -74,6 +74,44 @@ struct AppStateStoreTests {
         try store.save(AppState(floatOnTop: true))
         #expect(store.load().floatOnTop)
     }
+
+    @Test("unreadable file loads default state and is kept aside instead of overwritten")
+    func unreadableKeptAside() throws {
+        let (url, cleanup) = tempURL(); defer { cleanup() }
+        let folder = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let original = try JSONEncoder().encode(AppState(repositories: [PersistedRepository(path: "/repo")]))
+        try original.write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        let store = AppStateStore(url: url)
+        #expect(store.load() == AppState())
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        let kept = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+            .filter { $0.hasPrefix("state.json.corrupt-") }
+        #expect(kept.count == 1)
+        let saved = folder.appendingPathComponent(try #require(kept.first))
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: saved.path)
+        #expect(try Data(contentsOf: saved) == original)
+    }
+
+    @Test("a file that cannot be read or set aside is never overwritten")
+    func unreadableAndStuckBlocksSaves() throws {
+        let (url, cleanup) = tempURL(); defer { cleanup() }
+        let folder = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        let original = try JSONEncoder().encode(AppState(repositories: [PersistedRepository(path: "/repo")]))
+        try original.write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        // A read-only folder stops the file from being moved aside.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        let store = AppStateStore(url: url)
+        #expect(store.load() == AppState())
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        #expect(throws: (any Error).self) { try store.save(AppState(floatOnTop: true)) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        #expect(try Data(contentsOf: url) == original)
+    }
 }
 
 @Suite("PreviewResolver")
