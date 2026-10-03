@@ -677,17 +677,23 @@ final class SelectorModel {
             startWorktreeActivity()
             await worktree.resumeWatching()
             guard visibilityGeneration == generation else { return }
-            if let repo = selectedRepo {
-                let refs = try? await environment.git.run(["show-ref"], in: repo.path)
-                guard visibilityGeneration == generation, selectedRepo?.path == repo.path else { return }
-                if hiddenRefsChanged || hiddenRefs?.repoPath != repo.path || refs?.succeeded != true || hiddenRefs?.output != refs?.standardOutput {
-                    invalidateMergeChecks()
-                }
-                hiddenRefs = nil
-                hiddenRefsChanged = false
-            }
+            guard await invalidateMergeChecksIfRefsMovedWhileHidden(generation: generation) else { return }
             await refreshWorktrees()
         }
+    }
+
+    /// On return from low power, restart merge checks if refs moved while hidden.
+    /// False when a newer visibility change or project pick took over meanwhile.
+    private func invalidateMergeChecksIfRefsMovedWhileHidden(generation: UUID) async -> Bool {
+        guard let repo = selectedRepo else { return true }
+        let refs = try? await environment.git.run(["show-ref"], in: repo.path)
+        guard visibilityGeneration == generation, selectedRepo?.path == repo.path else { return false }
+        if hiddenRefsChanged || hiddenRefs?.repoPath != repo.path || refs?.succeeded != true || hiddenRefs?.output != refs?.standardOutput {
+            invalidateMergeChecks()
+        }
+        hiddenRefs = nil
+        hiddenRefsChanged = false
+        return true
     }
 
     /// A Claude Code hook pinged. Hooks run a beat before Claude Code records
