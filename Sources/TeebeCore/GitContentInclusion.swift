@@ -74,9 +74,9 @@ struct GitContentInclusion {
     ///   that landed differently (a changed conflict resolution changes its patch),
     ///   confirms nothing;
     /// - both sides are bounded by `commitLimit`.
-    /// A commit is matched only by the same change to the same files, whitespace
-    /// included (Git's own patch-id ignores it, so a re-indent would match a
-    /// different re-indent). An empty commit has no change to match.
+    /// A commit is matched only by the same change to the same file content (see
+    /// `changeSets`), so a commit that landed on a file other work had already
+    /// changed confirms nothing. An empty commit has no change to match.
     private func commitsAreUpstream(base: String, head: String, target: String, repoPath: String) async throws -> Bool {
         let own = try await run(["rev-list", "--parents", "--max-count=\(Self.commitLimit + 1)", "\(base)..\(head)"],
                                 in: repoPath)
@@ -90,70 +90,59 @@ struct GitContentInclusion {
               let count = Int(upstream.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines))
         else { throw CleanupError.gitFailed }
         guard count <= Self.commitLimit else { return false }
-        let mine = try await patches("\(base)..\(head)", in: repoPath)
-        let landed = Set(try await patches("\(base)..\(target)", in: repoPath).compactMap { $0 })
+        let mine = try await changeSets("\(base)..\(head)", in: repoPath)
+        let landed = Set(try await changeSets("\(base)..\(target)", in: repoPath).compactMap { $0 })
         return mine.count == commits.count && mine.allSatisfy { $0.map(landed.contains) ?? false }
     }
 
-    /// The patch of each non-merge commit in `range`, newest first, or nil for a
-    /// commit that changes nothing. Whitespace is kept; only what differs when the
-    /// same change is applied elsewhere is dropped: hunk line numbers and function
-    /// context, and the blob ids of text files (binary files keep theirs, as their
-    /// patch says nothing else about the content).
-    private func patches(_ range: String, in repoPath: String) async throws -> [Data?] {
+    /// The changes of each non-merge commit in `range`, newest first, or nil for a
+    /// commit that changes nothing: every touched path with its exact file mode and
+    /// object before and after, sorted by path. Two commits match only when they make
+    /// the same change to the same file content; a change applied to a file that
+    /// differs anywhere else, or at another place in it, does not. This reads Git's
+    /// raw records, which no diff setting (context lines, prefixes, algorithm,
+    /// external drivers) can reshape.
+    private func changeSets(_ range: String, in repoPath: String) async throws -> [[Change]?] {
         let log = try await run([
-            // Blank context lines keep their leading space, so empty lines only separate.
-            "-c", "diff.suppressBlankEmpty=false",
-            "log", "-p", "--no-merges", "--format=%x00%H", "--no-color", "--no-show-signature",
-            "--full-index", "--no-renames", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none",
+            "log", "--no-merges", "--format=%x00%H", "-z", "--raw", "--no-abbrev", "--no-renames",
+            "--no-color", "--no-show-signature", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none",
             "--max-count=\(Self.commitLimit)", range
         ], in: repoPath)
         guard log.succeeded else { throw CleanupError.gitFailed }
-        var result: [Data?] = []
-        var patch: [Data] = []
-        var file: [Data] = []
-        var started = false
-        func endFile() {
-            let binary = file.contains { $0.starts(with: Data("Binary files ".utf8)) }
-            for line in file {
-                guard !binary, line.starts(with: Data("index ".utf8)) else { patch.append(line); continue }
-                // "index <old>..<new>[ <mode>]": keep only the mode.
-                let fields = line.split(separator: UInt8(ascii: " "))
-                patch.append(Data("index".utf8) + (fields.count == 3 ? Data(" ".utf8) + fields[2] : Data()))
-            }
-            file = []
-        }
+        let tokens = log.standardOutput.split(separator: 0).map { Data($0) }
+        var result: [[Change]?] = []
+        var changes: [Change]?
+        var index = 0
         func endCommit() {
-            endFile()
-            if started { result.append(patch.isEmpty ? nil : Data(patch.joined(separator: [10]))) }
-            patch = []
+            guard let changes else { return }
+            result.append(changes.isEmpty ? nil : changes.sorted { $0.path.lexicographicallyPrecedes($1.path) })
         }
-        for line in log.standardOutput.split(separator: 10).map({ Data($0) }) {
+        while index < tokens.count {
             try Task.checkCancellation()
-            if line.first == 0 {
-                endCommit()
-                started = true
-            } else if line.starts(with: Data("diff ".utf8)) {
-                endFile()
-                file = [line]
-            } else if line.starts(with: Data("@@".utf8)), !file.isEmpty {
-                file.append(Data("@@".utf8))
-            } else if !file.isEmpty {
-                file.append(line)
+            let token = tokens[index]
+            if token.drop(while: { $0 == 10 }).first == UInt8(ascii: ":") {
+                guard changes != nil, index + 1 < tokens.count else { throw CleanupError.gitFailed }
+                let change = try Self.change(header: token, path: tokens[index + 1])
+                changes?.append(change)
+                index += 2
             } else {
-                throw CleanupError.gitFailed
+                guard let text = String(data: token, encoding: .utf8)?.trimmingCharacters(in: .newlines),
+                      [40, 64].contains(text.count), text.allSatisfy(\.isHexDigit) else { throw CleanupError.gitFailed }
+                endCommit()
+                changes = []
+                index += 1
             }
         }
         endCommit()
         return result
     }
 
-    private struct Version: Equatable {
+    private struct Version: Hashable {
         let mode: String
         let object: String
     }
 
-    private struct Change {
+    private struct Change: Hashable {
         let path: Data
         let old: Version
         let new: Version
