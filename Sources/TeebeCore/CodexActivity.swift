@@ -327,7 +327,7 @@ public struct CodexRolloutScanner: AgentActivitySource {
         }
     }
 
-    private static func threadID(of url: URL) -> String {
+    static func threadID(of url: URL) -> String {
         String(url.deletingPathExtension().lastPathComponent.suffix(36))
     }
 

@@ -173,6 +173,83 @@ struct GitContentInclusionTests {
         #expect(try await !check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
     }
 
+    private struct Feature {
+        let folder: URL
+        let first: String
+        let second: String
+    }
+
+    /// A feature with one commit per file, and a main that has moved on since. The
+    /// tests rewrite `one.txt` on main between landing the two, so no main revision
+    /// holds both changes at once.
+    private func landedOneByOne(_ fixture: GitFixture) -> Feature {
+        fixture.commitFile("base.txt", "base")
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.writeFile("one.txt", "one", in: folder)
+        fixture.stage(in: folder)
+        fixture.commit("first", in: folder)
+        let first = fixture.git(["rev-parse", "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines)
+        fixture.writeFile("two.txt", "two", in: folder)
+        fixture.stage(in: folder)
+        fixture.commit("second", in: folder)
+        let second = fixture.git(["rev-parse", "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines)
+        // Main moves first, so a pick is a new commit rather than the same one.
+        fixture.commitFile("main.txt", "main work")
+        return Feature(folder: folder, first: first, second: second)
+    }
+
+    @Test("a branch whose every commit landed separately among other work is included")
+    func everyCommitUpstream() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        let feature = landedOneByOne(fixture)
+        let check = GitContentInclusion(git: ProcessGitClient())
+        fixture.git(["cherry-pick", feature.first])
+        fixture.commitFile("one.txt", "rewritten")
+        #expect(try await !check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
+        fixture.commitFile("other.txt", "other work")
+        fixture.git(["cherry-pick", feature.second])
+        #expect(try await check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
+    }
+
+    @Test("one commit that never landed keeps the branch unconfirmed")
+    func oneCommitNotUpstream() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        let feature = landedOneByOne(fixture)
+        fixture.writeFile("three.txt", "not landed", in: feature.folder)
+        fixture.stage(in: feature.folder)
+        fixture.commit("third", in: feature.folder)
+        fixture.git(["cherry-pick", feature.first])
+        fixture.commitFile("one.txt", "rewritten")
+        fixture.git(["cherry-pick", feature.second])
+        let check = GitContentInclusion(git: ProcessGitClient())
+        #expect(try await !check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
+    }
+
+    @Test("a merge commit on the branch is not confirmed commit by commit")
+    func mergeCommitOnBranch() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        let feature = landedOneByOne(fixture)
+        let side = fixture.root.appendingPathComponent("side")
+        fixture.git(["worktree", "add", "-q", "-b", "side", side.path, "main"])
+        fixture.writeFile("three.txt", "three", in: side)
+        fixture.stage(in: side)
+        fixture.commit("side work", in: side)
+        let sideCommit = fixture.git(["rev-parse", "HEAD"], in: side).trimmingCharacters(in: .whitespacesAndNewlines)
+        fixture.git(["merge", "-q", "--no-ff", "side", "-m", "merge side"], in: feature.folder)
+        fixture.git(["cherry-pick", feature.first])
+        fixture.commitFile("one.txt", "rewritten")
+        fixture.git(["cherry-pick", feature.second])
+        fixture.git(["cherry-pick", sideCommit])
+        // Every commit other than the merge itself is upstream.
+        let cherry = fixture.git(["cherry", "main", "feature"])
+        #expect(!cherry.contains("+"))
+        let check = GitContentInclusion(git: ProcessGitClient())
+        #expect(try await !check.containsChanges(from: "feature", in: "main", repoPath: fixture.repoPath))
+    }
+
     @Test("missing Git link is explained and surviving files are preserved")
     func brokenLink() async throws {
         let fixture = try GitFixture()

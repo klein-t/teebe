@@ -53,6 +53,7 @@ struct AgentReaderSignalTests {
             agentProjectsRootPath: claudeRoot.path, agentExtraWatchPaths: [codexRoot.path],
             notify: spy.record, agentPing: DarwinAgentPingListener(name: channel)))
         selector.agentPingSettle = 0.02
+        selector.notificationsEnabled = true
         await selector.selectRepo(Repository(path: path))
         #expect(selector.info(for: selector.worktrees[0]).agentState == .working)
         await selector.setLowPower(true)
