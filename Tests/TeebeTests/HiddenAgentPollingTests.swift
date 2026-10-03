@@ -82,6 +82,7 @@ struct HiddenAgentPollingTests {
             agentStatuses: probe.states, agentTurnEnds: probe.endings,
             agentProjectsRootPath: "/fake-projects", notify: spy.record))
         model.waitForAgentPoll = clock.wait
+        model.notificationsEnabled = true
         return model
     }
 }
