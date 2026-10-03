@@ -108,6 +108,9 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
     /// from being removed; nil otherwise.
     public var ignoredFiles: IgnoredFiles?
     public var hasSubmodules = false
+    /// Its ignored files hold a Git repository (a `.git` folder or file) with
+    /// commits its own remote branches don't have: removal would delete them.
+    public var hasNestedRepository = false
     public var hasUncheckedFiles = false
     /// The checkout's branch is one of the merge targets.
     public var isTarget = false
@@ -148,7 +151,8 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
     }
 
     private func isFolderRemovable(includingIgnored: Bool) -> Bool {
-        !hasLocalChanges && !hasSubmodules && !hasUncheckedFiles && (!hasIgnoredFiles || includingIgnored) && !isTarget
+        !hasLocalChanges && !hasSubmodules && !hasNestedRepository && !hasUncheckedFiles
+            && (!hasIgnoredFiles || includingIgnored) && !isTarget
             && operation == nil
             && !worktree.isPrimary && !worktree.isLocked && !worktree.isBare && !worktree.isDetached
     }
@@ -348,6 +352,11 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             if entry.hasIgnoredFiles, !entry.hasLocalChanges, !entry.hasSubmodules, !entry.hasUncheckedFiles,
                entry.operation == nil, !worktree.isPrimary, !worktree.isLocked, !worktree.isDetached {
                 entry.ignoredFiles = IgnoredFiles.inventory(in: worktree.path, entries: entry.ignoredPaths)
+                for repository in IgnoredFiles.repositories(in: worktree.path, entries: entry.ignoredPaths)
+                where await holdsOwnCommits(worktree.path + "/" + repository) {
+                    entry.hasNestedRepository = true
+                    break
+                }
             }
             guard !targets.isEmpty else { entry.problem = "No branch to compare against"; return entry }
             let merge = try await mergedTargets(of: entry.worktree.head, among: targets, in: worktree.path)
@@ -371,6 +380,17 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             entry.problem = "Could not inspect this worktree"
         }
         return entry
+    }
+
+    /// Whether the repository at `path` has commits, on its HEAD or a branch, that
+    /// none of its remote branches has: its own work, which deleting the folder
+    /// would lose. A clone a package manager keeps has none; an empty repository
+    /// has none. Anything that can't be read counts as having some.
+    private func holdsOwnCommits(_ path: String) async -> Bool {
+        // Its own `.git` named outright, so a broken one never falls back to the worktree's.
+        guard let result = try? await git.run(["--git-dir=" + path + ".git", "rev-list", "-n", "1", "--ignore-missing",
+                                               "HEAD", "--branches", "--not", "--remotes"], in: path) else { return true }
+        return !result.succeeded || !result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Every target that has `head` as an ancestor. When none does, the first

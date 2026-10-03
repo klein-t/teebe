@@ -364,6 +364,7 @@ enum WorktreeWording {
         if worktree.isDetached { return detachedHead }
         if entry?.hasUncheckedFiles == true { return "Some files are marked unchanged in Git" }
         if entry?.hasSubmodules == true { return "It contains a submodule" }
+        if entry?.hasNestedRepository == true { return "Its ignored files hold a Git repository with commits of its own" }
         return nil
     }
 

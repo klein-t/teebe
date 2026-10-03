@@ -367,4 +367,42 @@ struct WorktreeCleanupTests {
         #expect(!FileManager.default.fileExists(atPath: dev.path))
         #expect(!fixture.git(["rev-parse", "--verify", "dev"]).isEmpty)
     }
+    @Test("a Git repository with commits of its own inside ignored files keeps the worktree")
+    func nestedRepositoryInIgnoredFiles() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile(".gitignore", "*.log\n")
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.commitAndFastForward(branch: "feature", in: folder)
+        // A clone with nothing of its own, as a package manager leaves in a build folder.
+        let clone = folder.appendingPathComponent("deps.log/clone")
+        fixture.git(["clone", "-q", fixture.repoPath, clone.path])
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        func scanned() async throws -> CleanupEntry {
+            try #require(try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
+                .entries.first { $0.worktree.branch == "feature" })
+        }
+        let dependency = try await scanned()
+        #expect(!dependency.hasNestedRepository)
+        #expect(dependency.canRemove(includingIgnored: true))
+        // A commit made in the clone is its own work.
+        fixture.git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "local"], in: clone)
+        #expect(try await scanned().hasNestedRepository)
+        fixture.git(["reset", "-q", "--hard", "origin/main"], in: clone)
+        let nested = folder.appendingPathComponent("nested.log")
+        fixture.git(["init", "-q", nested.path])
+        let empty = try await scanned()
+        #expect(!empty.hasNestedRepository)
+        fixture.writeFile("n.txt", "nested work", in: nested)
+        fixture.stage(in: nested)
+        fixture.git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "nested work"], in: nested)
+        let entry = try await scanned()
+        #expect(entry.hasNestedRepository)
+        #expect(!entry.canRemove(includingIgnored: true))
+        #expect(!entry.canRemoveFolder(includingIgnored: true))
+        await #expect(throws: CleanupError.unsafe) {
+            try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: true, deleteBranch: true)
+        }
+        #expect(FileManager.default.fileExists(atPath: nested.appendingPathComponent("n.txt").path))
+    }
 }
