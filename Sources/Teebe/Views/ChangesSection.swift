@@ -7,6 +7,9 @@ struct ChangesSection: View {
     @Bindable var worktree: WorktreeModel
     @Bindable var preview: PreviewModel
     @Binding var isOpen: Bool
+    /// Height of the change list itself, computed by RootView (which sizes the
+    /// window from the same number) and handed down.
+    let revealHeight: CGFloat
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,15 +20,16 @@ struct ChangesSection: View {
             }
 
             if isOpen {
-                // Hug the rows (the window wraps content); cap at the content height
-                // and scroll inside only when the window is dragged too short.
+                // Hug the rows (the window wraps content) up to the height the divider
+                // was dragged to; scroll inside beyond it.
                 VStack(spacing: 0) {
                     ScrollViewReader { proxy in
-                        ScrollView {
+                        BottomFadingScrollView {
                             changeList
+                                .padding(.bottom, Self.listBottomPadding)
                         }
                         .scrollBounceBehavior(.basedOnSize)
-                        .frame(maxHeight: listContentHeight)
+                        .frame(maxHeight: revealHeight + Self.listBottomPadding)
                         // Follow the selection when ↑/↓ moves it past the visible edge.
                         // Snap, not animate (see FilesSection): an animated scrollTo
                         // reads as a bounce against the row highlight + relayout.
@@ -36,18 +40,11 @@ struct ChangesSection: View {
                     }
                 }
                 .padding(.top, Self.listTopPadding)
-                .padding(.bottom, Self.listBottomPadding)
                 .transition(.opacity)
             }
         }
         .clipped()
     }
-
-    /// Tallest the change list hugs before it scrolls internally. Bounds how much the
-    /// window grows for a worktree with many changes, so browsing between worktrees with
-    /// very different change counts doesn't lurch the window. RootView's
-    /// `changesContentHeight` mirrors this cap so the window math and the view agree.
-    static let maxListHeight: CGFloat = 144   // ~6 rows, then scroll
 
     /// Row/padding metrics. RootView's `changesContentHeight` derives the window's
     /// wrap height from these — keep every literal here so the two can't desync.
@@ -55,20 +52,14 @@ struct ChangesSection: View {
     static let listTopPadding: CGFloat = 8
     static let listBottomPadding: CGFloat = 6
 
-    /// Natural height of the change list, capped at `maxListHeight` so the section
-    /// hugs its rows up to the cap and scrolls beyond it.
-    private var listContentHeight: CGFloat {
-        let natural = CGFloat(max(worktree.changeCount, 1)) * Self.rowHeight
-        return min(natural, Self.maxListHeight)
-    }
-
     private var changeList: some View {
         VStack(spacing: 0) {
             ForEach(worktree.changes) { change in
                 changeRow(change, indented: false)
             }
             if worktree.changeCount == 0 {
-                Text("No changes")
+                Text(worktree.isFolderMissing ? "Folder missing" : (app.selector.isLoading || worktree.isLoading) ? "Checking for changes…"
+                     : worktree.errorMessage != nil ? "Couldn’t check changes" : "No changes")
                     .font(.system(size: 12)).foregroundStyle(Palette.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 30).padding(.vertical, 4)
@@ -82,15 +73,20 @@ struct ChangesSection: View {
             Image(systemName: change.iconName)
                 .font(.system(size: 11))
                 .foregroundStyle(selected ? .white : Palette.secondaryText)
-            Text((change.path as NSString).lastPathComponent)
-                .font(.system(size: 13)).lineLimit(1)
+            HoverScrollingText(text: (change.path as NSString).lastPathComponent)
+                .font(.system(size: 13))
+            if worktree.changes.filter({ ($0.path as NSString).lastPathComponent == (change.path as NSString).lastPathComponent }).count > 1 {
+                Text((change.path as NSString).deletingLastPathComponent)
+                    .font(Typography.secondary).foregroundStyle(selected ? .white.opacity(0.75) : .secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
             Spacer(minLength: 4)
             StatusLetter(change: change)
         }
         // Leading 30 lines the icon up with the FILES rows' icon column below.
         .padding(.leading, indented ? 46 : 30).padding(.trailing, 11).frame(height: Self.rowHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(selected ? Palette.accent : .clear)
+        .rowHighlight(isSelected: selected)
         .foregroundStyle(selected ? .white : .primary)
         // Snap, no cross-fade — avoids the trailing highlight when arrowing fast.
         .contentShape(Rectangle())

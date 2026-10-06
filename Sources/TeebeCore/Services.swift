@@ -16,8 +16,11 @@ public struct WorktreeService: Sendable {
         }
     }
 
-    public func addWorktree(in repo: Repository, at path: String, branch: String, createBranch: Bool = true) async throws {
-        try await git.addWorktree(repoPath: repo.path, path: path, branch: branch, createBranch: createBranch)
+    /// `startPoint` is the ref a newly created branch starts from; nil means HEAD.
+    public func addWorktree(in repo: Repository, at path: String, branch: String,
+                            createBranch: Bool = true, startPoint: String? = nil) async throws {
+        try await git.addWorktree(repoPath: repo.path, path: path, branch: branch,
+                                  createBranch: createBranch, startPoint: startPoint)
     }
 
     public func removeWorktree(in repo: Repository, worktree: Worktree, force: Bool = false) async throws {
@@ -44,13 +47,11 @@ public struct StatusService: Sendable {
     /// single `dir/` entry). Feeds the file tree's "show ignored" toggle.
     public func ignoredPaths(worktreePath: String) async throws -> [String] {
         let result = try await git.run(
-            ["status", "--porcelain=v2", "-z", "--ignored", "--untracked-files=no"],
+            ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
             in: worktreePath
         )
         guard result.succeeded else { return [] }
-        return StatusParser.parse(result.stdoutString).changes
-            .filter { $0.worktreeStatus == .ignored }
-            .map(\.path)
+        return result.stdoutString.split(separator: "\0").map(String.init)
     }
 }
 

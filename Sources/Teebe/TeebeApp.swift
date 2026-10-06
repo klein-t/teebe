@@ -8,6 +8,7 @@ import TeebeCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        AgentNotifier.showWhileFrontmost()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Don't override `applicationIconImage`: that replaces the bundle's
@@ -71,12 +72,13 @@ struct TeebeApp: App {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesCommand(updater: updater)
                 WhatsNewMenuCommand()
-                KeyboardShortcutsMenuCommand()
             }
+            CommandGroup(after: .help) { KeyboardShortcutsMenuCommand() }
+            MainWindowCommands()
         }
 
         // Separate floating Quick Look panel (D4 / PRD §5.2).
-        Window("Quick Look", id: "preview") {
+        Window("Preview Changes", id: "preview") {
             PreviewPanel(preview: preview, app: app)
         }
         .windowResizability(.contentSize)
@@ -99,7 +101,7 @@ struct TeebeApp: App {
 
         // Adds "Settings…" (⌘,) to the app menu.
         Settings {
-            SettingsView(app: app)
+            SettingsView(app: app, updater: updater)
         }
     }
 }
@@ -134,6 +136,13 @@ private struct RootWindowContent: View {
                 for: NSApplication.didChangeOcclusionStateNotification
             )) { _ in
                 app.setBackgrounded(!NSApp.occlusionState.contains(.visible))
+            }
+            // Coming back to the app is the moment its view of the remote is most
+            // likely stale. Rate-limited and silent; see RemoteRefresher.
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSApplication.didBecomeActiveNotification
+            )) { _ in
+                Task { await app.refreshRemotes(force: false) }
             }
     }
 }

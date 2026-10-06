@@ -12,6 +12,7 @@ struct LowPowerModeTests {
     let repo = Repository(path: "/repo")
 
     struct Rig {
+        var git: FakeGitClient
         var selector: SelectorModel
         var states: FakeAgentStates
         var spy: NotificationSpy
@@ -37,17 +38,19 @@ struct LowPowerModeTests {
             notify: spy.record,
             agentPing: ping
         ))
+        selector.notificationsEnabled = true
         await selector.selectRepo(repo)
-        return Rig(selector: selector, states: states, spy: spy, box: box, ping: ping)
+        return Rig(git: git, selector: selector, states: states, spy: spy, box: box, ping: ping)
     }
 
-    /// The three live watchers after a repo is selected: repo git dir, Claude
-    /// projects root, and the active worktree's tree.
+    /// The four live watchers after a repo is selected: repo git dir, Claude
+    /// projects root, the active worktree's tree, and every worktree's files.
     func liveWatchers(_ box: WatcherBox) -> [FakeWatcher] {
         [
             box.watching(".git"),
             box.watching("projects"),
-            box.watchers.last { $0.watchedPaths == ["/repo"] }
+            box.watchers.last { $0.watchedPaths == ["/repo"] },
+            box.watchers.last { $0.watchedPaths == ["/repo", "/repo-wt"] }
         ].compactMap { $0 }
     }
 
@@ -63,7 +66,7 @@ struct LowPowerModeTests {
     func enteringStopsWatchers() async {
         let rig = await makeRig()
         let watchers = liveWatchers(rig.box)
-        #expect(watchers.count == 3)
+        #expect(watchers.count == 4)
         #expect(watchers.allSatisfy { $0.isWatching })
 
         await rig.selector.setLowPower(true)
@@ -87,6 +90,22 @@ struct LowPowerModeTests {
         #expect(rig.spy.posted.count == 1)
     }
 
+    @Test("a ping that lands before Claude Code records the new state is followed by a catch-up re-derive")
+    func pingCatchUp() async throws {
+        let rig = await makeRig()
+        rig.selector.agentPingSettle = 0.2
+        await rig.selector.setLowPower(true)
+
+        // UserPromptSubmit pings before the prompt is logged or the session
+        // registry turns busy; the state only changes a moment later.
+        rig.ping.fire()
+        try await Task.sleep(for: .milliseconds(50))
+        rig.states["/repo-wt"] = .working
+        try await Task.sleep(for: .milliseconds(500))
+
+        #expect(rig.selector.info(for: rig.selector.worktrees[1]).agentState == .working)
+    }
+
     @Test("exiting low power restarts watchers and re-derives state")
     func exitingRestartsAndRefreshes() async {
         let rig = await makeRig()
@@ -97,8 +116,138 @@ struct LowPowerModeTests {
         await rig.selector.setLowPower(false)
 
         #expect(!rig.selector.isLowPower)
-        #expect(liveWatchers(rig.box).filter(\.isWatching).count == 3)
+        #expect(liveWatchers(rig.box).filter(\.isWatching).count == 4)
         #expect(rig.selector.info(for: rig.selector.worktrees[1]).agentState == .working)
+    }
+
+    @Test("returning to a visible window invalidates merge checks missed while hidden")
+    func exitingInvalidatesMergeChecks() async {
+        let rig = await makeRig()
+        await rig.selector.setLowPower(true)
+        let revision = rig.selector.mergeRevision
+
+        rig.git.showRefOutput = "new-oid refs/remotes/origin/dev\n"
+        // No ref watcher event is delivered while hidden, including a merge
+        // committed externally. Visibility must recheck local refs without fetching.
+        await rig.selector.setLowPower(false)
+
+        #expect(rig.selector.mergeRevision > revision)
+    }
+
+    @Test("unreadable refs invalidate merge checks conservatively on return")
+    func unreadableRefs() async {
+        let rig = await makeRig()
+        rig.git.showRefExitCode = 128
+        await rig.selector.setLowPower(true)
+        let revision = rig.selector.mergeRevision
+        await rig.selector.setLowPower(false)
+        #expect(rig.selector.mergeRevision > revision)
+    }
+
+    @Test("a hidden ref read completing after a repository switch cannot stop its watchers")
+    func staleHiddenRead() async {
+        let rig = await makeRig()
+        let started = Gate()
+        let finish = Gate()
+        rig.git.runGate = { args, _ in
+            if args == ["show-ref"] { await started.open(); await finish.wait() }
+        }
+        let hiding = Task { await rig.selector.setLowPower(true) }
+        await started.wait()
+        await rig.selector.selectRepo(Repository(path: "/another"))
+        let watcher = rig.box.watching(".git")
+        await finish.open()
+        await hiding.value
+        #expect(watcher?.isWatching != true)
+    }
+
+    @Test("an obsolete hidden ref read cannot overwrite a newer hidden baseline")
+    func staleVisibilityRead() async {
+        let rig = await makeRig()
+        let started = Gate()
+        let finish = Gate()
+        rig.git.runGate = { args, _ in
+            if args == ["show-ref"] { await started.open(); await finish.wait() }
+        }
+        let firstHide = Task { await rig.selector.setLowPower(true) }
+        await started.wait()
+        rig.git.runGate = nil
+        rig.git.showRefOutput = "current refs/heads/main\n"
+        await rig.selector.setLowPower(false)
+        await rig.selector.setLowPower(true)
+        rig.git.showRefOutput = "obsolete refs/heads/main\n"
+        await finish.open()
+        await firstHide.value
+        rig.git.showRefOutput = "current refs/heads/main\n"
+        let revision = rig.selector.mergeRevision
+        await rig.selector.setLowPower(false)
+        #expect(rig.selector.mergeRevision == revision)
+    }
+
+    @Test("refs changed before watcher shutdown are rechecked even when its pending event is dropped")
+    func pendingRefEventAtHideBoundary() async {
+        let rig = await makeRig()
+        let revision = rig.selector.mergeRevision
+        // The last visible scan read old refs. Git now changes them, but the
+        // watcher's debounce has not delivered the event before the window hides.
+        rig.git.showRefOutput = "new-oid refs/heads/main\n"
+        await rig.selector.setLowPower(true)
+        #expect(rig.selector.mergeRevision == revision)
+        await rig.selector.setLowPower(false)
+        #expect(rig.selector.mergeRevision > revision)
+        let refreshed = rig.selector.mergeRevision
+        await rig.selector.setLowPower(true)
+        await rig.selector.setLowPower(false)
+        #expect(rig.selector.mergeRevision == refreshed)
+    }
+
+    /// Counts `show-ref` reads so a test can hold one specific read.
+    private actor RefReads {
+        private var count = 0
+        func next() -> Int { count += 1; return count }
+    }
+
+    @Test("a ref change seen while hidden survives hiding again before the return check runs")
+    func hiddenRefChangeSurvivesQuickRehide() async {
+        let rig = await makeRig()
+        let revision = rig.selector.mergeRevision
+        rig.git.showRefOutput = "new-oid refs/heads/main\n"
+        await rig.selector.setLowPower(true)
+        // Hold the return check's read (the second one on the way back), after the
+        // visible baseline was already re-read with the new refs.
+        let reads = RefReads()
+        let started = Gate()
+        let finish = Gate()
+        rig.git.runGate = { args, _ in
+            guard args == ["show-ref"] else { return }
+            if await reads.next() == 2 { await started.open(); await finish.wait() }
+        }
+        let showing = Task { await rig.selector.setLowPower(false) }
+        await started.wait()
+        await rig.selector.setLowPower(true)
+        await finish.open()
+        await showing.value
+        #expect(rig.selector.mergeRevision == revision)
+        await rig.selector.setLowPower(false)
+        #expect(rig.selector.mergeRevision > revision)
+    }
+
+    @Test("hiding stops every watcher even when the project changes during the hidden ref read")
+    func repoSwitchDuringHideStillStopsWatchers() async {
+        let rig = await makeRig()
+        let started = Gate()
+        let finish = Gate()
+        rig.git.runGate = { args, _ in
+            if args == ["show-ref"] { await started.open(); await finish.wait() }
+        }
+        let hiding = Task { await rig.selector.setLowPower(true) }
+        await started.wait()
+        rig.git.runGate = nil
+        await rig.selector.selectRepo(Repository(path: "/another"))
+        await finish.open()
+        await hiding.value
+        #expect(rig.selector.isLowPower)
+        #expect(rig.box.watchers.allSatisfy { !$0.isWatching })
     }
 
     @Test("setLowPower is idempotent")

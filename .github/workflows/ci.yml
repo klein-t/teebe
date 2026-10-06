@@ -5,12 +5,22 @@ on:
     branches: [main, dev]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-test:
     name: Build & Test (macOS)
+    timeout-minutes: 15
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Show Swift version
         run: swift --version
@@ -24,13 +34,16 @@ jobs:
       # @testable view-model suites, so a separate `xcodebuild test` is not needed
       # at this stage.
       - name: Test (with coverage)
-        run: swift test -v --enable-code-coverage
+        # AppKit window suites share a process; isolate their window lifecycle.
+        run: swift test -v --enable-code-coverage --no-parallel
 
   lint:
     name: SwiftLint
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Install SwiftLint
         run: brew install swiftlint
       - name: Lint

@@ -57,7 +57,6 @@ enum Brand {
 /// Shared color palette.
 enum Palette {
     static let accent = Color(red: 0x0A / 255, green: 0x84 / 255, blue: 0xFF / 255)
-    static let live = Color(red: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255)
     static let amber = Color(red: 0xC9 / 255, green: 0x96 / 255, blue: 0x1A / 255)
     static let green = Color(red: 0x3F / 255, green: 0x96 / 255, blue: 0x55 / 255)
     static let red = Color(red: 0xD7 / 255, green: 0x00 / 255, blue: 0x15 / 255)
@@ -75,6 +74,22 @@ enum Palette {
     }
 }
 
+/// The type scale of the worktree list, its hover help and its sheets: one
+/// system font (SF Pro), three sizes. Code and paths keep their monospaced design
+/// elsewhere on purpose.
+enum Typography {
+    /// Worktree row names.
+    static let rowName = Font.system(size: 13, weight: .medium)
+    /// Dialog headings.
+    static let heading = Font.system(size: 13, weight: .semibold)
+    /// Tooltip text, card titles (semibold), sheet text and facts.
+    static let body = Font.system(size: 12)
+    static let bodyEmphasis = Font.system(size: 12, weight: .semibold)
+    /// Card subtitles and facts, sync arrows, group headings (semibold) and counts.
+    static let secondary = Font.system(size: 11)
+    static let secondaryEmphasis = Font.system(size: 11, weight: .semibold)
+}
+
 /// A monospace colored git-status letter (M/A/D/U…), matching the reference.
 struct StatusLetter: View {
     let change: FileChange
@@ -83,69 +98,9 @@ struct StatusLetter: View {
             Text(letter)
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(Palette.statusColor(change.primaryStatus))
-        }
-    }
-}
-
-/// The worktree's whole story in one dot: a pulsing green while an agent is
-/// working there (or files are being written), steady amber when the agent's
-/// turn ended or stalled — it needs you — and dim gray when no conversation
-/// points at the worktree.
-///
-/// The pulse is driven off state via `onChange`, not a one-shot `onAppear`, so
-/// a worktree that goes live *after* the row appears starts pulsing, and one that
-/// goes idle stops — the previous version latched whatever state it saw at appear.
-struct LiveDot: View {
-    /// Files are being written in the worktree right now (fs watcher).
-    var active: Bool
-    /// What the Claude session pointing at the worktree is doing.
-    var agent: AgentActivityState = .idle
-    @State private var animate = false
-
-    /// Amber never pulses — "needs you" is precisely the moment nothing is
-    /// happening, and it outranks stray fs activity (the agent's last writes
-    /// would otherwise flash green for a beat after its turn ended).
-    private var pulsing: Bool { agent == .working || (agent == .idle && active) }
-
-    private var fill: Color {
-        if agent == .needsAttention { return Palette.amber }
-        return pulsing ? Palette.live : Color(white: 0.79)
-    }
-
-    var body: some View {
-        Circle()
-            .fill(fill)
-            .frame(width: 7, height: 7)
-            .overlay(ring)
-            .animation(.easeInOut(duration: 0.25), value: fill)   // fade the fill on state change
-            .onAppear { syncPulse() }
-            .onChange(of: pulsing) { _, _ in syncPulse() }
-            .help(helpText)
-    }
-
-    private var helpText: String {
-        switch agent {
-        case .working: return "A coding agent is working in this worktree"
-        case .needsAttention: return "The agent finished its turn or stalled — it needs you"
-        case .idle: return active ? "Files are changing in this worktree" : ""
-        }
-    }
-
-    /// The expanding halo. Hidden entirely while idle so a stopped pulse can't
-    /// leave a faint ring frozen mid-cycle.
-    private var ring: some View {
-        Circle()
-            .stroke(Palette.live, lineWidth: 2)
-            .scaleEffect(animate ? 2.4 : 1)
-            .opacity(animate ? 0 : 0.5)
-            .opacity(pulsing ? 1 : 0)
-    }
-
-    private func syncPulse() {
-        if pulsing {
-            withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { animate = true }
-        } else {
-            withAnimation(.easeOut(duration: 0.2)) { animate = false }
+                .frame(width: 16, height: 20)
+                .hoverHelp(change.primaryStatus.helpText)
+                .accessibilityLabel(change.primaryStatus.helpText)
         }
     }
 }
@@ -166,41 +121,35 @@ struct PressableButtonStyle: ButtonStyle {
     }
 }
 
-/// Shared hover-chip + press chrome for compact glyph controls. A bare 11–13pt
+/// Shared hit area + press chrome for compact glyph controls. A bare 11–13pt
 /// SF Symbol gives an ~11×11 hit target; this wraps it in a comfortable hit area
-/// with a subtle hover background and (for buttons) a `0.96` press scale.
+/// with a `0.96` press scale. The paired `hoverHelp` owns hover feedback and the
+/// tooltip together, so native tracking drives both through the same path.
 private struct ChipBody<Label: View>: View {
     let size: CGSize
     var pressed = false
     @ViewBuilder var label: () -> Label
-    @State private var hovering = false
 
     var body: some View {
         label()
             .frame(minWidth: size.width, minHeight: size.height)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(hovering ? 0.08 : 0))
-            )
             .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .scaleEffect(pressed ? 0.96 : 1)
-            .animation(.easeOut(duration: 0.12), value: hovering)
             .animation(.easeOut(duration: 0.12), value: pressed)
-            .onHover { hovering = $0 }
     }
 }
 
-/// Compact glyph **button** style: comfortable hit area, hover chip, press scale.
+/// Compact glyph **button** style: comfortable hit area and press scale.
 /// Replaces bare `.buttonStyle(.plain)` on toolbar-style icon buttons. Default
 /// size is sized to stay within a 32pt header without colliding with neighbours.
 struct IconButtonStyle: ButtonStyle {
-    var size = CGSize(width: 22, height: 28)
+    var size = CGSize(width: 28, height: 28)
     func makeBody(configuration: Configuration) -> some View {
         ChipBody(size: size, pressed: configuration.isPressed) { configuration.label }
     }
 }
 
-/// The same hit area + hover chip for controls that can't take a `ButtonStyle`
+/// The same hit area for controls that can't take a `ButtonStyle`
 /// (notably `Menu`). No press scale — menus open on press, so a scale would fight
 /// the popover.
 private struct HoverChipModifier: ViewModifier {
@@ -213,7 +162,7 @@ private struct HoverChipModifier: ViewModifier {
 extension View {
     /// Wrap a compact control (e.g. a `Menu` label) in a hit area + hover chip
     /// matching `IconButtonStyle`.
-    func hoverChip(_ size: CGSize = CGSize(width: 22, height: 28)) -> some View {
+    func hoverChip(_ size: CGSize = CGSize(width: 28, height: 28)) -> some View {
         modifier(HoverChipModifier(size: size))
     }
 }
@@ -270,9 +219,4 @@ struct SectionHeader<Trailing: View>: View {
         // bounce). The header just reports the toggle.
         .onTapGesture { onToggle() }
     }
-}
-
-extension SelectorModel.WorktreeInfo {
-    /// "↓behind ↑ahead" sync indicator.
-    var syncText: String { "↓\(behind) ↑\(ahead)" }
 }

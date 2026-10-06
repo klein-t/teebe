@@ -1,17 +1,22 @@
 import Foundation
 
-/// Installs teebe's ping hook into Claude Code's user settings, and names the
-/// darwin-notification channel both sides share.
+/// Shared macOS signal transport. Any agent integration can publish this signal;
+/// the bundled settings installer below currently targets Claude Code.
 ///
 /// The hook is push instead of poll: Claude Code runs `notifyutil -p` at the
 /// moments teebe cares about, so the app can idle in the background (no FSEvents
 /// stream over `~/.claude/projects`, no fast poll) and still badge/notify the
 /// instant an agent finishes. `notifyutil` is a stock macOS binary; the ping
 /// carries no payload and costs microseconds.
+public enum AgentSignal {
+    public static let channel = "dev.teebe.agent"
+    public static let command = "/usr/bin/notifyutil -p \(channel)"
+}
+
 public enum ClaudeHookInstaller {
     /// The darwin-notification channel (`notifyutil -p <channel>`).
-    public static let channel = "dev.teebe.agent"
-    public static let pingCommand = "notifyutil -p \(channel)"
+    public static let channel = AgentSignal.channel
+    public static let pingCommand = AgentSignal.command
     /// Hook events that mark the transitions teebe surfaces: the turn ending
     /// (Stop), the agent asking for the user (Notification), and the user
     /// answering (UserPromptSubmit — clears a "needs you" badge promptly).
@@ -26,6 +31,8 @@ public enum ClaudeHookInstaller {
     public enum InstallError: Error {
         /// The settings file exists but is not valid JSON — refuse to touch it.
         case unreadableSettings
+        /// Existing hook configuration cannot be merged without losing data.
+        case invalidHooks
     }
 
     /// Whether every event already carries the teebe ping.
@@ -59,6 +66,14 @@ public enum ClaudeHookInstaller {
         return isInstalled(in: json)
     }
 
+    /// Global Claude hook disabling is separate from whether our commands exist.
+    public static func hooksDisabled(at url: URL = defaultSettingsURL) -> Bool {
+        guard let data = try? Data(contentsOf: url),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return false }
+        return json["disableAllHooks"] as? Bool == true
+    }
+
     /// Merge the ping hook into the settings file, creating it when absent.
     /// Returns false when it was already fully installed. A file that exists but
     /// can't be parsed as a JSON object throws and is left byte-for-byte intact.
@@ -71,6 +86,7 @@ public enum ClaudeHookInstaller {
             else { throw InstallError.unreadableSettings }
             settings = json
         }
+        try validateHooks(in: settings)
         guard let merged = settingsInstallingPing(into: settings) else { return false }
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -80,15 +96,36 @@ public enum ClaudeHookInstaller {
         return true
     }
 
+    /// Refuse unexpected shapes instead of replacing an existing configuration
+    /// with empty defaults. Unknown events and keys are preserved verbatim.
+    private static func validateHooks(in settings: [String: Any]) throws {
+        guard let rawHooks = settings["hooks"] else { return }
+        guard let hooks = rawHooks as? [String: Any] else { throw InstallError.invalidHooks }
+        for event in events {
+            guard let rawGroups = hooks[event] else { continue }
+            guard let groups = rawGroups as? [[String: Any]] else { throw InstallError.invalidHooks }
+            for group in groups {
+                if let rawCommands = group["hooks"], rawCommands as? [[String: Any]] == nil {
+                    throw InstallError.invalidHooks
+                }
+            }
+        }
+    }
+
     private static func groupHasPing(_ group: [String: Any]) -> Bool {
-        ((group["hooks"] as? [[String: Any]]) ?? [])
-            .contains { ($0["command"] as? String)?.contains(channel) == true }
+        let matcher = group["matcher"] as? String ?? ""
+        guard matcher.isEmpty || matcher == "*" else { return false }
+        return ((group["hooks"] as? [[String: Any]]) ?? []).contains { hook in
+            guard hook["type"] as? String == "command", let command = hook["command"] as? String else { return false }
+            let normalized = command.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            return normalized == pingCommand || normalized == "notifyutil -p \(channel)"
+        }
     }
 }
 
 // MARK: - Ping listener
 
-/// Listens for the darwin notification the Claude Code hook pings.
+/// Listens for the shared Darwin notification published by an agent integration.
 public protocol AgentPingListening {
     func start(_ handler: @escaping @Sendable () -> Void)
     func stop()
@@ -102,7 +139,7 @@ public final class DarwinAgentPingListener: AgentPingListening, @unchecked Senda
     private var handler: (@Sendable () -> Void)?
     private var isObserving = false
 
-    public init(name: String = ClaudeHookInstaller.channel) {
+    public init(name: String = AgentSignal.channel) {
         self.name = name
     }
 

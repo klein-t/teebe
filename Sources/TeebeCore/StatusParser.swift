@@ -12,6 +12,7 @@ public enum StatusParser {
         let tokens = output.split(separator: "\u{0}", omittingEmptySubsequences: false).map(String.init)
 
         var result = StatusResult()
+        var hasAheadBehind = false
         var index = 0
         while index < tokens.count {
             let token = tokens[index]
@@ -21,6 +22,7 @@ public enum StatusParser {
             let kind = token.first!
             switch kind {
             case "#":
+                hasAheadBehind = hasAheadBehind || token.hasPrefix("# branch.ab ")
                 parseHeader(token, into: &result)
             case "1":
                 if let change = parseOrdinary(token) { result.changes.append(change) }
@@ -41,6 +43,8 @@ public enum StatusParser {
                 break
             }
         }
+        // `branch.ab` is only written while the upstream commit exists.
+        result.isUpstreamGone = result.upstream != nil && !hasAheadBehind
         return result
     }
 
