@@ -4,7 +4,7 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [0.8.0] - 2026-10-03
+## [0.8.0] - 2026-10-06
 
 ### Added
 - **Worktree status at a glance.** Each worktree shows a single mark: an
