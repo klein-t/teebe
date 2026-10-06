@@ -4,6 +4,13 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.1] - 2026-10-06
+
+### Fixed
+- **Lower background CPU use.** teebe uses much less CPU in the background
+  when you have many recent Codex sessions. It no longer re-reads every Codex
+  session file on each status check.
+
 ## [0.8.0] - 2026-10-06
 
 ### Added
