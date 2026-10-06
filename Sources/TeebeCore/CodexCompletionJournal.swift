@@ -36,12 +36,16 @@ final class CodexCompletionJournal: @unchecked Sendable {
         var next: [URL: Cursor] = [:]
         var found: [Ending] = []
         for url in files {
-            guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-                  let size = (attributes[.size] as? NSNumber)?.uint64Value,
-                  let inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value else { continue }
+            // One stat per rollout on every poll: `attributesOfItem` also reads
+            // extended attributes, which made this the most expensive step.
+            var info = stat()
+            guard stat(url.path, &info) == 0 else { continue }
+            let size = UInt64(info.st_size)
+            let inode = UInt64(info.st_ino)
             var cursor: Cursor
             if baseline {
-                let mtime = attributes[.modificationDate] as? Date ?? now
+                let mtime = Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)
+                    + TimeInterval(info.st_mtimespec.tv_nsec) / 1_000_000_000)
                 cursor = now.timeIntervalSince(mtime) < Self.seedWindow
                     ? Cursor(seed: summary(url), inode: inode) : Cursor(inode: inode)
                 cursor.startAtEnd(size: size)

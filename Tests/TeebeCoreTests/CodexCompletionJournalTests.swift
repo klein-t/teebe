@@ -115,6 +115,30 @@ struct CodexCompletionJournalTests {
         #expect(ends.first?.worktreePath == "/repo")
     }
 
+    @Test func aPollListsRolloutsOnceAndTheNextPollReadsFilesAddedMeanwhile() throws {
+        let rig = try Fixture(); defer { rig.cleanUp() }
+        let scanner = CodexRolloutScanner(sessionsRoot: rig.root)
+        _ = scanner.turnEnds(forWorktreePaths: ["/repo"], now: epoch)
+        func addRollout(_ id: String, endingAt date: Date) throws {
+            let url = rig.file.deletingLastPathComponent().appendingPathComponent("rollout-\(id).jsonl")
+            let text = rig.meta.replacingOccurrences(of: #""id":"session""#, with: #""id":"\#(id)""#)
+                + line("task_complete", turn: "one", at: date) + "\n"
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        }
+        // Written between two polls: the next poll reads it.
+        _ = scanner.states(forWorktreePaths: ["/repo"], now: epoch.addingTimeInterval(1))
+        try addRollout("between", endingAt: epoch.addingTimeInterval(2))
+        let next = scanner.turnEnds(forWorktreePaths: ["/repo"], now: epoch.addingTimeInterval(3))
+        #expect(next.map(\.id) == ["codex:between:one"])
+        // Written during a poll, after its listing: the following poll reads it.
+        _ = scanner.states(forWorktreePaths: ["/repo"], now: epoch.addingTimeInterval(4))
+        try addRollout("during", endingAt: epoch.addingTimeInterval(5))
+        _ = scanner.turnEnds(forWorktreePaths: ["/repo"], now: epoch.addingTimeInterval(4))
+        _ = scanner.states(forWorktreePaths: ["/repo"], now: epoch.addingTimeInterval(6))
+        let later = scanner.turnEnds(forWorktreePaths: ["/repo"], now: epoch.addingTimeInterval(6))
+        #expect(Set(later.map(\.id)) == ["codex:between:one", "codex:during:one"])
+    }
+
     @Test func deliveryRejectsHistoryDeduplicatesAndResetsProjectBoundary() {
         var delivery = AgentTurnDelivery()
         delivery.watch(["/repo"], now: epoch)
