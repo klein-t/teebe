@@ -4,7 +4,7 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [0.8.0] - 2026-10-03
+## [0.8.0] - 2026-10-06
 
 ### Added
 - **Worktree status at a glance.** Each worktree shows a single mark: an
@@ -14,13 +14,16 @@ All notable changes to teebe are documented here. The format is based on
   that explains it.
 - **Automatic merge detection.** teebe checks every worktree against your
   default branch plus dev, develop, main and master, and an extra comparison
-  branch you can choose. Squash merges and branches merged commit by commit
-  count as merged; brand new branches never do.
+  branch you can choose. Squash merges count as merged, and so do branches
+  merged commit by commit when every change matches exactly, spacing and
+  position included. Brand new branches never do.
 - **Grouping, sorting and cleanup.** Group worktrees by state (uncommitted, not
   merged, safe to delete) and sort them by status, name or folder. Remove a
   single worktree from the bin on its row, or every worktree that is safe to
   delete in one step, after a confirmation that lists each one. The branch can
-  be deleted along with it.
+  be deleted along with it. Commits that only the worktree's history still
+  reached, for example after a reset, are kept in a hidden backup so nothing
+  becomes unrecoverable.
 - **New Worktree sheet.** Create a worktree on a new or existing branch, pick
   its starting point and choose where its folder goes. The location is
   suggested from your existing worktrees and remembered.
@@ -75,20 +78,26 @@ All notable changes to teebe are documented here. The format is based on
 - Agent notifications never appeared as banners while teebe was in front.
 - Switching projects quickly could show the previous project's worktrees.
 - Merge status could stay stale after a fetch or a branch change made while
-  teebe was hidden.
+  teebe was hidden, including when you showed and hid teebe again quickly.
 - Background fetches could trigger surprise approval prompts from SSH agents
-  such as 1Password or Secretive. They now run without the agent and stay
-  silent; Refresh still uses it. Clicking Refresh during a background fetch
-  waits for it instead of reporting an error.
+  such as 1Password or Secretive. They now never use an SSH agent, even when a
+  repository's own SSH command names one, and stay silent; Refresh still uses
+  it. Repositories that use a custom SSH wrapper are skipped in the background.
+  Clicking Refresh during a background fetch waits for it instead of reporting
+  an error.
 - A new branch created with a worktree tracked its starting branch, so a plain
   `git push` could fail or push to the wrong branch. New branches now start
   without an upstream.
 - If you switched projects while a new worktree was being created, teebe
   jumped back to the project it was created in.
+- Finishing a cancelled worktree creation could close a New Worktree sheet you
+  had opened since, losing what you had typed.
 - A comparison branch typed by name in Settings was never checked.
 - A worktree with an unfinished rebase, merge or similar Git operation could
   be offered for removal. It is now never removable, and a worktree that
   couldn't be checked says so instead of looking clean.
+- A worktree whose ignored files contain a Git repository with commits of its
+  own could be offered for removal. It is now never removable.
 - The removal confirmation now says clearly how many ignored files will be
   deleted for good.
 - A status card opened from the keyboard kept popping up again on its own.
