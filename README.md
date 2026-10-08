@@ -7,9 +7,9 @@
 <p align="center"><strong>Git worktrees, without the IDE.</strong></p>
 
 <p align="center">
-  A native macOS git worktree manager and GUI. See every worktree in one window,<br>
-  including the ones Claude Code, Codex and Cursor create for each session, and watch<br>
-  the files inside them change live, with inline diffs right beside your terminal.
+  An open-source macOS app to see all git worktrees across all your repos in one window.<br>
+  See which Claude Code, Codex and Cursor agents are working in each worktree and what<br>
+  they are changing, live. Built for running several AI coding agents in parallel.
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/teebe-dark.png">
-    <img src="assets/teebe-light.png" alt="teebe beside a Quick Look diff: the WORKTREES, CHANGES and FILES sections of a worktree, with the selected change peeked open as a side-by-side diff" width="900">
+    <img src="assets/teebe-light.png" alt="teebe with a demo repo: worktrees grouped by status (an agent working, uncommitted changes, not merged, safe to delete), the CHANGES list of the selected worktree, and one change peeked open as a side-by-side diff" width="900">
   </picture>
 </p>
 
@@ -50,51 +50,49 @@ Free and open source · macOS 14 or newer · Apple Silicon and Intel.
 
 ## Why
 
-Terminal agents are the fastest way to ship with AI. They are also a black box:
-the agent says "done", and you are left tabbing between `git status` and your
-editor to find out what "done" means across five worktrees.
+Terminal agents are the fastest way to ship with AI, and also a black box: the
+agent says "done" and you are left running `git status` across five worktrees to
+find out what that means. Managing those worktrees usually means memorising
+`git worktree` commands or opening a full IDE just to look at a branch.
 
-teebe fixes exactly that, and nothing else. Point it at your worktrees and each
-one gets a full file tree in a small native window beside your terminal: browse
-what is inside every worktree, watch files light up as agents edit them, and
-peek any diff with one keystroke. It does not run your agents, does not touch
-your code, and does not replace your tools.
-
-## Why a worktree manager without the IDE
-
-Managing worktrees usually means memorising `git worktree` commands or booting a
-full IDE just to look at a branch. teebe keeps every worktree of every repo in one
-list, and you can add a new one or remove a finished one straight from it. Each
-worktree shows its ahead/behind counts and the files that changed, so you can tell
-which branches still have work in them before you clean them up. Changed files badge
-live as your agents edit them, and one keystroke peeks the diff without opening an
-editor; ⌘⇧C copies the selected files as `@`-refs to paste back into an agent prompt.
+teebe is a small native window that sits beside your terminal and shows every
+worktree of every repo, which ones have an agent in them, what each one changed,
+and which are merged and safe to remove. Git clients like Fork or Sublime Merge
+center on one repo, lazygit lives in the terminal, and agent managers like
+Conductor run the agents for you. teebe only watches.
 
 ## What it does
 
-- **Worktree-aware browsing.** Pick any worktree of any repo and explore its
-  full file tree. Switch between trees instantly.
-- **Live as your agents work.** Files badge and the tree updates the moment
-  something changes on disk, so you watch edits land in real time.
-- **Diffs, one keystroke away.** Select a changed file and press Space to peek
-  its diff in a floating window, unified or side by side, without leaving teebe.
-- **One CHANGES view.** Everything modified in the current worktree, gathered in
-  a single list with ahead/behind counts for the branch.
-- **Every repo at once.** Add multiple repos and see all their worktrees together.
-- **Opens into your tools.** Press Return on a file and it launches in the native
-  app you already use. teebe is the navigator; your editor stays the editor.
-- **Claude-ready copies.** ⌘⇧C copies the selected files as `@`-refs, ready to
-  paste into a Claude Code prompt.
-- **Stays out of the way.** Pin the window on top, collapse any section, follow
-  the system appearance or force light/dark, and let it idle at near-zero CPU
-  when covered.
+- **Every worktree, every repo.** All worktrees of all your repos in one list,
+  each with a full file tree you can browse.
+- **Status at a glance.** One mark per worktree: an agent working, uncommitted
+  changes, commits not merged yet, or merged and safe to delete. Group and sort
+  the list by status.
+- **Agent activity.** See when Claude Code or Codex is working or waiting in a
+  worktree, with optional notifications when a turn finishes. Files badge live
+  as any agent or tool edits them.
+- **Merge detection that understands squash merges.** Worktrees are checked
+  against your default and integration branches, and a background fetch keeps
+  it current.
+- **Cleanup in one step.** Remove one worktree, or every one that is safe to
+  delete, after a confirmation that lists them. Commits only that worktree
+  still reached are kept in a hidden backup.
+- **New worktrees without the commands.** Create one on a new or existing
+  branch, from any starting point, in a folder teebe suggests.
+- **Diffs, one keystroke away.** Press Space on a change to peek its diff,
+  unified or side by side. Return opens a file in the app you already use, and
+  ⌘⇧C copies files as `@`-refs for an agent prompt.
 
 ## What it is not
 
-- Not a code editor: content editing happens in your native apps, not here.
-- Not a full git client: no rebase, cherry-pick, or merge-conflict resolution.
+- Not an agent runner or orchestrator: it does not start or steer agents, it
+  watches them.
+- Not a code editor: editing happens in your own apps.
+- Not a full git client: no rebase, cherry-pick, or conflict resolution.
 - Not cross-platform: macOS only.
-- Not an agent orchestrator: mapping agents to worktrees is a later integration.
+
+How it compares with other worktree tools:
+[teebe.io/compare/git-worktree-gui-mac](https://teebe.io/compare/git-worktree-gui-mac/).
 
 ## Keyboard
 
@@ -117,8 +115,9 @@ The full list lives in the app under **teebe → Keyboard Shortcuts**.
 
 teebe is multi-repo and remembers whatever you had selected last.
 
-- **Add a repo:** click **+** in the WORKTREES header, or open the **···** menu
-  and choose **Add Repository…**, then pick the repo folder.
+- **Add a repo:** open the **···** menu in the WORKTREES header, choose
+  **Add Repository…**, then pick the repo folder.
+- **New worktree:** click **+** in the WORKTREES header.
 - **Switch repos:** open the **···** menu and choose any repo you have added.
 - **Remove the current repo:** **···** menu → **Remove _name_**.
 
@@ -161,14 +160,6 @@ temp repos. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full setup.
 - `Sources/Teebe/` is the SwiftUI app: `@Observable` view models and thin views.
 - `Tests/` holds the Swift Testing suites (`TeebeCoreTests`, `TeebeTests`),
   protocol fakes, and a `GitFixture` real-git harness.
-
-## Why it exists
-
-There is no open-source, Finder-like, **worktree-aware** file browser. Existing
-tools are either git clients centered on a single repo (Fork, Sublime Merge),
-terminal TUIs (lazygit), or agent-session managers (Crystal, Conductor). None
-give you a live, cross-worktree "mission control" of what your agents are
-touching right now.
 
 ## License
 
