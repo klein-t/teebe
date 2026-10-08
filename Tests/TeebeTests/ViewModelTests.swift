@@ -35,7 +35,10 @@ struct AppModelTests {
         #expect(!app.groupWorktreesByMergeStatus)
         app.groupWorktreesByMergeStatus = true
         app.floatOnTop = true
-        #expect(AppModel(environment: env).groupWorktreesByMergeStatus)
+        let restored = AppModel(environment: env)
+        await restored.bootstrap()
+        #expect(restored.groupWorktreesByMergeStatus)
+        #expect(restored.preferences.defaults.groupByStatus == false)
         await app.selector.selectRepo(Repository(path: "/b"))
         #expect(app.recentRepositories.first?.path == "/b")
         #expect(app.repositories.count == 2)
@@ -501,20 +504,27 @@ struct WorktreeModelTests {
         #expect(aNode?.change?.worktreeStatus == .modified)
     }
 
-    @Test("changed filter derives a tree from the change list")
-    func changedFilter() async {
+    @Test("Files keeps unchanged rows while Changes contains only modified files")
+    func fullFileTree() async throws {
         let (dir, cleanup) = tempDir(); defer { cleanup() }
+        for name in ["changed.swift", "unchanged.swift"] {
+            try Data().write(to: URL(fileURLWithPath: dir + "/" + name))
+        }
         let git = FakeGitClient()
         git.statusResult = StatusResult(changes: [
-            FileChange(path: "src/changed.swift", worktreeStatus: .modified),
+            FileChange(path: "changed.swift", worktreeStatus: .modified),
         ])
         let model = WorktreeModel(environment: makeTestEnvironment(git: git))
         await model.load(worktreePath: dir, repo: Repository(path: dir))
-        model.filter = .changed
-
-        let display = model.displayRoot
-        let src = display?.children?.first { $0.name == "src" }
-        #expect(src?.children?.first?.name == "changed.swift")
+        #expect(model.visibleRows.map(\.node.name) == ["changed.swift", "unchanged.swift"])
+        #expect(model.visibleRows.first?.node.change?.worktreeStatus == .modified)
+        #expect(model.visibleRows.last?.node.change == nil)
+        #expect(model.changes.map(\.path) == ["changed.swift"])
+        git.statusResult = StatusResult()
+        await model.refresh()
+        #expect(model.visibleRows.map(\.node.name) == ["changed.swift", "unchanged.swift"])
+        #expect(model.changes.isEmpty)
+        #expect(model.visibleRows.allSatisfy { $0.node.change == nil })
     }
 
     @Test("stage forwards to the serial queue")

@@ -144,9 +144,15 @@ final class ThinkingOrbNSView: NSView {
         self.link = link
     }
 
+    // Unclipped AppKit views can report visibleRect outside their own bounds.
+    // Only their intersection can contain dots that are actually on screen.
+    var hasVisibleContent: Bool {
+        !isHiddenOrHasHiddenAncestor && visibleRect.intersects(bounds)
+    }
+
     @objc private func tick(_ link: CADisplayLink) {
         // Scrolled out of the list's viewport: nothing to show, nothing to draw.
-        guard !visibleRect.isEmpty else { return }
+        guard hasVisibleContent else { return }
         needsDisplay = true
     }
 

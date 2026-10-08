@@ -2,6 +2,8 @@ import Foundation
 
 /// Confirms that every changed path coexisted in the target, now or in its history.
 /// Squash merges need content evidence because they do not retain branch ancestry.
+/// Failing that, it confirms that every commit of the branch landed in the target
+/// one by one (see `commitsAreUpstream`).
 /// Later target edits do not undo historical inclusion; a new branch tip is checked afresh.
 /// This reads trees only, without creating commits, running merge drivers or using a network.
 struct GitContentInclusion {
@@ -9,6 +11,10 @@ struct GitContentInclusion {
     /// Proposing is cheap, proving costs a tree comparison each, so the walk
     /// stays bounded and an exhausted budget simply confirms nothing.
     private static let confirmationLimit = 20
+    /// How many commits each side may have for the per-commit check, which hashes
+    /// the patch of every one of them. Matches the history walk above; beyond it
+    /// nothing is confirmed.
+    private static let commitLimit = 1000
 
     let git: GitClient
 
@@ -32,7 +38,9 @@ struct GitContentInclusion {
         // Non-UTF8 names still get the exact current-tree check above; do not convert lossily.
         let paths = desired.keys.compactMap { String(data: $0, encoding: .utf8) }
         guard paths.count == desired.count,
-              paths.reduce(0, { $0 + $1.utf8.count + 1 }) < 64_000 else { return false }
+              paths.reduce(0, { $0 + $1.utf8.count + 1 }) < 64_000 else {
+            return try await commitsAreUpstream(base: String(base), head: head, target: target, repoPath: repoPath)
+        }
         // Walk the whole reachable history, not just the first-parent chain: a
         // squash commit usually lands on an integration branch that reaches the
         // compared branch through a merge commit, so it is never a first parent.
@@ -50,15 +58,91 @@ struct GitContentInclusion {
             let unmatched = try await diff(candidate, head, in: repoPath, limitedTo: paths)
             if unmatched.isEmpty { return true }
         }
-        return false
+        return try await commitsAreUpstream(base: String(base), head: head, target: target, repoPath: repoPath)
     }
 
-    private struct Version: Equatable {
+    /// Whether every commit of the branch has a commit with the same patch in the
+    /// target since their merge base. This covers a branch landed
+    /// commit by commit among other work (picked, rebased or squashed separately),
+    /// where no single target revision holds all of its changes at once.
+    ///
+    /// It is deliberately narrow, because a confirmed branch may be deleted:
+    /// - the branch must have at least one commit and no merge commits, so its
+    ///   content is exactly the sum of the patches checked here (a merge could
+    ///   carry a conflict resolution or other content no patch accounts for);
+    /// - every one of those commits must be matched; one unmatched commit, or one
+    ///   that landed differently (a changed conflict resolution changes its patch),
+    ///   confirms nothing;
+    /// - both sides are bounded by `commitLimit`.
+    /// A commit is matched only by the same change to the same file content (see
+    /// `changeSets`), so a commit that landed on a file other work had already
+    /// changed confirms nothing. An empty commit has no change to match.
+    private func commitsAreUpstream(base: String, head: String, target: String, repoPath: String) async throws -> Bool {
+        let own = try await run(["rev-list", "--parents", "--max-count=\(Self.commitLimit + 1)", "\(base)..\(head)"],
+                                in: repoPath)
+        guard own.succeeded else { throw CleanupError.gitFailed }
+        let commits = own.stdoutString.split(separator: "\n")
+        // One parent each: a merge has more, a root commit has none.
+        guard !commits.isEmpty, commits.count <= Self.commitLimit,
+              commits.allSatisfy({ $0.split(separator: " ").count == 2 }) else { return false }
+        let upstream = try await run(["rev-list", "--count", "\(base)..\(target)"], in: repoPath)
+        guard upstream.succeeded,
+              let count = Int(upstream.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { throw CleanupError.gitFailed }
+        guard count <= Self.commitLimit else { return false }
+        let mine = try await changeSets("\(base)..\(head)", in: repoPath)
+        let landed = Set(try await changeSets("\(base)..\(target)", in: repoPath).compactMap { $0 })
+        return mine.count == commits.count && mine.allSatisfy { $0.map(landed.contains) ?? false }
+    }
+
+    /// The changes of each non-merge commit in `range`, newest first, or nil for a
+    /// commit that changes nothing: every touched path with its exact file mode and
+    /// object before and after, sorted by path. Two commits match only when they make
+    /// the same change to the same file content; a change applied to a file that
+    /// differs anywhere else, or at another place in it, does not. This reads Git's
+    /// raw records, which no diff setting (context lines, prefixes, algorithm,
+    /// external drivers) can reshape.
+    private func changeSets(_ range: String, in repoPath: String) async throws -> [[Change]?] {
+        let log = try await run([
+            "log", "--no-merges", "--format=%x00%H", "-z", "--raw", "--no-abbrev", "--no-renames",
+            "--no-color", "--no-show-signature", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none",
+            "--max-count=\(Self.commitLimit)", range
+        ], in: repoPath)
+        guard log.succeeded else { throw CleanupError.gitFailed }
+        let tokens = log.standardOutput.split(separator: 0).map { Data($0) }
+        var result: [[Change]?] = []
+        var changes: [Change]?
+        var index = 0
+        func endCommit() {
+            guard let changes else { return }
+            result.append(changes.isEmpty ? nil : changes.sorted { $0.path.lexicographicallyPrecedes($1.path) })
+        }
+        while index < tokens.count {
+            try Task.checkCancellation()
+            let token = tokens[index]
+            if token.drop(while: { $0 == 10 }).first == UInt8(ascii: ":") {
+                guard changes != nil, index + 1 < tokens.count else { throw CleanupError.gitFailed }
+                let change = try Self.change(header: token, path: tokens[index + 1])
+                changes?.append(change)
+                index += 2
+            } else {
+                guard let text = String(data: token, encoding: .utf8)?.trimmingCharacters(in: .newlines),
+                      [40, 64].contains(text.count), text.allSatisfy(\.isHexDigit) else { throw CleanupError.gitFailed }
+                endCommit()
+                changes = []
+                index += 1
+            }
+        }
+        endCommit()
+        return result
+    }
+
+    private struct Version: Hashable {
         let mode: String
         let object: String
     }
 
-    private struct Change {
+    private struct Change: Hashable {
         let path: Data
         let old: Version
         let new: Version

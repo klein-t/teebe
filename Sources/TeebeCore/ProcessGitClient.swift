@@ -3,12 +3,18 @@ import Foundation
 /// `GitClient` implementation that shells out to the system `git` via `Process`
 /// (TECH_SPEC §1). All typed methods route raw output through the pure parsers.
 public struct ProcessGitClient: GitClient {
-    /// Queue used to bridge blocking `Process` calls into async/await.
-    private let queue: DispatchQueue
+    /// Process waits and pipe reads both use dispatch workers. An unbounded burst
+    /// can occupy every worker with waits, starving the readers they depend on.
+    /// Share this limit across clients, so many worktrees cannot exhaust the pool.
+    private static let processQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "teebe.git"
+        queue.qualityOfService = .userInitiated
+        queue.maxConcurrentOperationCount = 8
+        return queue
+    }()
 
-    public init() {
-        self.queue = DispatchQueue(label: "teebe.git", qos: .userInitiated, attributes: .concurrent)
-    }
+    public init() {}
 
     // MARK: - Discovery
 
@@ -84,11 +90,19 @@ public struct ProcessGitClient: GitClient {
 
     /// The `git worktree add` argument list. Pure, so the ordering git cares about
     /// (`-b <branch> <path> <start-point>`) is covered by a test.
+    /// A branch made from a start point gets `--no-track`: from a remote start point
+    /// such as `origin/main` git would otherwise make that its upstream, so a plain
+    /// push would fail on the name mismatch or, with `push.default=upstream`, push
+    /// the new branch into `main`.
     static func worktreeAddArguments(path: String, branch: String?, createBranch: Bool, startPoint: String?) -> [String] {
         var args = ["worktree", "add"]
-        if createBranch, let branch { args.append(contentsOf: ["-b", branch]) }
+        let startPoint = startPoint.flatMap { $0.isEmpty ? nil : $0 }
+        if createBranch, let branch {
+            if startPoint != nil { args.append("--no-track") }
+            args.append(contentsOf: ["-b", branch])
+        }
         args.append(path)
-        if createBranch, branch != nil, let startPoint, !startPoint.isEmpty {
+        if createBranch, branch != nil, let startPoint {
             args.append(startPoint)
         } else if let branch, !createBranch {
             args.append(branch)
@@ -105,15 +119,21 @@ public struct ProcessGitClient: GitClient {
 
     // MARK: - Remotes
 
-    public func fetchOrigin(repoPath: String) async throws {
+    public func fetchOrigin(repoPath: String, kind: FetchKind) async throws {
         // A read of the remote, so it stays interruptible. The extra environment
         // makes every credential path fail fast rather than waiting on a prompt,
         // through the SSH command the repository already uses.
         let configured = try? await run(["config", "--get", "core.sshCommand"], in: repoPath)
         let sshCommand = configured.flatMap { $0.succeeded ? $0.stdoutString : nil }?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let environment = Self.fetchEnvironment(inherited: ProcessInfo.processInfo.environment,
-                                                sshCommand: sshCommand?.isEmpty == false ? sshCommand : nil)
+        // nil: an automatic fetch through this SSH program could still reach the
+        // agent, so it does not run at all. Like any automatic failure, that is silent.
+        guard let environment = Self.fetchEnvironment(inherited: ProcessInfo.processInfo.environment,
+                                                      sshCommand: sshCommand?.isEmpty == false ? sshCommand : nil,
+                                                      kind: kind) else {
+            throw GitError.commandFailed(command: Self.fetchArguments, exitCode: -1,
+                                         stderr: "The SSH program is not ssh, so it may use the SSH agent.")
+        }
         let result = try await run(Self.fetchArguments, in: repoPath, extraEnvironment: environment)
         guard result.succeeded else {
             throw Self.mapError(arguments: result.arguments, directory: repoPath, result: result)
@@ -128,16 +148,107 @@ public struct ProcessGitClient: GitClient {
     /// fails instead of asking for a passphrase or a host key, and no askpass
     /// dialog. The user's own SSH command (a per-repository key in
     /// `core.sshCommand`, or `GIT_SSH_COMMAND`, which Git prefers) is kept and only
-    /// gets the batch option; a `GIT_SSH` program is left alone, since setting a
-    /// command would replace it.
-    static func fetchEnvironment(inherited: [String: String], sshCommand: String?) -> [String: String] {
+    /// gets the batch option; for a `.manual` fetch a `GIT_SSH` program is left
+    /// alone, since setting a command would replace it.
+    ///
+    /// An `.automatic` fetch also runs without the SSH agent, both the one in
+    /// `SSH_AUTH_SOCK` and one named by `IdentityAgent`: agents such as 1Password's
+    /// or Secretive ask for approval on every use, and batch mode does not stop
+    /// that. ssh keeps the first value it is given for an option, so the options go
+    /// straight after the program, ahead of the user's own arguments and of the SSH
+    /// config. That needs a program that is recognizably ssh; with any other (a
+    /// wrapper script, plink) there is no telling what reaches the agent, so the
+    /// result is nil and the fetch does not run. Keys the agent alone holds also
+    /// fail the fetch, which is silent; the user's own Refresh goes through the agent.
+    static func fetchEnvironment(inherited: [String: String], sshCommand: String?, kind: FetchKind) -> [String: String]? {
         var environment = ["SSH_ASKPASS_REQUIRE": "never"]
-        if let command = inherited["GIT_SSH_COMMAND"].flatMap({ $0.isEmpty ? nil : $0 }) ?? sshCommand {
-            environment["GIT_SSH_COMMAND"] = command + " -o BatchMode=yes"
-        } else if inherited["GIT_SSH"] == nil {
-            environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+        let command = inherited["GIT_SSH_COMMAND"].flatMap { $0.isEmpty ? nil : $0 } ?? sshCommand
+        guard kind == .automatic else {
+            if let command {
+                environment["GIT_SSH_COMMAND"] = command + " -o BatchMode=yes"
+            } else if inherited["GIT_SSH"] == nil {
+                environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+            }
+            return environment
         }
+        guard let agentless = agentlessSSHCommand(command: command, program: inherited["GIT_SSH"]) else { return nil }
+        environment["SSH_AUTH_SOCK"] = ""
+        environment["GIT_SSH_COMMAND"] = agentless
         return environment
+    }
+
+    static let agentlessOptions = "-o BatchMode=yes -o IdentityAgent=none"
+
+    /// The SSH command an automatic fetch runs, in the order Git picks one: a
+    /// command (from the environment or `core.sshCommand`), else a `GIT_SSH`
+    /// program, else plain `ssh`. nil when the program is not recognizably ssh.
+    static func agentlessSSHCommand(command: String?, program: String?) -> String? {
+        if let command {
+            guard let (word, rest) = sshProgramWord(in: command) else { return nil }
+            return word + " " + agentlessOptions + rest
+        }
+        if let program, !program.isEmpty {
+            guard (program as NSString).lastPathComponent == "ssh" else { return nil }
+            return "'" + program.replacingOccurrences(of: "'", with: "'\\''") + "' " + agentlessOptions
+        }
+        return "ssh " + agentlessOptions
+    }
+
+    /// Splits a shell command into its first word, as written, and the rest, when
+    /// that word names a program called `ssh`. nil when the shell would expand the
+    /// word or read it as anything but a plain path (a variable, a glob, an
+    /// assignment, an operator), since then what actually runs can't be known.
+    static func sshProgramWord(in command: String) -> (word: Substring, rest: Substring)? {
+        let text = command.drop { $0.isWhitespace }
+        var value = ""
+        var quote: Character?
+        var index = text.startIndex
+        while index < text.endIndex, quote != nil || !text[index].isWhitespace {
+            if quote == nil {
+                guard let next = unquotedStep(text, at: index, quote: &quote, value: &value) else { return nil }
+                index = next
+            } else {
+                guard quotedStep(text[index], quote: &quote, value: &value) else { return nil }
+                index = text.index(after: index)
+            }
+        }
+        guard quote == nil, (value as NSString).lastPathComponent == "ssh" else { return nil }
+        return (text[..<index], text[index...])
+    }
+
+    private static let shellSpecial = Set("$`;|&<>(){}*?[=#")
+
+    /// One character inside quotes. Expansions in double quotes are refused, and
+    /// so are backslashes there, rather than reproduce which ones the shell keeps.
+    private static func quotedStep(_ char: Character, quote: inout Character?, value: inout String) -> Bool {
+        if char == quote {
+            quote = nil
+        } else if quote == "\"" && "$`\\".contains(char) {
+            return false
+        } else {
+            value.append(char)
+        }
+        return true
+    }
+
+    /// One character outside quotes; returns where the next one starts.
+    private static func unquotedStep(
+        _ text: Substring, at index: Substring.Index, quote: inout Character?, value: inout String
+    ) -> Substring.Index? {
+        let char = text[index]
+        let after = text.index(after: index)
+        if char == "'" || char == "\"" {
+            quote = char
+        } else if char == "\\" {
+            guard after < text.endIndex, !text[after].isNewline else { return nil }
+            value.append(text[after])
+            return text.index(after: after)
+        } else if shellSpecial.contains(char) {
+            return nil
+        } else {
+            value.append(char)
+        }
+        return after
     }
 
     // MARK: - Low-level
@@ -154,7 +265,7 @@ public struct ProcessGitClient: GitClient {
         let invocation = Invocation()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                queue.async {
+                Self.processQueue.addOperation {
                     do {
                         continuation.resume(returning: try Self.execute(
                             arguments, in: directory, as: invocation, extraEnvironment: extraEnvironment))
@@ -174,7 +285,7 @@ public struct ProcessGitClient: GitClient {
     @discardableResult
     private func runUninterrupted(_ arguments: [String], in directory: String) async throws -> GitInvocationResult {
         try await withCheckedThrowingContinuation { continuation in
-            queue.async {
+            Self.processQueue.addOperation {
                 do {
                     continuation.resume(returning: try Self.execute(arguments, in: directory, as: Invocation()))
                 } catch {

@@ -14,6 +14,9 @@ final class GeometryTestHooks {
     var setWorktreesOpen: ((Bool) -> Void)?
     var setChangesOpen: ((Bool) -> Void)?
     var setFilesOpen: ((Bool) -> Void)?
+    var focusSearch: (() -> Void)?
+    var leaveSearch: (() -> Void)?
+    var focusSection: ((AppModel.FocusSection) -> Void)?
     /// One step of a WORKTREES/CHANGES divider drag, as the handle's gesture reports it.
     var dragWorktreesDivider: ((CGFloat) -> Void)?
     var dragChangesDivider: ((CGFloat) -> Void)?
@@ -32,6 +35,21 @@ final class GeometryTestHooks {
     func reset() { resizes = 0 }
 }
 #endif
+
+/// Sum of the heights of the rows that only show now and then (errors, notices).
+/// The window adds it to the layout it wraps, so such a row never pushes a section
+/// header below the bottom edge.
+struct TransientRowsHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value += nextValue() }
+}
+
+extension View {
+    /// Report this row's height to the window sizing (see `TransientRowsHeightKey`).
+    func measuredAsTransientRow() -> some View {
+        background(GeometryReader { Color.clear.preference(key: TransientRowsHeightKey.self, value: $0.size.height) })
+    }
+}
 
 /// Compact, floating main window: a three-section accordion (WORKTREES / CHANGES /
 /// FILES).
@@ -68,21 +86,29 @@ struct RootView: View {
     /// `NSWindow.frame` nor `window.screen`: without this the clamp stayed stale until
     /// some unrelated change re-ran the body, and the window snapped short much later.
     @State private var roomBelowTop: CGFloat = 900
+    /// Measured height of the rows that come and go above and below the sections (the
+    /// fetch error, the error line, the clean-up notice). The window grows by exactly
+    /// this much so they never push FILES out of view.
+    @State private var transientRowsHeight: CGFloat = 0
     /// Layout to restore when the green zoom is toggled off — set while the window is
     /// "vertically maximized" (full height), nil otherwise.
     @State private var zoomRestore: ZoomRestore?
     /// Focus of the FILES search field, lifted here so ⌘F can drive it and the
     /// command-key shortcuts can stand down while the user is typing in it.
     @FocusState private var searchFocused: Bool
+    @FocusState private var listFocused: Bool
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
 
     private var worktree: WorktreeModel { app.selector.worktree }
     private var selector: SelectorModel { app.selector }
 
-    /// Window height when all three sections are collapsed: the compact title row
-    /// plus the three stacked headers (with their separators), no slack below.
-    private let collapsedHeight: CGFloat = 126
+    /// The compact title row plus the three stacked headers (with their separators).
+    private let headersHeight: CGFloat = 126
+    /// Window height when all three sections are collapsed: the headers plus any
+    /// error or notice row currently shown, no slack below. Everything else is
+    /// stacked on top of this.
+    private var collapsedHeight: CGFloat { headersHeight + transientRowsHeight }
     /// Comfortable height for the "no repositories" empty state.
     private let emptyStateHeight: CGFloat = 460
     /// Narrowest the window may be dragged.
@@ -162,35 +188,44 @@ struct RootView: View {
                 .frame(maxHeight: .infinity, alignment: .top)
             }
             if let error = worktree.errorMessage ?? app.errorMessage {
-                Divider()
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.red).lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 11).padding(.vertical, 4)
+                VStack(spacing: 0) {
+                    Divider()
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.red).lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 11).padding(.vertical, 4)
+                }
+                .measuredAsTransientRow()
             }
             if let notice = app.selector.cleanupNotice {
                 // News, not an error: muted, and it stays until dismissed.
-                Divider()
-                HStack(spacing: 6) {
-                    Label(notice, systemImage: "checkmark.circle")
-                        .font(.caption).foregroundStyle(Palette.secondaryText).lineLimit(1)
-                    Spacer(minLength: 4)
-                    Button { app.selector.dismissCleanupNotice() } label: {
-                        Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                VStack(spacing: 0) {
+                    Divider()
+                    HStack(spacing: 6) {
+                        Label(notice, systemImage: "checkmark.circle")
+                            .font(.caption).foregroundStyle(Palette.secondaryText).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Button { app.selector.dismissCleanupNotice() } label: {
+                            Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                        }
+                        .buttonStyle(IconButtonStyle(size: CGSize(width: 18, height: 18)))
+                        .foregroundStyle(Palette.secondaryText)
+                        .accessibilityLabel("Dismiss")
+                        .hoverHelp("Dismiss")
                     }
-                    .buttonStyle(IconButtonStyle(size: CGSize(width: 18, height: 18)))
-                    .foregroundStyle(Palette.secondaryText)
-                    .accessibilityLabel("Dismiss")
-                    .hoverHelp("Dismiss")
+                    .padding(.leading, 11).padding(.trailing, 6).padding(.vertical, 2)
                 }
-                .padding(.leading, 11).padding(.trailing, 6).padding(.vertical, 2)
+                .measuredAsTransientRow()
             }
+        }
+        .onPreferenceChange(TransientRowsHeightKey.self) { height in
+            MainActor.assumeIsolated { transientRowsHeight = height }
         }
         .ignoresSafeArea(.container, edges: .top)   // title row sits level with the traffic lights
         .frame(minWidth: minWindowWidth, idealWidth: 440, maxWidth: .infinity,
                minHeight: minimumContentHeight, idealHeight: 640,
                maxHeight: .infinity, alignment: .top)
-        .background(.regularMaterial)
+        .background(WindowBackdrop())
         #if DEBUG
         .background {
             if let testHooks {
@@ -250,12 +285,37 @@ struct RootView: View {
         .onAppear { installTestHooks() }
         #endif
         .background { commandShortcuts }
+        .focusedSceneValue(\.mainWindowActions, MainWindowActions(
+            focusSection: focusOrToggle, search: focusSearch,
+            collapseFolders: worktree.collapseAll, copyReferences: copyRefs,
+            copyPaths: { app.copySelectedPaths() }, trash: trashSelection,
+            hasFileSelection: !searchFocused && app.activeSection == .files && !worktree.selectedPaths.isEmpty,
+            hasExpandedFolders: worktree.hasExpandedFolders))
         .focusable()
+        .focused($listFocused)
         .focusEffectDisabled()
-        .onKeyPress(.space) { handleSpace(); return .handled }
-        .onKeyPress(.escape) { preview.close(); dismissWindow(id: "preview"); return .handled }
+        .onChange(of: searchFocused) { _, focused in
+            if !focused { listFocused = true }
+        }
+        .onKeyPress(.space) {
+            guard !searchFocused else { return .ignored }
+            handleSpace()
+            return .handled
+        }
+        .onKeyPress(.escape) {
+            if searchFocused {
+                if worktree.searchQuery.isEmpty { searchFocused = false } else { worktree.searchQuery = "" }
+            } else {
+                preview.close()
+                dismissWindow(id: "preview")
+            }
+            return .handled
+        }
         .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { handleArrow($0) }
-        .onKeyPress(.return) { activateSelected(); return .handled }
+        .onKeyPress(.return) {
+            if searchFocused { app.activateSearchResult() } else { activateSelected() }
+            return .handled
+        }
         // Tab / ⇧Tab cycle the active section (stands down while typing in search).
         .onKeyPress(keys: [.tab]) { press in
             guard !searchFocused else { return .ignored }
@@ -654,6 +714,9 @@ struct RootView: View {
         hooks.setWorktreesOpen = { setOpen(.worktrees, $0) }
         hooks.setChangesOpen = { setOpen(.changes, $0) }
         hooks.setFilesOpen = { setOpen(.files, $0) }
+        hooks.focusSearch = focusSearch
+        hooks.focusSection = focusOrToggle
+        hooks.leaveSearch = { searchFocused = false; app.focusFileResults() }
         hooks.dragWorktreesDivider = resizeWorktrees
         hooks.dragChangesDivider = resizeChanges
         hooks.endDividerDrag = endDividerDrag
@@ -729,6 +792,12 @@ struct RootView: View {
     /// move the keyboard cursor (Enter commits). CHANGES: move the selection and track
     /// the open diff peek. FILES: move/extend the cursor and ←/→ collapse-expand.
     private func handleArrow(_ press: KeyPress) -> KeyPress.Result {
+        if searchFocused {
+            guard press.key == .downArrow else { return .ignored }
+            searchFocused = false
+            app.focusFileResults()
+            return .handled
+        }
         let result: KeyPress.Result
         switch app.activeSection {
         case .worktrees: result = handleWorktreeArrow(press)
@@ -789,7 +858,10 @@ struct RootView: View {
     /// ⌘1/⌘2/⌘3: if the section is already active, toggle it open/closed; otherwise
     /// make it active (opening it and moving the selection in).
     private func focusOrToggle(_ section: AppModel.FocusSection) {
-        if app.activeSection == section {
+        if searchFocused {
+            searchFocused = false
+            activate(section)
+        } else if app.activeSection == section {
             setOpen(rootSection(section), !sectionIsOpen(section))
         } else {
             activate(section)
@@ -806,6 +878,7 @@ struct RootView: View {
     /// Make `section` the active one: open it if collapsed, and seat the selection
     /// (the open worktree for WORKTREES, the current/first change, or a file cursor).
     private func activate(_ section: AppModel.FocusSection) {
+        listFocused = true
         app.activeSection = section
         if !sectionIsOpen(section) { setOpen(rootSection(section), true) }
         switch section {
@@ -846,26 +919,29 @@ struct RootView: View {
         Task { await preview.update(for: node, worktreePath: wt) }
     }
 
-    /// Hidden buttons that register the command-key shortcuts window-wide. Disabled
-    /// while the search field is focused so ⌘A / ⌘⌫ keep editing the query text there.
+    /// Navigation stays available during search. File actions stand down while
+    /// editing, so ⌘A / ⌘⌫ keep acting on the query text.
     private var commandShortcuts: some View {
-        Group {
-            Button("") { focusOrToggle(.worktrees) }.keyboardShortcut("1", modifiers: .command)
-            Button("") { focusOrToggle(.changes) }.keyboardShortcut("2", modifiers: .command)
-            Button("") { focusOrToggle(.files) }.keyboardShortcut("3", modifiers: .command)
-            Button("") { focusSearch() }.keyboardShortcut("f", modifiers: .command)
-            Button("") { if app.activeSection == .files { worktree.selectAllVisible() } }.keyboardShortcut("a", modifiers: .command)
-            Button("") { copyRefs() }.keyboardShortcut("c", modifiers: [.command, .shift])
-            Button("") { trashSelection() }.keyboardShortcut(.delete, modifiers: .command)
-        }
+        Button("") { if app.activeSection == .files { worktree.selectAllVisible() } }
+            .keyboardShortcut("a", modifiers: .command)
+            .disabled(searchFocused)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
-        .disabled(searchFocused)
+        .onChange(of: app.quickLookRequest?.count) { _, _ in
+            guard let request = app.quickLookRequest else { return }
+            app.focusFiles()
+            worktree.select(request.path)
+            preview.close()
+            dismissWindow(id: "preview")
+            quickLook.onArrow = { _ = worktree.stepPeek($0, in: .files) }
+            if quickLook.isOpen { quickLook.show(URL(fileURLWithPath: request.path)) } else { presentQuickLook() }
+        }
     }
 
     /// ⌘F: open FILES if needed and hand focus to its search field.
     private func focusSearch() {
+        listFocused = false
         if !openFiles { setOpen(.files, true) }
         app.focusSearch()
     }
@@ -932,6 +1008,7 @@ struct RootView: View {
     /// row, file or folder. Arrow keys in the panel move the FILES selection and the
     /// panel follows it (`syncQuickLookToSelection`).
     private func presentQuickLook() {
+        if preview.isVisible { preview.close(); dismissWindow(id: "preview") }
         if worktree.selectedNode == nil, let first = worktree.visibleRows.first { worktree.select(first.node.path) }
         guard let node = worktree.selectedNode else { return }
         quickLook.onArrow = { _ = worktree.stepPeek($0, in: .files) }

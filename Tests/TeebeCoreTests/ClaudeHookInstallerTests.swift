@@ -73,6 +73,31 @@ struct ClaudeHookInstallerTests {
         #expect(ClaudeHookInstaller.isInstalled(in: merged))
     }
 
+    @Test("a channel mention or restricted matcher does not count as an installed hook")
+    func rejectsFalsePositives() throws {
+        for group: [String: Any] in [
+            ["hooks": [["type": "command", "command": "echo \(ClaudeHookInstaller.channel)"]]],
+            ["matcher": "permission_prompt", "hooks": [["type": "command", "command": ClaudeHookInstaller.pingCommand]]]
+        ] {
+            let settings: [String: Any] = ["hooks": Dictionary(uniqueKeysWithValues:
+                ClaudeHookInstaller.events.map { ($0, [group]) })]
+            #expect(!ClaudeHookInstaller.isInstalled(in: settings))
+            let repaired = try #require(ClaudeHookInstaller.settingsInstallingPing(into: settings))
+            #expect(ClaudeHookInstaller.isInstalled(in: repaired))
+        }
+    }
+
+    @Test("install preserves global hook disabling and reports it separately")
+    func preservesGlobalDisable() throws {
+        let url = tempSettingsURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"disableAllHooks":true}"#.write(to: url, atomically: true, encoding: .utf8)
+        try ClaudeHookInstaller.install(at: url)
+        #expect(ClaudeHookInstaller.isInstalled(at: url))
+        #expect(ClaudeHookInstaller.hooksDisabled(at: url))
+    }
+
     // MARK: - File level
 
     func tempSettingsURL() -> URL {
@@ -109,6 +134,24 @@ struct ClaudeHookInstallerTests {
         #expect(json["model"] as? String == "opus")
         #expect((json["permissions"] as? [String: Any]) != nil)
         #expect(ClaudeHookInstaller.isInstalled(in: json))
+    }
+
+    @Test("valid JSON with malformed hook configuration is left untouched")
+    func malformedHooksUntouched() throws {
+        let samples = [
+            #"{"hooks":"custom"}"#,
+            #"{"hooks":{"Stop":{"command":"audit.sh"}}}"#,
+            #"{"hooks":{"Stop":[{"hooks":"audit.sh"}]}}"#,
+            #"{"hooks":{"Stop":[{"hooks":["audit.sh"]}]}}"#
+        ]
+        for contents in samples {
+            let url = tempSettingsURL()
+            defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try contents.write(to: url, atomically: true, encoding: .utf8)
+            #expect(throws: (any Error).self) { try ClaudeHookInstaller.install(at: url) }
+            #expect(try String(contentsOf: url, encoding: .utf8) == contents)
+        }
     }
 
     @Test("a malformed settings file throws and is left untouched")

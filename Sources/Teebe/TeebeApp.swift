@@ -8,6 +8,7 @@ import TeebeCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        AgentNotifier.showWhileFrontmost()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Don't override `applicationIconImage`: that replaces the bundle's
@@ -71,12 +72,13 @@ struct TeebeApp: App {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesCommand(updater: updater)
                 WhatsNewMenuCommand()
-                KeyboardShortcutsMenuCommand()
             }
+            CommandGroup(after: .help) { KeyboardShortcutsMenuCommand() }
+            MainWindowCommands()
         }
 
         // Separate floating Quick Look panel (D4 / PRD §5.2).
-        Window("Quick Look", id: "preview") {
+        Window("Preview Changes", id: "preview") {
             PreviewPanel(preview: preview, app: app)
         }
         .windowResizability(.contentSize)

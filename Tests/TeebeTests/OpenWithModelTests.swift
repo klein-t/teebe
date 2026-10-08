@@ -27,8 +27,10 @@ struct OpenWithModelTests {
     private func makeApp(_ chooser: ChooserScript, opener: FakeFileOpener = FakeFileOpener(),
                          store: AppStateStore? = nil,
                          appExists: @escaping @Sendable (URL) -> Bool = { _ in true }) -> AppModel {
-        AppModel(environment: makeTestEnvironment(opener: opener, store: store,
+        let app = AppModel(environment: makeTestEnvironment(opener: opener, store: store,
                                                   chooseApp: chooser.choose, appExists: appExists))
+        app.openWith.policy = .ask
+        return app
     }
 
     @Test("the first open of a type asks, opens with the choice, and remembers it")

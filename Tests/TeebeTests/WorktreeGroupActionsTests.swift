@@ -402,12 +402,25 @@ struct WorktreeGroupActionsTests {
         #expect(app.worktreeCardReveal?.count != first)
     }
 
-    @Test("deleting the branch on removal defaults on and remembers the last choice")
+    @Test("a shown card's request is spent, so a redrawn row doesn't show it again")
+    func keyboardCardRevealIsOneShot() {
+        let app = AppModel(environment: makeTestEnvironment())
+        app.revealWorktreeCard(for: "/a")
+        let shown = app.worktreeCardReveal?.count
+        app.worktreeCardRevealed()
+        #expect(app.worktreeCardReveal == nil)
+        // Asking again is a new request, never one a row already acted on.
+        app.revealWorktreeCard(for: "/a")
+        #expect(app.worktreeCardReveal?.path == "/a")
+        #expect(app.worktreeCardReveal?.count != shown)
+    }
+
+    @Test("deleting the branch on removal defaults off and remembers the last choice")
     func deleteBranchPreference() {
         let env = makeTestEnvironment()
-        #expect(AppModel(environment: env).deleteBranchOnRemove)
-        AppModel(environment: env).deleteBranchOnRemove = false
         #expect(!AppModel(environment: env).deleteBranchOnRemove)
-        #expect(env.store.load().deleteBranchOnRemove == false)
+        AppModel(environment: env).deleteBranchOnRemove = true
+        #expect(AppModel(environment: env).deleteBranchOnRemove)
+        #expect(env.store.load().deleteBranchOnRemove == true)
     }
 }

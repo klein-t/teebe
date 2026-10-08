@@ -42,6 +42,23 @@ struct WorktreeCleanupTests {
         #expect(CleanupTargets.parse(ref("refs/heads/feature")).mergeTargets(extra: nil).isEmpty)
     }
 
+    @Test("a typed extra branch name resolves to the ref it names, origin's copy first")
+    func extraBranchByName() {
+        func ref(_ name: String) -> String { "\(name)\u{0}s\u{0}\u{0}\n" }
+        let both = CleanupTargets.parse(ref("refs/heads/main") + ref("refs/heads/release")
+            + ref("refs/remotes/origin/release") + ref("refs/remotes/upstream/hotfix"))
+        #expect(both.extraBranch("release")?.ref == "refs/remotes/origin/release")
+        #expect(both.extraBranch(" release ")?.ref == "refs/remotes/origin/release")
+        #expect(both.extraBranch("refs/heads/release")?.ref == "refs/heads/release")
+        #expect(both.extraBranch("upstream/hotfix")?.ref == "refs/remotes/upstream/hotfix")
+        #expect(both.extraBranch("gone") == nil)
+        #expect(both.extraBranch("") == nil)
+        #expect(both.extraBranch(nil) == nil)
+        let localOnly = CleanupTargets.parse(ref("refs/heads/main") + ref("refs/heads/release"))
+        #expect(localOnly.extraBranch("release")?.ref == "refs/heads/release")
+        #expect(localOnly.mergeTargets(extra: "release").map(\.ref) == ["refs/heads/main", "refs/heads/release"])
+    }
+
     @Test("regular and squash merges are confirmed by the appropriate evidence")
     func mergeKinds() async throws {
         let fixture = try GitFixture()
@@ -350,4 +367,121 @@ struct WorktreeCleanupTests {
         #expect(!FileManager.default.fileExists(atPath: dev.path))
         #expect(!fixture.git(["rev-parse", "--verify", "dev"]).isEmpty)
     }
+
+    @Test("a Git repository with commits of its own inside ignored files keeps the worktree")
+    func nestedRepositoryInIgnoredFiles() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile(".gitignore", "*.log\n")
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.commitAndFastForward(branch: "feature", in: folder)
+        // A clone with nothing of its own, as a package manager leaves in a build folder.
+        let clone = folder.appendingPathComponent("deps.log/clone")
+        fixture.git(["clone", "-q", fixture.repoPath, clone.path])
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        func scanned() async throws -> CleanupEntry {
+            try #require(try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
+                .entries.first { $0.worktree.branch == "feature" })
+        }
+        let dependency = try await scanned()
+        #expect(!dependency.hasNestedRepository)
+        #expect(dependency.canRemove(includingIgnored: true))
+        // A commit made in the clone is its own work.
+        fixture.git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "local"], in: clone)
+        #expect(try await scanned().hasNestedRepository)
+        fixture.git(["reset", "-q", "--hard", "origin/main"], in: clone)
+        let nested = folder.appendingPathComponent("nested.log")
+        fixture.git(["init", "-q", nested.path])
+        let empty = try await scanned()
+        #expect(!empty.hasNestedRepository)
+        fixture.writeFile("n.txt", "nested work", in: nested)
+        fixture.stage(in: nested)
+        fixture.git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "nested work"], in: nested)
+        let entry = try await scanned()
+        #expect(entry.hasNestedRepository)
+        #expect(!entry.canRemove(includingIgnored: true))
+        #expect(!entry.canRemoveFolder(includingIgnored: true))
+        await #expect(throws: CleanupError.unsafe) {
+            try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: true, deleteBranch: true)
+        }
+        #expect(FileManager.default.fileExists(atPath: nested.appendingPathComponent("n.txt").path))
+    }
+
+    /// Commits only a reflog still reaches, as a reset leaves them: merged then reset
+    /// back past a new commit, or reset onto the target over one.
+    @Test("commits only the worktree's or branch's reflog reaches survive removing both")
+    func reflogOnlyCommitsKept() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let backFolder = fixture.addWorktree(name: "back", branch: "back")
+        fixture.commitAndFastForward(branch: "back", in: backFolder)
+        let ontoFolder = fixture.addWorktree(name: "onto", branch: "onto")
+        var lost: [String: String] = [:]
+        for (branch, folder) in [("back", backFolder), ("onto", ontoFolder)] {
+            fixture.writeFile(branch + ".txt", "committed, then reset away", in: folder)
+            fixture.stage(in: folder)
+            fixture.commit("work on " + branch, in: folder)
+            lost[branch] = fixture.git(["rev-parse", "HEAD"], in: folder).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        fixture.git(["reset", "-q", "--hard", "HEAD~1"], in: backFolder)
+        fixture.commitFile("main.txt", "main moves on")
+        fixture.git(["reset", "-q", "--hard", "main"], in: ontoFolder)
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        let entries = try await service.scan(repoPath: fixture.repoPath, extraTarget: nil).entries
+        for branch in ["back", "onto"] {
+            let entry = try #require(entries.first { $0.worktree.branch == branch })
+            #expect(entry.canRemove(includingIgnored: false))
+            let outcome = try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: false, deleteBranch: true)
+            #expect(outcome == .deleted)
+        }
+        let unreachable = fixture.git(["fsck", "--unreachable", "--no-progress"])
+        let reachable = fixture.git(["rev-list", "--all"])
+        for (branch, commit) in lost {
+            #expect(!unreachable.contains(commit))
+            #expect(reachable.contains(commit))
+            #expect(!fixture.git(["for-each-ref", "--contains", commit, WorktreeCleanupService.backupRefPrefix + branch + "/"])
+                .isEmpty)
+        }
+    }
+
+    @Test("removal keeps no backup when nothing would be lost, and drops backups past their lifetime")
+    func reflogBackupsPruned() async throws {
+        let fixture = try GitFixture()
+        defer { fixture.cleanup() }
+        fixture.commitFile("a.txt", "base")
+        let tree = fixture.git(["rev-parse", "HEAD^{tree}"]).trimmingCharacters(in: .whitespacesAndNewlines)
+        func backup(_ name: String, daysAgo: Int) {
+            let date = "\(Int(Date().timeIntervalSince1970) - daysAgo * 86_400) +0000"
+            fixture.git(["update-ref", WorktreeCleanupService.backupRefPrefix + name,
+                         datedCommit(fixture, tree: tree, message: name, date: date)])
+        }
+        backup("old/1", daysAgo: 91)
+        backup("recent/1", daysAgo: 10)
+        let folder = fixture.addWorktree(name: "feature", branch: "feature")
+        fixture.commitAndFastForward(branch: "feature", in: folder)
+        let service = WorktreeCleanupService(git: ProcessGitClient())
+        let entry = try #require(try await service.scan(repoPath: fixture.repoPath, extraTarget: nil)
+            .entries.first { $0.worktree.branch == "feature" })
+        #expect(try await service.remove(repoPath: fixture.repoPath, entry: entry, includingIgnored: false, deleteBranch: true)
+            == .deleted)
+        let backups = fixture.git(["for-each-ref", "--format=%(refname)", WorktreeCleanupService.backupRefPrefix])
+        #expect(backups == WorktreeCleanupService.backupRefPrefix + "recent/1\n")
+    }
+}
+
+private func datedCommit(_ fixture: GitFixture, tree: String, message: String, date: String) -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", tree, "-m", message]
+    process.currentDirectoryURL = fixture.repoURL
+    var environment = ProcessInfo.processInfo.environment
+    environment["GIT_COMMITTER_DATE"] = date
+    process.environment = environment
+    let output = Pipe()
+    process.standardOutput = output
+    try? process.run()
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    return (String(bytes: data, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 }

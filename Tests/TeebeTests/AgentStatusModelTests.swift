@@ -20,7 +20,7 @@ struct AgentStatusModelTests {
             Worktree(path: "/repo", branch: "main", isPrimary: true),
             Worktree(path: "/repo-wt", branch: "feat/x")
         ]
-        return SelectorModel(environment: makeTestEnvironment(
+        let selector = SelectorModel(environment: makeTestEnvironment(
             git: git,
             makeWatcher: box.map { b in { b.make() } },
             agentStatuses: states.provider,
@@ -28,6 +28,8 @@ struct AgentStatusModelTests {
             agentExtraWatchPaths: extraWatchPaths,
             notify: spy.record
         ))
+        selector.notificationsEnabled = true
+        return selector
     }
 
     @Test("refreshWorktreeInfo picks up each worktree's agent state")

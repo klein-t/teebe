@@ -143,7 +143,7 @@ private struct ChipBody<Label: View>: View {
 /// Replaces bare `.buttonStyle(.plain)` on toolbar-style icon buttons. Default
 /// size is sized to stay within a 32pt header without colliding with neighbours.
 struct IconButtonStyle: ButtonStyle {
-    var size = CGSize(width: 22, height: 28)
+    var size = CGSize(width: 28, height: 28)
     func makeBody(configuration: Configuration) -> some View {
         ChipBody(size: size, pressed: configuration.isPressed) { configuration.label }
     }
@@ -162,7 +162,7 @@ private struct HoverChipModifier: ViewModifier {
 extension View {
     /// Wrap a compact control (e.g. a `Menu` label) in a hit area + hover chip
     /// matching `IconButtonStyle`.
-    func hoverChip(_ size: CGSize = CGSize(width: 22, height: 28)) -> some View {
+    func hoverChip(_ size: CGSize = CGSize(width: 28, height: 28)) -> some View {
         modifier(HoverChipModifier(size: size))
     }
 }

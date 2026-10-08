@@ -47,6 +47,26 @@ struct WhatsNewModelTests {
         #expect(store.load().lastSeenVersion == "0.3.0")
     }
 
+    @Test("preference and layout saves keep the version just recorded by What’s New")
+    func appSavesPreserveSeenVersion() async throws {
+        let store = makeStore()
+        defer { try? FileManager.default.removeItem(at: store.url.deletingLastPathComponent()) }
+        try store.save(AppState(lastSeenVersion: "0.7.0", appearance: "dark"))
+        let app = AppModel(environment: makeTestEnvironment(store: store))
+        await app.bootstrap()
+        let whatsNew = WhatsNewModel(version: "0.8.0", changelogMarkdown: changelog, store: store)
+        #expect(whatsNew.presentIfUpdated())
+        app.floatOnTop = true
+        #expect(store.load().lastSeenVersion == "0.8.0")
+        app.saveLayout(SectionLayout(filesOpen: false), forRepo: "/repo")
+        #expect(store.load().lastSeenVersion == "0.8.0")
+        #expect(store.load().appearance == "dark")
+        #expect(store.load().floatOnTop)
+        #expect(store.load().layoutByRepo?["/repo"]?.filesOpen == false)
+        let restarted = WhatsNewModel(version: "0.8.0", changelogMarkdown: changelog, store: store)
+        #expect(!restarted.presentIfUpdated())
+    }
+
     @Test("does not greet again for the same version")
     func sameVersion() {
         let store = makeStore()

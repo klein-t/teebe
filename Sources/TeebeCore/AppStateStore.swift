@@ -45,6 +45,8 @@ public struct SectionLayout: Codable, Equatable, Sendable {
 /// (TECH_SPEC §10). Serialized to JSON; nothing sensitive.
 public struct AppState: Codable, Equatable, Sendable {
     public var repositories: [PersistedRepository]
+    /// Legacy required key kept for older app versions to decode saved state.
+    /// Files ignores this value; app saves always write false.
     public var showChangedOnly: Bool
     public var showIgnored: Bool
     public var floatOnTop: Bool
@@ -71,7 +73,7 @@ public struct AppState: Codable, Equatable, Sendable {
     /// state files decode; nil means the default (on).
     public var fetchAutomatically: Bool?
     /// The removal confirmation's "Also delete the branch" choice, remembered
-    /// across sessions. Optional so older state files decode; nil means on.
+    /// across sessions. Optional so older state files decode; nil means off.
     public var deleteBranchOnRemove: Bool?
     /// The folder last chosen for new worktrees, keyed by repository path.
     /// Optional so older state files decode; a missing entry means no choice yet.
@@ -82,6 +84,14 @@ public struct AppState: Codable, Equatable, Sendable {
     /// How the worktree list is ordered ("status", "name"). Optional so older state
     /// files decode; nil means the default (by folder).
     public var worktreeSortOrder: String?
+    public var defaultPreferences: ProjectPreferences?
+    public var projectPreferences: [String: ProjectPreferences]?
+    public var openWithPolicy: String?
+    public var defaultFileApp: String?
+    public var openWithAppsByRepo: [String: [String: String]]?
+    public var terminalApp: String?
+    public var agentNotifications: Bool?
+    public var notificationSound: Bool?
 
     public init(
         repositories: [PersistedRepository] = [],
@@ -139,13 +149,29 @@ public final class AppStateStore: @unchecked Sendable {
             .appendingPathComponent("state.json")
     }
 
+    /// Set when an existing file could be neither used nor moved aside. Saving
+    /// would replace the only copy, so it is refused from then on.
+    private let lock = NSLock()
+    private var savesBlocked = false
+
+    struct UnusableFileKept: Error {}
+
     /// Load persisted state, returning a default `AppState` when the file is
-    /// missing or unreadable (graceful first-run / corruption handling).
-    /// A file that exists but cannot be decoded is moved aside first: the app
-    /// saves again soon after loading, which would otherwise destroy the only
-    /// copy of a recoverable list of repositories.
+    /// missing or unusable (graceful first-run / corruption handling).
+    /// A file that exists but cannot be read or decoded is moved aside first:
+    /// the app saves again soon after loading, which would otherwise destroy the
+    /// only copy of a recoverable list of repositories. If it cannot be moved
+    /// either, saves are refused instead.
     public func load() -> AppState {
-        guard let data = try? Data(contentsOf: url) else { return AppState() }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch CocoaError.fileReadNoSuchFile {
+            return AppState()
+        } catch {
+            setAside()
+            return AppState()
+        }
         if let state = try? JSONDecoder().decode(AppState.self, from: data) { return state }
         setAside()
         return AppState()
@@ -155,11 +181,16 @@ public final class AppStateStore: @unchecked Sendable {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withTimeZone]
         let name = url.lastPathComponent + ".corrupt-" + formatter.string(from: Date())
-        try? FileManager.default.moveItem(at: url, to: url.deletingLastPathComponent()
-            .appendingPathComponent(name))
+        do {
+            try FileManager.default.moveItem(at: url, to: url.deletingLastPathComponent()
+                .appendingPathComponent(name))
+        } catch {
+            lock.withLock { savesBlocked = true }
+        }
     }
 
     public func save(_ state: AppState) throws {
+        guard !lock.withLock({ savesBlocked }) else { throw UnusableFileKept() }
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true

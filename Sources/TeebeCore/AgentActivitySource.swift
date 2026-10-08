@@ -9,6 +9,11 @@ public protocol AgentActivitySource: Sendable {
     /// States keyed by worktree path, for the given worktree paths of one repo.
     /// A worktree with nothing going on may be missing or `.idle`.
     func states(forWorktreePaths paths: [String], now: Date) -> [String: AgentActivityState]
+    func turnEnds(forWorktreePaths paths: [String], now: Date) -> [AgentTurnEnd]
+}
+
+public extension AgentActivitySource {
+    func turnEnds(forWorktreePaths paths: [String], now: Date) -> [AgentTurnEnd] { [] }
 }
 
 extension AgentSessionScanner: AgentActivitySource {}
@@ -32,6 +37,10 @@ public struct CombinedAgentActivity: AgentActivitySource {
             }
         }
         return result
+    }
+
+    public func turnEnds(forWorktreePaths paths: [String], now: Date) -> [AgentTurnEnd] {
+        sources.flatMap { $0.turnEnds(forWorktreePaths: paths, now: now) }
     }
 
     /// The worktrees where any one adapter reports an agent working. `states`

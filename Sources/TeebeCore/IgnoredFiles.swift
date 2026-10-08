@@ -38,6 +38,24 @@ public struct IgnoredFiles: Equatable, Sendable {
         return IgnoredFiles(paths: paths.sorted(), isTruncated: false)
     }
 
+    /// The folders inside the ignored `entries` that are Git repositories of their
+    /// own (they hold a `.git` folder or file), relative to `root`, sorted. A
+    /// repository's `.git` is not walked, and symbolic links are never followed.
+    public static func repositories(in root: String, entries: [String]) -> [String] {
+        var found: [String] = []
+        let base = URL(fileURLWithPath: root)
+        for entry in entries where entry.hasSuffix("/") {
+            guard let walker = FileManager.default.enumerator(atPath: base.appendingPathComponent(entry).path) else { continue }
+            while let relative = walker.nextObject() as? String {
+                guard (relative as NSString).lastPathComponent == ".git" else { continue }
+                if walker.fileAttributes?[.type] as? FileAttributeType == .typeDirectory { walker.skipDescendants() }
+                let folder = (relative as NSString).deletingLastPathComponent
+                found.append(entry + (folder.isEmpty ? "" : folder + "/"))
+            }
+        }
+        return found.sorted()
+    }
+
     /// Files that look hard to get back: secrets, keys and certificates, local
     /// settings. Only a way to choose which names to show first; nothing about the
     /// others is assumed.

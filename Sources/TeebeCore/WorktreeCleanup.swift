@@ -32,13 +32,21 @@ public struct CleanupTargets: Equatable, Sendable {
         branches.first { $0.ref == ref }
     }
 
+    /// The branch a saved extra target names: a full ref as the picker saves it, or a
+    /// name typed in Settings (`release`, `origin/release`), origin's copy first.
+    public func extraBranch(_ extra: String?) -> CleanupBranch? {
+        guard let name = extra?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
+        return branch(name) ?? branch("refs/remotes/origin/" + name) ?? branch("refs/heads/" + name)
+            ?? branch("refs/remotes/" + name)
+    }
+
     /// What every worktree is checked against, in display order: the automatic
     /// default, the per-repository extra branch, then the integration branches that
     /// exist (origin's copy preferred over the local one). Integration branches are
     /// one per name; an explicitly chosen extra is kept even when it shares a name,
     /// since a local `dev` can hold merges its origin copy does not have yet.
     public func mergeTargets(extra: String?) -> [CleanupBranch] {
-        let extraBranch = extra.flatMap(branch)
+        let extraBranch = self.extraBranch(extra)
         var result: [CleanupBranch] = []
         func add(_ branch: CleanupBranch?) {
             guard let branch, result.count < Self.mergeTargetLimit, !result.contains(where: {
@@ -100,6 +108,9 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
     /// from being removed; nil otherwise.
     public var ignoredFiles: IgnoredFiles?
     public var hasSubmodules = false
+    /// Its ignored files hold a Git repository (a `.git` folder or file) with
+    /// commits its own remote branches don't have: removal would delete them.
+    public var hasNestedRepository = false
     public var hasUncheckedFiles = false
     /// The checkout's branch is one of the merge targets.
     public var isTarget = false
@@ -140,7 +151,8 @@ public struct CleanupEntry: Identifiable, Equatable, Sendable {
     }
 
     private func isFolderRemovable(includingIgnored: Bool) -> Bool {
-        !hasLocalChanges && !hasSubmodules && !hasUncheckedFiles && (!hasIgnoredFiles || includingIgnored) && !isTarget
+        !hasLocalChanges && !hasSubmodules && !hasNestedRepository && !hasUncheckedFiles
+            && (!hasIgnoredFiles || includingIgnored) && !isTarget
             && operation == nil
             && !worktree.isPrimary && !worktree.isLocked && !worktree.isBare && !worktree.isDetached
     }
@@ -205,6 +217,12 @@ public enum CleanupError: Error, LocalizedError {
 /// Removal is non-forced and revalidates both the reviewed commit and the targets it
 /// was merged into immediately.
 public struct WorktreeCleanupService: WorktreeCleanupChecking {
+    /// Where removal keeps commits that only the removed worktree's or branch's
+    /// reflogs still reached: `<prefix><branch>/<unix time>`. Recover one with
+    /// `git branch <name> <ref>^<n>`.
+    public static let backupRefPrefix = "refs/teebe/removed/"
+    /// How long a backup is kept: a later removal prunes older ones.
+    static let backupLifetime: TimeInterval = 90 * 24 * 60 * 60
     private let git: GitClient
     public init(git: GitClient) { self.git = git }
 
@@ -270,11 +288,73 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
         guard isRemovable, !isMerged || !Self.isTarget(current, among: catalog.mergeTargets(extra: nil)) else {
             throw CleanupError.unsafe
         }
+        try await keepReflogOnlyCommits(of: current, repoPath: repoPath)
         try Task.checkCancellation()
         try await git.removeWorktree(repoPath: repoPath, worktreePath: current.path, force: false)
         guard deleteBranch, let branch = current.branch else { return .notRequested }
         return await deleteMergedBranch(branch, head: checked.worktree.head,
                                         targets: checked.mergedTargets, repoPath: repoPath)
+    }
+
+    /// Removing the worktree deletes its HEAD's reflog, and deleting the branch
+    /// deletes the branch's. Commits only those reflogs still reach (left behind
+    /// by a reset or an amend) would become unreachable and, in time, be
+    /// collected. They are kept first under one backup ref,
+    /// `<backupRefPrefix><branch>/<unix time>`, whose commit has them as
+    /// parents. As in `MissingWorktrees.holdsUnsavedWork`, a commit needs keeping
+    /// when no branch, tag or remote branch contains it. Nothing to keep, no ref.
+    /// Any doubt throws, so the worktree is not removed.
+    private func keepReflogOnlyCommits(of worktree: Worktree, repoPath: String) async throws {
+        await pruneBackups(in: repoPath)
+        var logged = Set<String>()
+        var logs = [("HEAD", worktree.path)]
+        if let branch = worktree.branch { logs.append(("refs/heads/" + branch, repoPath)) }
+        for (ref, path) in logs {
+            let log = try await checked(["reflog", "show", "--format=%H", ref, "--"], in: path)
+            logged.formUnion(log.stdoutString.split(separator: "\n").map(String.init))
+        }
+        let commits = logged.sorted()
+        var lost = Set<String>()
+        // Batched to keep each command line short however long the reflogs are.
+        for start in stride(from: 0, to: commits.count, by: 1000) {
+            let batch = Array(commits[start..<min(start + 1000, commits.count)])
+            let unreachable = try await checked(["rev-list"] + batch + ["--not", "--branches", "--tags", "--remotes"],
+                                                in: repoPath)
+            lost.formUnion(unreachable.stdoutString.split(separator: "\n").map(String.init))
+        }
+        let logOnly = commits.filter(lost.contains)
+        guard !logOnly.isEmpty else { return }
+        // The fewest tips that still reach every one of them.
+        let tips = try await checked(["merge-base", "--independent"] + logOnly, in: repoPath)
+            .stdoutString.split(separator: "\n").map(String.init)
+        guard let first = tips.first else { throw CleanupError.gitFailed }
+        let name = worktree.branch ?? "detached"
+        let message = "Commits kept by Teebe when the worktree \(worktree.path) (\(name)) was removed"
+        let backup = try await checked(["-c", "user.name=Teebe", "-c", "user.email=teebe@localhost",
+                                        "commit-tree", "--no-gpg-sign", first + "^{tree}", "-m", message]
+                                       + tips.flatMap { ["-p", $0] }, in: repoPath)
+        let commit = backup.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stamp = Int(Date().timeIntervalSince1970)
+        // An empty old value creates the ref only if it doesn't exist yet.
+        for suffix in ["", "-1", "-2", "-3"] {
+            let ref = Self.backupRefPrefix + name + "/\(stamp)" + suffix
+            if try await git.run(["update-ref", ref, commit, ""], in: repoPath).succeeded { return }
+        }
+        throw CleanupError.gitFailed
+    }
+
+    /// Drops backups older than `backupLifetime`. Best effort: a backup that
+    /// stays a little longer costs nothing.
+    private func pruneBackups(in repoPath: String) async {
+        guard let refs = try? await git.run(["for-each-ref", "--format=%(refname)%00%(objectname)%00%(committerdate:unix)",
+                                             Self.backupRefPrefix], in: repoPath),
+              refs.succeeded else { return }
+        let cutoff = Date().timeIntervalSince1970 - Self.backupLifetime
+        for line in refs.stdoutString.split(separator: "\n") {
+            let fields = line.split(separator: "\u{0}").map(String.init)
+            guard fields.count == 3, let date = TimeInterval(fields[2]), date < cutoff else { continue }
+            _ = try? await git.run(["update-ref", "-d", fields[0], fields[1]], in: repoPath)
+        }
     }
 
     /// Deletes the local branch only while its tip is the commit that was checked
@@ -340,6 +420,11 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             if entry.hasIgnoredFiles, !entry.hasLocalChanges, !entry.hasSubmodules, !entry.hasUncheckedFiles,
                entry.operation == nil, !worktree.isPrimary, !worktree.isLocked, !worktree.isDetached {
                 entry.ignoredFiles = IgnoredFiles.inventory(in: worktree.path, entries: entry.ignoredPaths)
+                for repository in IgnoredFiles.repositories(in: worktree.path, entries: entry.ignoredPaths)
+                where await holdsOwnCommits(worktree.path + "/" + repository) {
+                    entry.hasNestedRepository = true
+                    break
+                }
             }
             guard !targets.isEmpty else { entry.problem = "No branch to compare against"; return entry }
             let merge = try await mergedTargets(of: entry.worktree.head, among: targets, in: worktree.path)
@@ -363,6 +448,17 @@ public struct WorktreeCleanupService: WorktreeCleanupChecking {
             entry.problem = "Could not inspect this worktree"
         }
         return entry
+    }
+
+    /// Whether the repository at `path` has commits, on its HEAD or a branch, that
+    /// none of its remote branches has: its own work, which deleting the folder
+    /// would lose. A clone a package manager keeps has none; an empty repository
+    /// has none. Anything that can't be read counts as having some.
+    private func holdsOwnCommits(_ path: String) async -> Bool {
+        // Its own `.git` named outright, so a broken one never falls back to the worktree's.
+        guard let result = try? await git.run(["--git-dir=" + path + ".git", "rev-list", "-n", "1", "--ignore-missing",
+                                               "HEAD", "--branches", "--not", "--remotes"], in: path) else { return true }
+        return !result.succeeded || !result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Every target that has `head` as an ancestor. When none does, the first

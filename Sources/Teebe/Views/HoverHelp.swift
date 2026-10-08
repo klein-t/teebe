@@ -39,9 +39,12 @@ extension View {
     /// card's own size and starting at the view's leading edge. `summary` is the
     /// plain-text version, for accessibility and to notice when the card changes.
     /// A new `reveal` value shows the card straight away, without the pointer (the
-    /// keyboard's way in); the next key, click or scroll puts it away.
-    func hoverCard<Card: View>(_ summary: String, reveal: Int? = nil, @ViewBuilder card: () -> Card) -> some View {
-        background(HoverHelpAnchor(text: summary, highlight: false, card: AnyView(card()), reveal: reveal))
+    /// keyboard's way in); the next key, click or scroll puts it away. `onReveal`
+    /// runs once it is shown, so the caller can spend the request.
+    func hoverCard<Card: View>(_ summary: String, reveal: Int? = nil, onReveal: (() -> Void)? = nil,
+                               @ViewBuilder card: () -> Card) -> some View {
+        background(HoverHelpAnchor(text: summary, highlight: false, card: AnyView(card()), reveal: reveal,
+                                   onReveal: onReveal))
             .accessibilityHint(summary)
     }
 }
@@ -51,9 +54,16 @@ private struct HoverHelpAnchor: NSViewRepresentable {
     let highlight: Bool
     var card: AnyView?
     var reveal: Int?
+    var onReveal: (() -> Void)?
     @Environment(\.isEnabled) private var isEnabled
 
-    func makeNSView(context: Context) -> HoverHelpView { HoverHelpView() }
+    func makeNSView(context: Context) -> HoverHelpView {
+        let view = HoverHelpView()
+        // A request already standing when this anchor is made was meant for an
+        // earlier one (the row was redrawn, regrouped or swapped its mark): not new.
+        view.revealed = reveal
+        return view
+    }
 
     func updateNSView(_ view: HoverHelpView, context: Context) {
         if view.text != text || view.enabled != isEnabled {
@@ -67,9 +77,10 @@ private struct HoverHelpAnchor: NSViewRepresentable {
         if let reveal, reveal != view.revealed {
             view.revealed = reveal
             // After this update: the panel measures the view in its window.
-            DispatchQueue.main.async { [weak view] in
+            DispatchQueue.main.async { [weak view, onReveal] in
                 guard let view else { return }
                 HoverHelpPresenter.shared.reveal(owner: view)
+                onReveal?()
             }
         }
     }
@@ -96,6 +107,15 @@ final class HoverHelpView: NSView {
     /// even while another app is frontmost.
     static let trackingOptions: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
 
+    // AppKit can report visibleRect beyond bounds for an unclipped view. With
+    // inVisibleRect tracking, that makes neighboring rows share one hover area.
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        clipsToBounds = true
+    }
+
+    required init?(coder: NSCoder) { nil }
+
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -106,7 +126,9 @@ final class HoverHelpView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let hoverArea { removeTrackingArea(hoverArea) }
+        // inVisibleRect follows clipping and layout itself. Replacing an area
+        // while its pointer is inside can lose the corresponding exit event.
+        guard hoverArea == nil else { return }
         let area = NSTrackingArea(rect: .zero, options: Self.trackingOptions, owner: self, userInfo: nil)
         addTrackingArea(area)
         hoverArea = area
@@ -276,32 +298,31 @@ private struct PointerHoverAnchor: NSViewRepresentable {
 final class PointerHoverView: NSView {
     static let trackingOptions = HoverHelpView.trackingOptions
     var onHover: (Bool) -> Void = { _ in }
-    private var hovered = false
     private var hoverArea: NSTrackingArea?
+
+    // AppKit can report visibleRect beyond bounds for an unclipped view. With
+    // inVisibleRect tracking, that makes neighboring rows share one hover area.
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        clipsToBounds = true
+    }
+
+    required init?(coder: NSCoder) { nil }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let hoverArea { removeTrackingArea(hoverArea) }
+        // inVisibleRect follows clipping and layout itself. Replacing an area
+        // while its pointer is inside can lose the corresponding exit event.
+        guard hoverArea == nil else { return }
         let area = NSTrackingArea(rect: .zero, options: Self.trackingOptions, owner: self, userInfo: nil)
         addTrackingArea(area)
         hoverArea = area
     }
 
-    override func mouseEntered(with event: NSEvent) { set(true) }
-    override func mouseExited(with event: NSEvent) { set(false) }
-
-    /// Silent: the SwiftUI side resets itself as the view goes (`onDisappear`),
-    /// and reporting from inside a hierarchy change would edit state mid-update.
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        hovered = false
-        super.viewWillMove(toWindow: newWindow)
-    }
-
-    private func set(_ value: Bool) {
-        guard value != hovered else { return }
-        hovered = value
-        onHover(value)
-    }
+    // Forward every event. A separate native hover flag can get reset when
+    // SwiftUI reparents the anchor while the row's own state remains alive.
+    override func mouseEntered(with event: NSEvent) { onHover(true) }
+    override func mouseExited(with event: NSEvent) { onHover(false) }
 }

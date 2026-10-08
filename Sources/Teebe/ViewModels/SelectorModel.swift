@@ -64,6 +64,29 @@ final class SelectorModel {
     /// Invoked whenever the selected repo/worktree changes, so the owner can persist
     /// the new selection (drives "reopen where I left off").
     var onSelectionChange: (() -> Void)?
+    var onRepositoryChange: (() -> Void)?
+    private(set) var isLoading = false
+    private var notificationPreference = false
+    var notificationsEnabled: Bool {
+        get { notificationPreference }
+        set { setNotificationsEnabled(newValue) }
+    }
+
+    func setNotificationsEnabled(_ enabled: Bool, now: Date = Date()) {
+        guard enabled != notificationPreference else { return }
+        notificationPreference = enabled
+        guard enabled else { return }
+        turnDelivery.resumeObservation(now: now)
+        agentRefreshGeneration += 1
+        needsNotificationBaseline = true
+    }
+    @ObservationIgnored private var needsNotificationBaseline = false
+    @ObservationIgnored private var turnDelivery = AgentTurnDelivery()
+    @ObservationIgnored private var lastAgentSnapshotAt = Date.distantPast
+    @ObservationIgnored private var agentRefreshGeneration = 0
+    /// Bumped on every project pick, so a load or rescan that resumes after a
+    /// newer pick drops what it read instead of showing it under that project.
+    @ObservationIgnored private var repoSelectionGeneration = 0
 
     private let environment: AppEnvironment
     /// Watches the selected repo's git dir so an external `git worktree add`/`remove`
@@ -89,10 +112,17 @@ final class SelectorModel {
     /// Low-power mode (window occluded): every FSEvents watcher is stopped and
     /// the app rides on the hook ping plus a slow poll. See `setLowPower`.
     private(set) var isLowPower = false
+    private var visibilityGeneration = UUID()
+    private var visibleRefs: (repoPath: String, output: Data)?
+    private var hiddenRefsChanged = false
+    private var hiddenRefs: (repoPath: String, output: Data)?
     /// Poll cadences for the time-only agent transitions (stall/idle-out).
     /// Vars so tests can shrink them.
     var agentPollInterval: TimeInterval = 30
-    var lowPowerAgentPollInterval: TimeInterval = 120
+    var lowPowerAgentPollInterval: TimeInterval = 15
+    @ObservationIgnored var waitForAgentPoll: (TimeInterval) async throws -> Void = {
+        try await Task.sleep(for: .seconds($0))
+    }
     /// Delay before the catch-up re-derive that follows a hook ping.
     var agentPingSettle: TimeInterval = 2
     /// How long a worktree stays working after its last file change or busy
@@ -188,7 +218,10 @@ final class SelectorModel {
         worktreesAdminDir = nil
         stopAgentWatching()
         stopWorktreeActivity()
+        turnDelivery.watch([])
+        lastAgentSnapshotAt = .distantPast
         selectedRepo = nil
+        onRepositoryChange?()
         worktrees = []
         selectedWorktree = nil
         branches = []
@@ -202,31 +235,46 @@ final class SelectorModel {
     /// primary-then-saved double load: two full tree loads inside the window's
     /// first layout pass escalate into an AppKit constraint-loop crash at launch.
     func selectRepo(_ repo: Repository, preferredWorktreePath: String? = nil) async {
+        repoSelectionGeneration += 1
+        let generation = repoSelectionGeneration
+        func isCurrent() -> Bool { generation == repoSelectionGeneration && selectedRepo?.path == repo.path }
+        isLoading = true
+        defer { if generation == repoSelectionGeneration { isLoading = false } }
         if selectedRepo?.path != repo.path {
+            turnDelivery.watch([])
+            lastAgentSnapshotAt = .distantPast
             cleanedUpCount = 0
             forgetAttempts.removeAll()
         }
         selectedRepo = repo
+        onRepositoryChange?()
         await startRepoWatching(repo)
+        guard isCurrent() else { return }
         startAgentWatching()
         var deleted: [Worktree] = []
         do {
             let found = await sortMissing(try await environment.worktreeService.worktrees(for: repo), in: repo)
+            guard isCurrent() else { return }
             deleted = found.deleted
             applyDiscovered(found.listed)
-            branches = try await environment.branchService.branches(for: repo)
+            let discoveredBranches = try await environment.branchService.branches(for: repo)
+            guard isCurrent() else { return }
+            branches = discoveredBranches
             errorMessage = nil
         } catch {
+            guard isCurrent() else { return }
             applyDiscovered([])
             branches = []
             errorMessage = WorktreeModel.describe(error)
         }
         await refreshWorktreeInfo()
+        guard isCurrent() else { return }
         let target = preferredWorktreePath.flatMap { preferred in
             worktrees.first { $0.path == preferred }
         } ?? worktrees.first(where: { $0.isPrimary }) ?? worktrees.first
         if let target {
             await selectWorktree(target)
+            guard isCurrent() else { return }
         }
         onSelectionChange?()
         await forgetDeleted(deleted, in: repo)
@@ -238,8 +286,16 @@ final class SelectorModel {
     /// `prune`) rewrites `worktrees/…` there, which `handleRepoWatchEvent` filters
     /// for; routine index/ref writes in the primary checkout are ignored.
     private func startRepoWatching(_ repo: Repository) async {
+        let generation = visibilityGeneration
         repoWatcher?.stop()
         let commonDir = await resolveGitCommonDir(for: repo)
+        // Another pick or a visibility change may have happened meanwhile: keep
+        // exactly one watcher, and only for the repo that is still selected.
+        guard visibilityGeneration == generation, !isLowPower, selectedRepo?.path == repo.path else { return }
+        let refs = try? await environment.git.run(["show-ref"], in: repo.path)
+        guard visibilityGeneration == generation, !isLowPower, selectedRepo?.path == repo.path else { return }
+        visibleRefs = refs.flatMap { $0.succeeded ? (repo.path, $0.standardOutput) : nil }
+        repoWatcher?.stop()
         worktreesAdminDir = (commonDir as NSString).appendingPathComponent("worktrees")
         let watcher = environment.makeWatcher()
         watcher.start(paths: [commonDir], debounce: 0.5) { [weak self] paths in
@@ -280,6 +336,10 @@ final class SelectorModel {
         }
     }
 
+    /// Remote fetches and visibility changes can happen while FSEvents is stopped.
+    /// Restart merge checks explicitly instead of relying on an event we may miss.
+    func invalidateMergeChecks() { mergeRevision += 1 }
+
     /// Re-discover the repo's worktrees + branches in place — the manual Refresh
     /// button and the auto-detect watcher both land here. Unlike `selectRepo` it
     /// preserves the current selection (only falling back to the primary if the
@@ -297,21 +357,26 @@ final class SelectorModel {
 
     private func rescanWorktrees() async {
         guard let repo = selectedRepo else { return }
+        let generation = repoSelectionGeneration
+        func isCurrent() -> Bool { generation == repoSelectionGeneration && selectedRepo?.path == repo.path }
         let discovered: [Worktree]
         let deleted: [Worktree]
         let discoveredBranches: [Branch]
         do {
             (discovered, deleted) = await sortMissing(try await environment.worktreeService.worktrees(for: repo), in: repo)
             discoveredBranches = try await environment.branchService.branches(for: repo)
-            errorMessage = nil
         } catch {
             // A transient failure shouldn't blank the list — keep what we have.
-            errorMessage = WorktreeModel.describe(error)
+            if isCurrent() { errorMessage = WorktreeModel.describe(error) }
             return
         }
+        // Another project was picked while this read was in flight: its own load wins.
+        guard isCurrent() else { return }
+        errorMessage = nil
         applyDiscovered(discovered)
         branches = discoveredBranches
         await refreshWorktreeInfo()
+        guard isCurrent() else { return }
         // Keep the current selection if it still exists; only re-focus when it's gone.
         let isSelectionListed = selectedWorktree.map { current in discovered.contains { $0.path == current.path } } ?? false
         if !isSelectionListed, let fallback = discovered.first(where: { $0.isPrimary }) ?? discovered.first {
@@ -383,15 +448,15 @@ final class SelectorModel {
     }
 
     /// Adopt a freshly discovered worktree list. Merge ancestry can only have moved
-    /// when the set of checkouts changed or one of their HEADs did, so only that
-    /// bumps `mergeRevision`. Re-discovering the same trees — which is what a manual
-    /// Refresh, a selection change, or leaving low power (alt-tab) does — reuses the
-    /// last scan instead of restarting a full N-worktree check.
+    /// when the set of checkouts changed or one of their HEADs did, so discovery
+    /// bumps `mergeRevision` only then. Fetch completion and leaving low power
+    /// invalidate separately because comparison refs may move with unchanged HEADs.
     private func applyDiscovered(_ discovered: [Worktree]) {
         func identity(_ trees: [Worktree]) -> [String] { trees.map { $0.path + "\u{0}" + $0.head } }
         if identity(discovered) != identity(worktrees) { mergeRevision += 1 }
         let pathsChanged = discovered.map(\.path) != worktrees.map(\.path)
         worktrees = discovered
+        turnDelivery.watch(discovered.map(\.path))
         if pathsChanged || worktreesWatcher == nil { startWorktreeActivity() }
     }
 
@@ -400,12 +465,16 @@ final class SelectorModel {
     func refreshWorktreeInfo(now: Date = Date()) async {
         let statusService = environment.statusService
         let agentStatuses = environment.agentStatuses
+        let agentTurnEnds = environment.agentTurnEnds
+        let repository = selectedRepo?.path
+        agentRefreshGeneration += 1
+        let generation = agentRefreshGeneration
         let worktrees = self.worktrees
         let paths = worktrees.map(\.path)
         // One batched agent-log scan for the whole repo — the scanner needs every
         // worktree path to attribute a session to the worktree it runs in, not
         // the one it was launched from. Runs off-main alongside the git reads.
-        let agentTask = Task.detached { agentStatuses(paths, now) }
+        let agentTask = Task.detached { (agentStatuses(paths, now), agentTurnEnds(paths, now)) }
         // Fetch each worktree's status concurrently — these are independent git
         // reads, so a repo with many worktrees shouldn't serialize N `git status`
         // calls on every repo switch.
@@ -422,7 +491,9 @@ final class SelectorModel {
             }
             return byPath
         }
-        let agentStates = await agentTask.value
+        let (agentStates, turnEnds) = await agentTask.value
+        guard selectedRepo?.path == repository, self.worktrees.map(\.path) == paths,
+              generation == agentRefreshGeneration else { return }
         let remoteBranches = Set(branches.filter(\.isRemote).map(\.name))
         var info: [String: WorktreeInfo] = [:]
         for worktree in worktrees {
@@ -440,7 +511,7 @@ final class SelectorModel {
                 isKeptMissing: keptMissingPaths.contains(worktree.path)
             )
         }
-        notifyAgentTransitions(from: worktreeInfo, to: info)
+        notifyAgentTransitions(from: worktreeInfo, to: info, turnEnds: turnEnds, now: now)
         publish(info)
     }
 
@@ -454,9 +525,15 @@ final class SelectorModel {
     /// watcher and the periodic poll; cheap enough to run often.
     func refreshAgentStates(now: Date = Date()) async {
         let agentStatuses = environment.agentStatuses
+        let agentTurnEnds = environment.agentTurnEnds
+        let repository = selectedRepo?.path
+        agentRefreshGeneration += 1
+        let generation = agentRefreshGeneration
         let worktrees = self.worktrees
         let paths = worktrees.map(\.path)
-        let states = await Task.detached { agentStatuses(paths, now) }.value
+        let (states, turnEnds) = await Task.detached { (agentStatuses(paths, now), agentTurnEnds(paths, now)) }.value
+        guard selectedRepo?.path == repository, self.worktrees.map(\.path) == paths,
+              generation == agentRefreshGeneration else { return }
         var info = worktreeInfo
         for worktree in worktrees {
             var entry = info[worktree.path] ?? WorktreeInfo()
@@ -464,16 +541,35 @@ final class SelectorModel {
             entry.isLive = environment.activityMonitor.isBusy(worktreePath: worktree.path, within: liveWindow, now: now)
             info[worktree.path] = entry
         }
-        notifyAgentTransitions(from: worktreeInfo, to: info)
+        notifyAgentTransitions(from: worktreeInfo, to: info, turnEnds: turnEnds, now: now)
         publish(info)
     }
 
-    /// Notify only on the working → needsAttention edge: the turn just ended (or
-    /// stalled). A session discovered already-finished stays silent, so app
-    /// launch never replays old sessions as notifications.
-    private func notifyAgentTransitions(from old: [String: WorktreeInfo], to new: [String: WorktreeInfo]) {
+    /// Recorded turn ends also cover work completed entirely between polls.
+    /// Badge edges remain the fallback for questions, stalls and other adapters.
+    private func notifyAgentTransitions(from old: [String: WorktreeInfo], to new: [String: WorktreeInfo],
+                                        turnEnds: [AgentTurnEnd], now: Date) {
+        // A scan can read a completion after reading the working badge. Keep
+        // that ending through the following badge edge, even if already delivered.
+        let endedPaths = Set(turnEnds.filter { $0.endedAt >= lastAgentSnapshotAt }.map(\.worktreePath))
+        // Completion timestamps round to milliseconds. Keep every ending from
+        // the scan-start millisecond through the following badge snapshot.
+        lastAgentSnapshotAt = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970 * 1_000) / 1_000)
+        let fresh = turnDelivery.consume(turnEnds, now: max(now, Date()))
+        guard notificationsEnabled else { return }
+        for event in fresh where event.completed {
+            let name = worktrees.first { $0.path == event.worktreePath }?.branch ?? URL(fileURLWithPath: event.worktreePath).lastPathComponent
+            environment.notify("Agent finished", "\(name): Codex finished a turn")
+        }
+        // A badge may still describe work that ended while notifications were
+        // off. The first enabled snapshot establishes a new transition baseline;
+        // journal completions newer than the toggle are still delivered above.
+        if needsNotificationBaseline {
+            needsNotificationBaseline = false
+            return
+        }
         for worktree in worktrees {
-            guard old[worktree.path]?.agentState == .working,
+            guard !endedPaths.contains(worktree.path), old[worktree.path]?.agentState == .working,
                   new[worktree.path]?.agentState == .needsAttention else { continue }
             let name = worktree.branch ?? worktree.name
             environment.notify("Agent needs you", "\(name) — the agent finished or is waiting")
@@ -492,10 +588,20 @@ final class SelectorModel {
             Task { @MainActor in await self?.handleAgentPing() }
         }
         agentPingListener = listener
+        startAgentPolling()
+    }
+
+    private func startAgentPolling() {
+        let previous = agentPollTask
+        previous?.cancel()
         agentPollTask = Task { [weak self] in
+            // A visibility change reschedules sleep, but an in-flight scan must
+            // finish before its replacement starts another polling cycle.
+            await previous?.value
             while !Task.isCancelled {
-                guard let interval = self?.currentAgentPollInterval else { return }
-                try? await Task.sleep(for: .seconds(interval))
+                guard let interval = self?.currentAgentPollInterval,
+                      let wait = self?.waitForAgentPoll else { return }
+                try? await wait(interval)
                 guard !Task.isCancelled else { return }
                 await self?.refreshAgentStates()
             }
@@ -546,19 +652,57 @@ final class SelectorModel {
     func setLowPower(_ on: Bool) async {
         guard on != isLowPower else { return }
         isLowPower = on
+        if agentPollTask != nil { startAgentPolling() }
+        let generation = UUID()
+        visibilityGeneration = generation
         if on {
-            repoWatcher?.stop()
-            agentWatcher?.stop()
-            agentWatcher = nil
-            stopWorktreeActivity()
-            worktree.pauseWatching()
+            hiddenRefs = nil
+            stopLiveWatchers()
+            if let repo = selectedRepo {
+                // A debounced event may be dropped when the watcher stops. Compare
+                // against the earlier visible baseline as well as the return read.
+                let refs = try? await environment.git.run(["show-ref"], in: repo.path)
+                guard visibilityGeneration == generation else { return }
+                // A project picked during the read may have started watchers again.
+                guard selectedRepo?.path == repo.path else { stopLiveWatchers(); return }
+                // Keep a change seen during an earlier hide whose return check never ran.
+                hiddenRefsChanged = hiddenRefsChanged || visibleRefs?.repoPath != repo.path
+                    || refs?.succeeded != true || visibleRefs?.output != refs?.standardOutput
+                hiddenRefs = refs.flatMap { $0.succeeded ? (repo.path, $0.standardOutput) : nil }
+            }
         } else {
             if let repo = selectedRepo { await startRepoWatching(repo) }
+            guard visibilityGeneration == generation else { return }
             startAgentWatcher()
             startWorktreeActivity()
             await worktree.resumeWatching()
+            guard visibilityGeneration == generation else { return }
+            guard await invalidateMergeChecksIfRefsMovedWhileHidden(generation: generation) else { return }
             await refreshWorktrees()
         }
+    }
+
+    /// The FSEvents streams low power turns off.
+    private func stopLiveWatchers() {
+        repoWatcher?.stop()
+        agentWatcher?.stop()
+        agentWatcher = nil
+        stopWorktreeActivity()
+        worktree.pauseWatching()
+    }
+
+    /// On return from low power, restart merge checks if refs moved while hidden.
+    /// False when a newer visibility change or project pick took over meanwhile.
+    private func invalidateMergeChecksIfRefsMovedWhileHidden(generation: UUID) async -> Bool {
+        guard let repo = selectedRepo else { return true }
+        let refs = try? await environment.git.run(["show-ref"], in: repo.path)
+        guard visibilityGeneration == generation, selectedRepo?.path == repo.path else { return false }
+        if hiddenRefsChanged || hiddenRefs?.repoPath != repo.path || refs?.succeeded != true || hiddenRefs?.output != refs?.standardOutput {
+            invalidateMergeChecks()
+        }
+        hiddenRefs = nil
+        hiddenRefsChanged = false
+        return true
     }
 
     /// A Claude Code hook pinged. Hooks run a beat before Claude Code records
@@ -575,7 +719,10 @@ final class SelectorModel {
     /// every write belongs to another project's sessions (which the scan never
     /// reads): Claude Code sessions elsewhere log continuously.
     func handleAgentWatchEvent(_ paths: [String]) async {
-        if let root = environment.agentProjectsRootPath,
+        let otherAgentChanged = paths.contains { path in
+            environment.agentExtraWatchPaths.contains { root in path == root || path.hasPrefix(root + "/") }
+        }
+        if !otherAgentChanged, let root = environment.agentProjectsRootPath,
            !AgentSessionScanner.eventsMatter(paths, projectsRoot: root, worktreePaths: worktrees.map(\.path)) {
             return
         }

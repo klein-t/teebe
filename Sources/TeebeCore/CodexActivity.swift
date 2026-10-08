@@ -187,6 +187,10 @@ public struct CodexRolloutScanner: AgentActivitySource {
     /// are reused: a busy agent rewrites one or two rollouts a second, not all.
     private let cache = CodexSummaryCache()
     private let archive = CodexArchive()
+    private let completions = CodexCompletionJournal()
+    /// One poll asks for `states` and then `turnEnds` at the same instant; they
+    /// share one listing of the rollout folders instead of listing them twice.
+    private let pollListing = CodexPollListing()
 
     public init(sessionsRoot: URL = CodexRolloutScanner.defaultSessionsRoot,
                 thresholds: AgentStatusThresholds = AgentStatusThresholds(),
@@ -208,6 +212,7 @@ public struct CodexRolloutScanner: AgentActivitySource {
         var result: [String: AgentActivityState] = [:]
         for path in paths { result[path] = .idle }
         let files = rolloutFiles(now: now)
+        pollListing.store(files, at: now)
         let fresh = files.values.filter { now.timeIntervalSince($0.mtime) < thresholds.idle }
         var summaries: [String: CodexThreadSummary] = [:]
         for file in fresh { if let thread = cachedSummary(of: file.url, id: file.id) { summaries[file.id] = thread } }
@@ -229,6 +234,13 @@ public struct CodexRolloutScanner: AgentActivitySource {
             if let parent, let owner = owner(of: parent, among: paths) { result[owner] = .working }
         }
         return result
+    }
+
+    public func turnEnds(forWorktreePaths paths: [String], now: Date) -> [AgentTurnEnd] {
+        let files = pollListing.take(at: now) ?? rolloutFiles(now: now)
+        return completions.read(files: files.values.map(\.url), paths: paths, now: now) { url in
+            cachedSummary(of: url, id: Self.threadID(of: url))
+        }
     }
 
     static func state(of thread: CodexThreadSummary, now: Date, thresholds: AgentStatusThresholds) -> AgentActivityState {
@@ -320,7 +332,7 @@ public struct CodexRolloutScanner: AgentActivitySource {
         }
     }
 
-    private static func threadID(of url: URL) -> String {
+    static func threadID(of url: URL) -> String {
         String(url.deletingPathExtension().lastPathComponent.suffix(36))
     }
 
@@ -345,6 +357,7 @@ public struct CodexRolloutScanner: AgentActivitySource {
            let meta = (try? JSONSerialization.jsonObject(with: head[head.startIndex..<end])) as? [String: Any],
            meta["type"] as? String == "session_meta",
            let payload = meta["payload"] as? [String: Any] {
+            thread.id = payload["id"] as? String ?? payload["session_id"] as? String ?? id
             thread.cwd = payload["cwd"] as? String
             thread.role = Self.role(of: payload["source"])
         }
@@ -467,6 +480,24 @@ private final class CodexArchive: @unchecked Sendable {
     var files: [URL] {
         lock.lock(); defer { lock.unlock() }
         return found
+    }
+}
+
+/// The listing made by a poll's `states`, handed once to the same poll's
+/// `turnEnds`. A file written in between is read by the next poll.
+private final class CodexPollListing: @unchecked Sendable {
+    private let lock = NSLock()
+    private var listing: (at: Date, files: [String: RolloutFile])?
+
+    func store(_ files: [String: RolloutFile], at now: Date) {
+        lock.lock(); listing = (now, files); lock.unlock()
+    }
+
+    func take(at now: Date) -> [String: RolloutFile]? {
+        lock.lock(); defer { lock.unlock() }
+        guard let listing, listing.at == now else { return nil }
+        self.listing = nil
+        return listing.files
     }
 }
 
