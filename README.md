@@ -16,7 +16,7 @@
   <a href="https://github.com/klein-t/teebe/releases/latest"><img src="https://img.shields.io/github/v/release/klein-t/teebe?label=release&color=2ea77a" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License: GPL-3.0"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-black" alt="macOS 14 or newer">
-  <img src="https://img.shields.io/badge/Apple%20Silicon%20%C2%B7%20Intel-universal-lightgrey" alt="Universal binary">
+  <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-lightgrey" alt="Apple Silicon">
 </p>
 
 <p align="center">
@@ -43,10 +43,13 @@ curl -fsSL https://teebe.io/install.sh | bash
 Or grab the latest build directly: [**teebe.zip**](https://dl.teebe.io) or
 [**teebe.dmg**](https://dl.teebe.io/?kind=dmg) (both redirect to the current
 [release](https://github.com/klein-t/teebe/releases)). Unzip it and drag it into
-`/Applications`. If macOS asks on first launch, right-click the app and choose
-**Open**. From then on teebe keeps itself up to date via Sparkle.
+`/Applications`. teebe is not notarized yet, so macOS may block the first launch of
+a downloaded copy: on macOS 15 or newer, open **System Settings → Privacy & Security**
+and click **Open Anyway**; on macOS 14, right-click the app and choose **Open**. The
+install script above skips this step. From then on teebe keeps itself up to date via
+Sparkle.
 
-Free and open source · macOS 14 or newer · Apple Silicon and Intel.
+Free and open source · macOS 14 or newer · Apple Silicon.
 
 ## Why
 
