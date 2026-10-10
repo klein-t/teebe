@@ -37,6 +37,12 @@
 ## Install
 
 ```sh
+brew install --cask klein-t/tap/teebe
+```
+
+Or use the install script:
+
+```sh
 curl -fsSL https://teebe.io/install.sh | bash
 ```
 
@@ -46,8 +52,8 @@ Or grab the latest build directly: [**teebe.zip**](https://dl.teebe.io) or
 `/Applications`. teebe is not notarized yet, so macOS may block the first launch of
 a downloaded copy: on macOS 15 or newer, open **System Settings → Privacy & Security**
 and click **Open Anyway**; on macOS 14, right-click the app and choose **Open**. The
-install script above skips this step. From then on teebe keeps itself up to date via
-Sparkle.
+Homebrew cask and the install script skip this step. From then on teebe keeps itself
+up to date via Sparkle.
 
 Free and open source · macOS 14 or newer · Apple Silicon.
 
