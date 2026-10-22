@@ -4,7 +4,8 @@ name: Publish appcast
 # an update), copy that release's signed appcast.xml into the teebe-site repo so
 # Sparkle's feed at https://teebe.io/appcast.xml tracks the newest published
 # version. The .app zip enclosures the appcast points at stay on GitHub Releases;
-# only the feed XML lives on our domain.
+# only the feed XML lives on our domain. The same commit mirrors CHANGELOG.md and
+# sets the homepage's version to the released one.
 #
 # Requires a repo secret SITE_DEPLOY_KEY: the private half of an SSH deploy key
 # whose public half is installed on klein-t/teebe-site with write access. A
@@ -50,19 +51,37 @@ jobs:
           ssh-key: ${{ secrets.SITE_DEPLOY_KEY }}
           path: site
 
-      - name: Commit appcast + changelog if changed
+      - name: Commit appcast + changelog + homepage version if changed
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           cp appcast.xml site/appcast.xml
           [ -s CHANGELOG.md ] && cp CHANGELOG.md site/CHANGELOG.md
           cd site
-          if git diff --quiet -- appcast.xml CHANGELOG.md; then
-            echo "appcast.xml and CHANGELOG.md unchanged; nothing to publish."
+          # The homepage states the version in its JSON-LD and in the footer's
+          # static text (crawlers read the raw HTML, not the script that refreshes
+          # the footer from the appcast). A miss only warns: it must never block
+          # the appcast, which is what ships the update.
+          V="${TAG#v}"
+          if sed -E \
+               -e "s/(\"softwareVersion\": \")[^\"]*\"/\1${V}\"/" \
+               -e "s/(<span id=\"version\">v)[^ <]*/\1${V}/" \
+               index.html > index.html.new \
+             && mv index.html.new index.html \
+             && grep -qF "\"softwareVersion\": \"${V}\"" index.html \
+             && grep -qF "<span id=\"version\">v${V}" index.html; then
+            echo "Homepage version set to ${V}."
+          else
+            rm -f index.html.new
+            echo "::warning::Could not set the teebe.io homepage version to ${V}; update index.html by hand."
+          fi
+          if git diff --quiet -- appcast.xml CHANGELOG.md index.html; then
+            echo "appcast.xml, CHANGELOG.md and index.html unchanged; nothing to publish."
             exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add appcast.xml CHANGELOG.md
+          if [ -f index.html ]; then git add index.html; fi
           git commit -m "Publish appcast + changelog for ${TAG}"
           git push
