@@ -191,6 +191,7 @@ public struct CodexRolloutScanner: AgentActivitySource {
     /// One poll asks for `states` and then `turnEnds` at the same instant; they
     /// share one listing of the rollout folders instead of listing them twice.
     private let pollListing = CodexPollListing()
+    private let contextCache = AgentContextCache()
 
     public init(sessionsRoot: URL = CodexRolloutScanner.defaultSessionsRoot,
                 thresholds: AgentStatusThresholds = AgentStatusThresholds(),
@@ -209,7 +210,17 @@ public struct CodexRolloutScanner: AgentActivitySource {
     }
 
     public func states(forWorktreePaths paths: [String], now: Date) -> [String: AgentActivityState] {
+        scan(paths, now: now, readingContexts: false).states
+    }
+
+    /// `states`, plus the context of each worktree's winning thread.
+    public func snapshot(forWorktreePaths paths: [String], now: Date) -> AgentSnapshot {
+        scan(paths, now: now, readingContexts: true)
+    }
+
+    private func scan(_ paths: [String], now: Date, readingContexts: Bool) -> AgentSnapshot {
         var result: [String: AgentActivityState] = [:]
+        var winners: [String: SessionWinner] = [:]
         for path in paths { result[path] = .idle }
         let files = rolloutFiles(now: now)
         pollListing.store(files, at: now)
@@ -224,6 +235,7 @@ public struct CodexRolloutScanner: AgentActivitySource {
             let state = Self.state(of: thread, now: now, thresholds: thresholds)
             guard state != .idle, let owner = owner(of: thread, among: paths) else { continue }
             result[owner] = state
+            winners[owner] = SessionWinner(url: file.url, state: state, lastActivity: thread.lastActivity ?? file.mtime)
         }
         // Busy subagents: work where they are, and where their parent is.
         for thread in summaries.values {
@@ -233,7 +245,16 @@ public struct CodexRolloutScanner: AgentActivitySource {
             let parent = summaries[parentID] ?? files[parentID].flatMap { cachedSummary(of: $0.url, id: parentID) }
             if let parent, let owner = owner(of: parent, among: paths) { result[owner] = .working }
         }
-        return result
+        return AgentSnapshot(states: result, contexts: readingContexts ? contexts(of: winners).reconciled(with: result) : [:])
+    }
+
+    /// The context of each worktree's winning session file.
+    private func contexts(of winners: [String: SessionWinner])
+        -> [String: AgentContext] {
+        winners.mapValues { winner in
+            contextCache.context(of: winner.url, state: winner.state, lastActivity: winner.lastActivity,
+                                 tailBytes: tailBytes, reader: .codex)
+        }
     }
 
     public func turnEnds(forWorktreePaths paths: [String], now: Date) -> [AgentTurnEnd] {

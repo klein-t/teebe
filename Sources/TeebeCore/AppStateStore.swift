@@ -92,6 +92,12 @@ public struct AppState: Codable, Equatable, Sendable {
     public var terminalApp: String?
     public var agentNotifications: Bool?
     public var notificationSound: Bool?
+    /// Agent details on worktree rows and in the menu bar. Optional so older
+    /// state files decode; nil means the default (on, first prompt).
+    public var agentShowQuestion: Bool?
+    public var agentShowTask: Bool?
+    public var agentTaskSource: String?
+    public var agentMenuBarIcon: Bool?
 
     public init(
         repositories: [PersistedRepository] = [],

@@ -10,10 +10,16 @@ public protocol AgentActivitySource: Sendable {
     /// A worktree with nothing going on may be missing or `.idle`.
     func states(forWorktreePaths paths: [String], now: Date) -> [String: AgentActivityState]
     func turnEnds(forWorktreePaths paths: [String], now: Date) -> [AgentTurnEnd]
+    /// States plus, for worktrees with a working or waiting session, what that
+    /// session's records say (`AgentContext`), from one scan.
+    func snapshot(forWorktreePaths paths: [String], now: Date) -> AgentSnapshot
 }
 
 public extension AgentActivitySource {
     func turnEnds(forWorktreePaths paths: [String], now: Date) -> [AgentTurnEnd] { [] }
+    func snapshot(forWorktreePaths paths: [String], now: Date) -> AgentSnapshot {
+        AgentSnapshot(states: states(forWorktreePaths: paths, now: now))
+    }
 }
 
 extension AgentSessionScanner: AgentActivitySource {}
@@ -37,6 +43,30 @@ public struct CombinedAgentActivity: AgentActivitySource {
             }
         }
         return result
+    }
+
+    /// Each worktree's context comes from the session whose state it shows: the
+    /// waiting one over the working one, the newer of two in the same state.
+    public func snapshot(forWorktreePaths paths: [String], now: Date) -> AgentSnapshot {
+        var states: [String: AgentActivityState] = [:]
+        for path in paths { states[path] = .idle }
+        var contexts: [String: AgentContext] = [:]
+        for source in sources {
+            let snapshot = source.snapshot(forWorktreePaths: paths, now: now)
+            for (path, state) in snapshot.states {
+                guard let current = states[path] else { continue }
+                states[path] = Self.rank(state) > Self.rank(current) ? state : current
+            }
+            for (path, context) in snapshot.contexts where states[path] != nil {
+                guard let current = contexts[path] else { contexts[path] = context; continue }
+                let newer = (context.lastActivity ?? .distantPast) > (current.lastActivity ?? .distantPast)
+                if Self.rank(context.state) > Self.rank(current.state)
+                    || (context.state == current.state && newer) {
+                    contexts[path] = context
+                }
+            }
+        }
+        return AgentSnapshot(states: states, contexts: contexts.filter { states[$0.key] == $0.value.state })
     }
 
     public func turnEnds(forWorktreePaths paths: [String], now: Date) -> [AgentTurnEnd] {

@@ -333,6 +333,7 @@ public struct AgentSessionScanner: Sendable {
     public var sessionsRoot: URL
     /// Whether a pid is still running — registry files can outlive a crash.
     public var isProcessAlive: @Sendable (Int32) -> Bool
+    private let contextCache = AgentContextCache()
 
     public init(
         projectsRoot: URL = AgentSessionScanner.defaultProjectsRoot,
@@ -390,7 +391,17 @@ public struct AgentSessionScanner: Sendable {
     /// inside a linked worktree logs under the primary's project dir — a purely
     /// per-dir lookup would pin its "working" badge on the primary.
     public func states(forWorktreePaths paths: [String], now: Date = Date()) -> [String: AgentActivityState] {
+        scan(paths, now: now, readingContexts: false).states
+    }
+
+    /// `states`, plus the context of each worktree's winning session.
+    public func snapshot(forWorktreePaths paths: [String], now: Date) -> AgentSnapshot {
+        scan(paths, now: now, readingContexts: true)
+    }
+
+    private func scan(_ paths: [String], now: Date, readingContexts: Bool) -> AgentSnapshot {
         var result: [String: AgentActivityState] = [:]
+        var winners: [String: SessionWinner] = [:]
         for path in paths { result[path] = .idle }
         let live = liveSessions()
         // Every fresh session file across every project dir (files idle-old by
@@ -419,9 +430,19 @@ public struct AgentSessionScanner: Sendable {
                 targets: recentTargets(in: file.url, includingSidechains: false),
                 cwd: entry?.cwd ?? session?.cwd, among: paths) ?? file.launchPath
             result[owner] = state
+            winners[owner] = SessionWinner(url: file.url, state: state, lastActivity: entry?.timestamp ?? file.mtime)
         }
         markBusySubagents(in: &result, paths: paths, live: live, now: now)
-        return result
+        return AgentSnapshot(states: result, contexts: readingContexts ? contexts(of: winners).reconciled(with: result) : [:])
+    }
+
+    /// The context of each worktree's winning session file.
+    private func contexts(of winners: [String: SessionWinner])
+        -> [String: AgentContext] {
+        winners.mapValues { winner in
+            contextCache.context(of: winner.url, state: winner.state, lastActivity: winner.lastActivity,
+                                 tailBytes: tailBytes, reader: .claude)
+        }
     }
 
     /// The worktrees (of `paths`) a live Claude Code session runs in, by the
