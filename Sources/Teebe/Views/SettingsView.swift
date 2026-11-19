@@ -153,6 +153,7 @@ struct SettingsView: View {
                 Text("Type overrides win. Open With in a project remembers a choice for that project only.")
                     .font(Typography.secondary).foregroundStyle(.secondary)
             }
+            DiffSettingsSection()
         }.formStyle(.grouped)
     }
 

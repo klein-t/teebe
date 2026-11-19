@@ -21,10 +21,14 @@ final class PreviewModel {
     private(set) var currentPath: String?
 
     private let environment: AppEnvironment
+    private let defaults: UserDefaults
     private var requestID = UUID()
+    /// What is showing, so a changed diff option can ask for it again.
+    private var shown: (node: FileNode, worktreePath: String)?
 
-    init(environment: AppEnvironment) {
+    init(environment: AppEnvironment, defaults: UserDefaults = .standard) {
         self.environment = environment
+        self.defaults = defaults
     }
 
     /// Spacebar: toggle the panel. Opening resolves content for `node`.
@@ -40,24 +44,23 @@ final class PreviewModel {
     }
 
     /// Arrow keys while open: live-update the preview to a new selection.
+    /// `keepingContent` leaves the current preview up until the new one is ready.
     @discardableResult
-    func update(for node: FileNode, worktreePath: String) async -> Bool {
+    func update(for node: FileNode, worktreePath: String, keepingContent: Bool = false) async -> Bool {
         guard !node.isDirectory else { return false }
         let request = UUID()
         requestID = request
-        content = .loading
+        if !keepingContent { content = .loading }
         currentPath = node.path
+        shown = (node, worktreePath)
         let url = URL(fileURLWithPath: node.path)
+        let ignoringWhitespace = defaults.bool(forKey: DiffDisplayOptions.ignoreWhitespaceKey)
 
         let resolved: Content
         switch PreviewResolver.kind(forFileName: node.name, change: node.change) {
         case .diff:
-            if let change = node.change,
-               let diff = try? await environment.diffService.diff(for: change, worktreePath: worktreePath) {
-                resolved = PreviewLimits.canRender(diff) ? .diff(diff) : .tooLarge(url)
-            } else {
-                resolved = .quickLook(url)
-            }
+            resolved = await diffContent(node.change, worktreePath: worktreePath, url: url,
+                                         ignoringWhitespace: ignoringWhitespace)
         case .text:
             switch await Task.detached(priority: .userInitiated, operation: {
                 PreviewTextLoader.load(url)
@@ -75,8 +78,25 @@ final class PreviewModel {
         return true
     }
 
+    private func diffContent(_ change: FileChange?, worktreePath: String, url: URL,
+                             ignoringWhitespace: Bool) async -> Content {
+        guard let change,
+              let diff = try? await environment.diffService.diff(for: change, worktreePath: worktreePath,
+                                                                 ignoringWhitespace: ignoringWhitespace) else {
+            return .quickLook(url)
+        }
+        return PreviewLimits.canRender(diff) ? .diff(diff) : .tooLarge(url)
+    }
+
+    /// Ask again for what is showing, after a diff option changed.
+    func reload() async {
+        guard isVisible, let shown else { return }
+        await update(for: shown.node, worktreePath: shown.worktreePath, keepingContent: true)
+    }
+
     func close() {
         requestID = UUID()
+        shown = nil
         isVisible = false
         content = .empty
         currentPath = nil
