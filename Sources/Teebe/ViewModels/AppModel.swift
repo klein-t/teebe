@@ -22,6 +22,8 @@ enum WorktreePreferences {
 final class AppModel {
     private(set) var repositories: [Repository] = []
     let preferences: PreferencesModel
+    /// What rows and the menu bar show about agents (global, not per project).
+    let agentDisplay: AgentDisplayPreferences
     var groupWorktreesByMergeStatus: Bool {
         get { preferences.effective.groupByStatus ?? false }
         set { preferences.set(\.groupByStatus, newValue) }
@@ -136,6 +138,7 @@ final class AppModel {
         }
         self.state = loaded
         self.preferences = PreferencesModel(state: self.state)
+        self.agentDisplay = AgentDisplayPreferences(state: self.state)
         self.selector = SelectorModel(environment: environment)
         self.mergeStatus = WorktreeMergeModel(service: mergeService ?? WorktreeCleanupService(git: environment.git))
         self.remoteRefresher = RemoteRefresher(git: environment.git)
@@ -161,6 +164,7 @@ final class AppModel {
         // Deleted worktrees are never forgotten while a removal is running.
         self.selector.isRemovalRunning = { [weak self] in self?.groupActionsStorage?.isWorking == true }
         self.openWith.onChange = { [weak self] in self?.persist() }
+        self.agentDisplay.onChange = { [weak self] in self?.persist() }
         self.preferences.onChange = { [weak self] in
             guard let self else { return }
             self.applyFilePreferences()
@@ -656,6 +660,7 @@ final class AppModel {
         state.terminalApp = terminal.rawValue
         state.agentNotifications = agentNotifications
         state.notificationSound = notificationSound
+        agentDisplay.write(to: &state)
         state.openWithApps = openWith.apps.isEmpty ? nil : openWith.apps
         state.openWithAppsByRepo = openWith.projectApps
         state.openWithPolicy = openWith.policy.rawValue

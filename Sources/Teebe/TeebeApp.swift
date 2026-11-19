@@ -44,12 +44,17 @@ struct TeebeApp: App {
     @State private var app: AppModel
     @State private var preview: PreviewModel
     @State private var whatsNew: WhatsNewModel
+    @State private var agentOverview: AgentOverviewModel
     @StateObject private var updater = UpdaterController()
 
     init() {
         // One shared environment, constructed exactly once.
         let environment = AppEnvironment.live()
-        _app = State(initialValue: AppModel(environment: environment))
+        let appModel = AppModel(environment: environment)
+        _app = State(initialValue: appModel)
+        let overview = AgentOverviewModel(app: appModel)
+        overview.start()
+        _agentOverview = State(initialValue: overview)
         _preview = State(initialValue: PreviewModel(environment: environment))
         _whatsNew = State(initialValue: WhatsNewModel(
             version: Brand.appVersion,
@@ -98,6 +103,14 @@ struct TeebeApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+
+        // Agents working and waiting in every project, from the menu bar.
+        MenuBarExtra(isInserted: Binding(get: { app.agentDisplay.showsMenuBarIcon },
+                                         set: { app.agentDisplay.showsMenuBarIcon = $0 })) {
+            AgentMenuBarMenu(overview: agentOverview, display: app.agentDisplay)
+        } label: {
+            AgentMenuBarLabel(overview: agentOverview)
+        }
 
         // Adds "Settings…" (⌘,) to the app menu.
         Settings {

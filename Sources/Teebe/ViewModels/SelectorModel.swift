@@ -21,6 +21,9 @@ final class SelectorModel {
         /// What the coding agents working in this worktree are doing, from their
         /// own records (session logs, rollouts, session registry).
         var agentState: AgentActivityState = .idle
+        /// What the session behind `agentState` was asked and waits on; nil
+        /// without a working or waiting session.
+        var agentContext: AgentContext?
         /// The branch against its same-named remote branch; unknown until a status
         /// read succeeds.
         var remote: RemoteSync = .unknown
@@ -474,7 +477,10 @@ final class SelectorModel {
         // One batched agent-log scan for the whole repo — the scanner needs every
         // worktree path to attribute a session to the worktree it runs in, not
         // the one it was launched from. Runs off-main alongside the git reads.
-        let agentTask = Task.detached { (agentStatuses(paths, now), agentTurnEnds(paths, now)) }
+        let agentSnapshot = environment.agentSnapshot
+        let agentTask = Task.detached {
+            (AppEnvironment.readAgents(paths, now, snapshot: agentSnapshot, statuses: agentStatuses), agentTurnEnds(paths, now))
+        }
         // Fetch each worktree's status concurrently — these are independent git
         // reads, so a repo with many worktrees shouldn't serialize N `git status`
         // calls on every repo switch.
@@ -491,14 +497,14 @@ final class SelectorModel {
             }
             return byPath
         }
-        let (agentStates, turnEnds) = await agentTask.value
+        let (agents, turnEnds) = await agentTask.value
         guard selectedRepo?.path == repository, self.worktrees.map(\.path) == paths,
               generation == agentRefreshGeneration else { return }
         let remoteBranches = Set(branches.filter(\.isRemote).map(\.name))
         var info: [String: WorktreeInfo] = [:]
         for worktree in worktrees {
             let status = statuses[worktree.path] ?? nil
-            let agent = agentStates[worktree.path] ?? .idle
+            let agent = agents.states[worktree.path] ?? .idle
             let remote = status.map { RemoteSync(status: $0, remoteBranches: remoteBranches) } ?? .unknown
             info[worktree.path] = WorktreeInfo(
                 ahead: remote.ahead,
@@ -507,6 +513,7 @@ final class SelectorModel {
                 hasStatus: status != nil,
                 isLive: environment.activityMonitor.isBusy(worktreePath: worktree.path, within: liveWindow, now: now),
                 agentState: agent,
+                agentContext: agents.contexts[worktree.path],
                 remote: remote,
                 isKeptMissing: keptMissingPaths.contains(worktree.path)
             )
@@ -531,13 +538,17 @@ final class SelectorModel {
         let generation = agentRefreshGeneration
         let worktrees = self.worktrees
         let paths = worktrees.map(\.path)
-        let (states, turnEnds) = await Task.detached { (agentStatuses(paths, now), agentTurnEnds(paths, now)) }.value
+        let agentSnapshot = environment.agentSnapshot
+        let (agents, turnEnds) = await Task.detached {
+            (AppEnvironment.readAgents(paths, now, snapshot: agentSnapshot, statuses: agentStatuses), agentTurnEnds(paths, now))
+        }.value
         guard selectedRepo?.path == repository, self.worktrees.map(\.path) == paths,
               generation == agentRefreshGeneration else { return }
         var info = worktreeInfo
         for worktree in worktrees {
             var entry = info[worktree.path] ?? WorktreeInfo()
-            entry.agentState = states[worktree.path] ?? .idle
+            entry.agentState = agents.states[worktree.path] ?? .idle
+            entry.agentContext = agents.contexts[worktree.path]
             entry.isLive = environment.activityMonitor.isBusy(worktreePath: worktree.path, within: liveWindow, now: now)
             info[worktree.path] = entry
         }

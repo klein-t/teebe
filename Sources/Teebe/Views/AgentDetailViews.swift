@@ -1,0 +1,83 @@
+import SwiftUI
+import TeebeCore
+
+/// The agent lines under a worktree's branch name: the task, then what the
+/// waiting agent asks. One truncated line each; the full text is in the hover help.
+struct WorktreeAgentLinesView: View {
+    let lines: WorktreeAgentLines
+    let isSelected: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        if let task = lines.task {
+            line(task, color: isSelected ? Color.white.opacity(0.8) : Palette.secondaryText)
+                .accessibilityLabel("Task: \(task)")
+        }
+        if let question = lines.question {
+            line(question, color: questionColor)
+                .accessibilityLabel("Agent asks: \(question)")
+        }
+    }
+
+    private func line(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(Typography.secondary)
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: WorktreeListPresentation.agentLineHeight, alignment: .top)
+            .padding(.leading, 2)
+            .hoverHelp(text, highlight: false)
+    }
+
+    /// The waiting orb's ink, so the question reads as part of that mark.
+    private var questionColor: Color {
+        if isSelected { return .white }
+        return colorScheme == .dark ? Color(red: 0xFF / 255, green: 0xC0 / 255, blue: 0x70 / 255)
+            : Color(red: 0xB0 / 255, green: 0x58 / 255, blue: 0x00 / 255)
+    }
+}
+
+/// The agent options of the WORKTREES "···" menu. Global, like Settings.
+struct AgentRowOptionsMenuSection: View {
+    @Bindable var display: AgentDisplayPreferences
+
+    var body: some View {
+        Section("Agents, all projects") {
+            Toggle(AgentDisplayWording.questionTitle, isOn: $display.showsQuestion)
+            Toggle(AgentDisplayWording.taskTitle, isOn: $display.showsTask)
+            Picker(AgentDisplayWording.taskSourceTitle, selection: $display.taskSource) {
+                ForEach(AgentTaskSource.allCases) { Text($0.title).tag($0) }
+            }
+            .disabled(!display.showsTask)
+            Toggle(AgentDisplayWording.menuBarTitle, isOn: $display.showsMenuBarIcon)
+        }
+    }
+}
+
+/// The same options in Settings.
+struct AgentDisplaySettingsSection: View {
+    @Bindable var display: AgentDisplayPreferences
+
+    var body: some View {
+        Section {
+            Toggle(isOn: $display.showsQuestion) { labeled(AgentDisplayWording.questionTitle, AgentDisplayWording.questionHelp) }
+            Toggle(isOn: $display.showsTask) { labeled(AgentDisplayWording.taskTitle, AgentDisplayWording.taskHelp) }
+            Picker(AgentDisplayWording.taskSourceTitle, selection: $display.taskSource) {
+                ForEach(AgentTaskSource.allCases) { Text($0.title).tag($0) }
+            }
+            .disabled(!display.showsTask)
+            Toggle(isOn: $display.showsMenuBarIcon) { labeled(AgentDisplayWording.menuBarTitle, AgentDisplayWording.menuBarHelp) }
+        } header: { Text(AgentDisplayWording.sectionTitle) } footer: {
+            Text(AgentDisplayWording.privacyNote)
+        }
+    }
+
+    private func labeled(_ title: String, _ help: String) -> some View {
+        HStack(spacing: 4) {
+            Text(title)
+            HelpInfo(title: title, explanation: help)
+        }
+    }
+}

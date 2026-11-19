@@ -187,6 +187,7 @@ struct SettingsView: View {
                 }
                 if let message = app.notificationTestMessage { Text(message).font(Typography.secondary).foregroundStyle(.secondary) }
             }
+            AgentDisplaySettingsSection(display: app.agentDisplay)
             Section("Agent activity") {
                 Text("Claude Code and Codex: status detection. Other tools: file and process activity.")
                     .font(Typography.secondary).foregroundStyle(.secondary)

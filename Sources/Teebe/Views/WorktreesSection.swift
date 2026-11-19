@@ -91,6 +91,8 @@ struct WorktreesSection: View {
                             Text("Applies to this project")
                             Button("Use Global Defaults") { app.preferences.reset() }
                                 .disabled(!app.preferences.hasOverrides)
+                            Divider()
+                            AgentRowOptionsMenuSection(display: app.agentDisplay)
                         } label: {
                             Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(Palette.secondaryText).hoverChip()
@@ -347,7 +349,8 @@ struct WorktreesSection: View {
         let summary = cardSummary(status.card)
         // Space in WORKTREES shows the highlighted row's card, as hovering would.
         let reveal = app.worktreeCardReveal.flatMap { $0.path == worktree.path ? $0.count : nil }
-        return HStack(spacing: 0) {
+        // The mark stays beside the branch name; agent lines run under the name.
+        return HStack(alignment: .top, spacing: 0) {
             if status.hasHoverCard(grouped: grouped) {
                 WorktreeMarkHoverTarget(isSelected: isActive) {
                     WorktreeMarkView(mark: status.rowMark(grouped: grouped), isSelected: isActive,
@@ -371,22 +374,29 @@ struct WorktreesSection: View {
                 // No mark to hover: the slot stays so names line up.
                 Color.clear.frame(width: 22, height: WorktreeListPresentation.rowHeight)
             }
-            HoverScrollingText(text: worktree.branch ?? worktree.name, showsFullNameHelp: false)
-                .font(Typography.rowName)
-                .padding(.leading, 2)
-                // Without a mark or an info icon there is no card to hover; the text is still read out.
-                .accessibilityHint(status.hasHoverCard(grouped: grouped) || status.showsInfoIcon(grouped: grouped) ? "" : summary)
-            if let action = status.trashAction {
-                WorktreeTrashButton(isSelected: isActive, label: "Remove worktree") {
-                    confirmRemoval(worktree, action: action)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 0) {
+                    HoverScrollingText(text: worktree.branch ?? worktree.name, showsFullNameHelp: false)
+                        .font(Typography.rowName)
+                        .padding(.leading, 2)
+                        // Without a mark or an info icon there is no card to hover; the text is still read out.
+                        .accessibilityHint(status.hasHoverCard(grouped: grouped) || status.showsInfoIcon(grouped: grouped) ? "" : summary)
+                    if let action = status.trashAction {
+                        WorktreeTrashButton(isSelected: isActive, label: "Remove worktree") {
+                            confirmRemoval(worktree, action: action)
+                        }
+                        .padding(.leading, 4)
+                    }
+                    Spacer(minLength: 6)
+                    WorktreeSyncArrows(remote: status.remote, isSelected: isActive)
                 }
-                .padding(.leading, 4)
+                .frame(height: WorktreeListPresentation.rowHeight)
+                WorktreeAgentLinesView(lines: status.agentLines, isSelected: isActive)
             }
-            Spacer(minLength: 6)
-            WorktreeSyncArrows(remote: status.remote, isSelected: isActive)
         }
         // The name starts where the Changes list's labels do.
-        .padding(.leading, 24).padding(.trailing, 11).frame(height: WorktreeListPresentation.rowHeight)
+        .padding(.leading, 24).padding(.trailing, 11)
+        .frame(height: WorktreeListPresentation.rowHeight(agentLines: status.agentLines.count), alignment: .top)
         .frame(maxWidth: .infinity, alignment: .leading)
         .rowHighlight(isSelected: isActive)
         .foregroundStyle(isActive ? .white : .primary)
