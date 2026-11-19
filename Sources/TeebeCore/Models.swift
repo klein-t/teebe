@@ -288,6 +288,8 @@ public struct DiffFile: Identifiable, Hashable, Sendable {
     public var status: DiffFileStatus
     public var isBinary: Bool
     public var hunks: [DiffHunk]
+    /// Whitespace was ignored and nothing else changed, so `hunks` is empty.
+    public var onlyWhitespaceChanged = false
 
     public var id: String { newPath ?? oldPath ?? "" }
     public var displayPath: String { newPath ?? oldPath ?? "" }

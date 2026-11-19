@@ -12,8 +12,8 @@ private struct RemovalHookGit: GitClient {
     func worktrees(repoPath: String) async throws -> [Worktree] { try await base.worktrees(repoPath: repoPath) }
     func branches(repoPath: String) async throws -> [Branch] { try await base.branches(repoPath: repoPath) }
     func status(worktreePath: String) async throws -> StatusResult { try await base.status(worktreePath: worktreePath) }
-    func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? {
-        try await base.workingDiff(worktreePath: worktreePath, path: path, staged: staged)
+    func workingDiff(worktreePath: String, path: String, staged: Bool, ignoreWhitespace: Bool) async throws -> DiffFile? {
+        try await base.workingDiff(worktreePath: worktreePath, path: path, staged: staged, ignoreWhitespace: ignoreWhitespace)
     }
     func stage(worktreePath: String, paths: [String]) async throws {}
     func unstage(worktreePath: String, paths: [String]) async throws {}

@@ -68,9 +68,19 @@ public struct DiffService: Sendable {
 
     /// Resolve the right diff to peek for a working change: the staged diff when the
     /// change is purely staged, otherwise the unstaged working diff.
-    public func diff(for change: FileChange, worktreePath: String) async throws -> DiffFile? {
+    /// Ignoring whitespace can leave nothing to show. When the change is then
+    /// whitespace alone, the result says so instead of reading as no diff at all.
+    public func diff(for change: FileChange, worktreePath: String, ignoringWhitespace: Bool = false) async throws -> DiffFile? {
         let useStaged = change.isStaged && change.worktreeStatus == .unmodified
-        return try await git.workingDiff(worktreePath: worktreePath, path: change.path, staged: useStaged)
+        let diff = try await git.workingDiff(worktreePath: worktreePath, path: change.path, staged: useStaged,
+                                             ignoreWhitespace: ignoringWhitespace)
+        guard ignoringWhitespace, diff?.hunks.isEmpty ?? true, diff?.isBinary != true,
+              var full = try await git.workingDiff(worktreePath: worktreePath, path: change.path, staged: useStaged,
+                                                   ignoreWhitespace: false),
+              !full.hunks.isEmpty else { return diff }
+        full.hunks = []
+        full.onlyWhitespaceChanged = true
+        return full
     }
 }
 

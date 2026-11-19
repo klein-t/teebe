@@ -45,7 +45,9 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
         return statusResult
     }
     var workingDiffHandler: (@Sendable (String) async -> DiffFile?)?
-    func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? {
+    private(set) var workingDiffIgnoreWhitespaceFlags: [Bool] = []
+    func workingDiff(worktreePath: String, path: String, staged: Bool, ignoreWhitespace: Bool) async throws -> DiffFile? {
+        workingDiffIgnoreWhitespaceFlags.append(ignoreWhitespace)
         if let workingDiffHandler { return await workingDiffHandler(path) }
         return workingDiffResult
     }
