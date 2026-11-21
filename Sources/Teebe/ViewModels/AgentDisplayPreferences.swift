@@ -30,9 +30,11 @@ enum AgentDisplayWording {
     static let taskHelp = "Show the prompt the agent was given under the branch name."
     static let taskSourceTitle = "Task from"
     static let menuBarTitle = "Show in menu bar"
-    static let menuBarHelp = "A menu bar icon counts the agents working and waiting for you in all your projects."
-    static let waitingCountTitle = "Waiting count"
-    static let workingCountTitle = "Working count"
+    static let menuBarHelp = "A menu bar icon counts and lists the agents waiting for you and working, in all your projects. "
+        + "Choose below which of them it shows."
+    static let waitingAgentsTitle = "Waiting agents"
+    static let workingAgentsTitle = "Working agents"
+    static let animateTitle = "Animate icons"
     static let dockTitle = "Show Dock icon"
     static let dockHelp = "Hide the Dock icon and use teebe from the menu bar. Needs the menu bar icon; "
         + "hiding the menu bar icon brings the Dock icon back."
@@ -57,8 +59,9 @@ final class AgentDisplayPreferences {
         get { presence.showsDockIcon }
         set { updatePresence { $0.setDockIcon(newValue) } }
     }
-    var showsWaitingCount: Bool { didSet { if showsWaitingCount != oldValue { onChange() } } }
-    var showsWorkingCount: Bool { didSet { if showsWorkingCount != oldValue { onChange() } } }
+    var showsWaitingAgents: Bool { didSet { if showsWaitingAgents != oldValue { onChange() } } }
+    var showsWorkingAgents: Bool { didSet { if showsWorkingAgents != oldValue { onChange() } } }
+    var animatesMenuBarIcons: Bool { didSet { if animatesMenuBarIcons != oldValue { onChange() } } }
     @ObservationIgnored var onChange: () -> Void = {}
     /// Called with whether the Dock icon should show, whenever that changes.
     @ObservationIgnored var onDockIconChange: (Bool) -> Void = { _ in }
@@ -79,8 +82,9 @@ final class AgentDisplayPreferences {
         taskSource = AgentTaskSource(rawValue: state.agentTaskSource ?? "") ?? .first
         presence = AppPresence(showsMenuBarIcon: state.agentMenuBarIcon ?? true,
                                showsDockIcon: state.showDockIcon ?? true)
-        showsWaitingCount = state.agentMenuBarWaiting ?? true
-        showsWorkingCount = state.agentMenuBarWorking ?? true
+        showsWaitingAgents = state.agentMenuBarWaiting ?? true
+        showsWorkingAgents = state.agentMenuBarWorking ?? true
+        animatesMenuBarIcons = state.agentMenuBarAnimate ?? true
     }
 
     var options: AgentDisplayOptions {
@@ -92,8 +96,9 @@ final class AgentDisplayPreferences {
         state.agentShowTask = showsTask
         state.agentTaskSource = taskSource.rawValue
         state.agentMenuBarIcon = showsMenuBarIcon
-        state.agentMenuBarWaiting = showsWaitingCount
-        state.agentMenuBarWorking = showsWorkingCount
+        state.agentMenuBarWaiting = showsWaitingAgents
+        state.agentMenuBarWorking = showsWorkingAgents
+        state.agentMenuBarAnimate = animatesMenuBarIcons
         state.showDockIcon = showsDockIcon
     }
 }

@@ -103,6 +103,8 @@ public struct AppState: Codable, Equatable, Sendable {
     public var agentMenuBarWaiting: Bool?
     public var agentMenuBarWorking: Bool?
     public var showDockIcon: Bool?
+    /// Whether the menu bar orbs move. Optional so older state files decode.
+    public var agentMenuBarAnimate: Bool?
 
     public init(
         repositories: [PersistedRepository] = [],

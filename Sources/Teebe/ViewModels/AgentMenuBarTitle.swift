@@ -52,3 +52,50 @@ struct AppPresence: Equatable {
     /// Whether the Dock icon toggle can be changed right now.
     var canHideDockIcon: Bool { showsMenuBarIcon }
 }
+
+/// Which agent sections the menu bar dropdown lists. The "Waiting agents" and
+/// "Working agents" choices govern the dropdown as they govern the title. Pure.
+struct AgentMenuBarSections: Equatable {
+    let showsWaiting: Bool
+    let showsWorking: Bool
+    /// Said when every section shown is empty; nil when a section has rows or
+    /// both are switched off (then the dropdown holds only its commands).
+    let emptyNote: String?
+
+    init(waiting: Int, working: Int, showsWaiting: Bool, showsWorking: Bool) {
+        self.showsWaiting = showsWaiting && waiting > 0
+        self.showsWorking = showsWorking && working > 0
+        switch (showsWaiting, showsWorking) {
+        case (true, true): emptyNote = waiting == 0 && working == 0 ? "No agents waiting or working" : nil
+        case (true, false): emptyNote = waiting == 0 ? "No agents waiting" : nil
+        case (false, true): emptyNote = working == 0 ? "No agents working" : nil
+        case (false, false): emptyNote = nil
+        }
+    }
+}
+
+/// Which orbs of the menu bar title move: a segment that is drawn, while the
+/// "Animate icons" choice is on and Reduce Motion is off. Nothing moving means
+/// no timer runs. Pure.
+enum AgentMenuBarAnimation {
+    enum Orb: Hashable { case waiting, working }
+
+    /// Low Power Mode shows still icons, like Reduce Motion.
+    static func animated(_ title: AgentMenuBarTitle, animates: Bool, reduceMotion: Bool,
+                         lowPower: Bool = false) -> Set<Orb> {
+        guard animates, !reduceMotion, !lowPower else { return [] }
+        return Set(title.segments.map { segment in
+            switch segment {
+            case .waiting: return .waiting
+            case .working: return .working
+            }
+        })
+    }
+}
+
+extension AgentMenuBarAnimation {
+    /// Whether the frame timer runs: something moves and someone can see it.
+    static func timerRuns(_ orbs: Set<Orb>, screenAsleep: Bool, sessionLocked: Bool, itemVisible: Bool) -> Bool {
+        !orbs.isEmpty && !screenAsleep && !sessionLocked && itemVisible
+    }
+}

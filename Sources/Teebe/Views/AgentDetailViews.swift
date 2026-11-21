@@ -57,16 +57,18 @@ struct AgentRowOptionsMenuSection: View {
     }
 }
 
-/// What the menu bar item counts, under "Show in menu bar" and off while it is.
+/// What the menu bar item shows and lists, under "Show in menu bar" and off while it is.
 /// `indent` sets them under it in a menu, where rows can't be padded.
 struct MenuBarCountToggles: View {
     @Bindable var display: AgentDisplayPreferences
     var indent = ""
 
     var body: some View {
-        Toggle(indent + AgentDisplayWording.waitingCountTitle, isOn: $display.showsWaitingCount)
+        Toggle(indent + AgentDisplayWording.waitingAgentsTitle, isOn: $display.showsWaitingAgents)
             .disabled(!display.showsMenuBarIcon)
-        Toggle(indent + AgentDisplayWording.workingCountTitle, isOn: $display.showsWorkingCount)
+        Toggle(indent + AgentDisplayWording.workingAgentsTitle, isOn: $display.showsWorkingAgents)
+            .disabled(!display.showsMenuBarIcon)
+        Toggle(indent + AgentDisplayWording.animateTitle, isOn: $display.animatesMenuBarIcons)
             .disabled(!display.showsMenuBarIcon)
     }
 }

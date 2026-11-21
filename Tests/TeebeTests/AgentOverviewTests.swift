@@ -122,12 +122,12 @@ struct AgentMenuBarTitleTests {
         var dockCalls: [Bool] = []
         prefs.onDockIconChange = { dockCalls.append($0) }
         prefs.showsDockIcon = false
-        prefs.showsWorkingCount = false
+        prefs.showsWorkingAgents = false
         var state = AppState()
         prefs.write(to: &state)
         #expect(state.showDockIcon == false && state.agentMenuBarWorking == false && state.agentMenuBarWaiting == true)
         let reloaded = AgentDisplayPreferences(state: state)
-        #expect(!reloaded.showsDockIcon && !reloaded.showsWorkingCount && reloaded.showsWaitingCount)
+        #expect(!reloaded.showsDockIcon && !reloaded.showsWorkingAgents && reloaded.showsWaitingAgents)
         prefs.showsMenuBarIcon = false
         #expect(prefs.showsDockIcon)
         #expect(dockCalls == [false, true])
@@ -140,6 +140,71 @@ struct AgentMenuBarTitleTests {
         let old = #"{"repositories":[],"showChangedOnly":false,"showIgnored":false,"floatOnTop":false,"agentMenuBarIcon":true}"#
         let state = try JSONDecoder().decode(AppState.self, from: Data(old.utf8))
         let prefs = AgentDisplayPreferences(state: state)
-        #expect(prefs.showsWaitingCount && prefs.showsWorkingCount && prefs.showsDockIcon && prefs.showsMenuBarIcon)
+        #expect(prefs.showsWaitingAgents && prefs.showsWorkingAgents && prefs.showsDockIcon && prefs.showsMenuBarIcon && prefs.animatesMenuBarIcons)
+    }
+}
+
+@Suite("Menu bar dropdown sections and motion")
+@MainActor
+struct AgentMenuBarSectionsTests {
+    @Test("each kind is listed only when its choice is on and it has agents")
+    func sections() {
+        let both = AgentMenuBarSections(waiting: 2, working: 1, showsWaiting: true, showsWorking: true)
+        #expect(both.showsWaiting && both.showsWorking && both.emptyNote == nil)
+        let waitingOnly = AgentMenuBarSections(waiting: 2, working: 1, showsWaiting: true, showsWorking: false)
+        #expect(waitingOnly.showsWaiting && !waitingOnly.showsWorking && waitingOnly.emptyNote == nil)
+        let workingOnly = AgentMenuBarSections(waiting: 2, working: 1, showsWaiting: false, showsWorking: true)
+        #expect(!workingOnly.showsWaiting && workingOnly.showsWorking && workingOnly.emptyNote == nil)
+        let neither = AgentMenuBarSections(waiting: 2, working: 1, showsWaiting: false, showsWorking: false)
+        #expect(!neither.showsWaiting && !neither.showsWorking && neither.emptyNote == nil)
+    }
+
+    @Test("without sessions a shown kind says it is empty; both off says nothing")
+    func empty() {
+        #expect(AgentMenuBarSections(waiting: 0, working: 0, showsWaiting: true, showsWorking: true).emptyNote
+                == "No agents waiting or working")
+        #expect(AgentMenuBarSections(waiting: 0, working: 3, showsWaiting: true, showsWorking: false).emptyNote
+                == "No agents waiting")
+        #expect(AgentMenuBarSections(waiting: 3, working: 0, showsWaiting: false, showsWorking: true).emptyNote
+                == "No agents working")
+        let neither = AgentMenuBarSections(waiting: 0, working: 0, showsWaiting: false, showsWorking: false)
+        #expect(neither.emptyNote == nil && !neither.showsWaiting && !neither.showsWorking)
+        // One kind empty, the other listed: no note.
+        #expect(AgentMenuBarSections(waiting: 0, working: 2, showsWaiting: true, showsWorking: true).emptyNote == nil)
+    }
+
+    @Test("only drawn segments move, and nothing moves with the option off, Reduce Motion or Low Power Mode")
+    func animationGating() {
+        let both = AgentMenuBarTitle(waiting: 2, working: 1, showsWaiting: true, showsWorking: true)
+        #expect(AgentMenuBarAnimation.animated(both, animates: true, reduceMotion: false) == [.waiting, .working])
+        let zeroWorking = AgentMenuBarTitle(waiting: 2, working: 0, showsWaiting: true, showsWorking: true)
+        #expect(AgentMenuBarAnimation.animated(zeroWorking, animates: true, reduceMotion: false) == [.waiting])
+        let hiddenWaiting = AgentMenuBarTitle(waiting: 2, working: 1, showsWaiting: false, showsWorking: true)
+        #expect(AgentMenuBarAnimation.animated(hiddenWaiting, animates: true, reduceMotion: false) == [.working])
+        #expect(AgentMenuBarAnimation.animated(both, animates: false, reduceMotion: false).isEmpty)
+        #expect(AgentMenuBarAnimation.animated(both, animates: true, reduceMotion: true).isEmpty)
+        #expect(AgentMenuBarAnimation.animated(both, animates: true, reduceMotion: false, lowPower: true).isEmpty)
+        let idle = AgentMenuBarTitle(waiting: 0, working: 0, showsWaiting: true, showsWorking: true)
+        #expect(AgentMenuBarAnimation.animated(idle, animates: true, reduceMotion: false).isEmpty)
+    }
+
+    @Test("the timer runs only while something moves and can be seen")
+    func timer() {
+        #expect(AgentMenuBarAnimation.timerRuns([.working], screenAsleep: false, sessionLocked: false, itemVisible: true))
+        #expect(!AgentMenuBarAnimation.timerRuns([], screenAsleep: false, sessionLocked: false, itemVisible: true))
+        #expect(!AgentMenuBarAnimation.timerRuns([.working], screenAsleep: true, sessionLocked: false, itemVisible: true))
+        #expect(!AgentMenuBarAnimation.timerRuns([.working], screenAsleep: false, sessionLocked: true, itemVisible: true))
+        #expect(!AgentMenuBarAnimation.timerRuns([.working], screenAsleep: false, sessionLocked: false, itemVisible: false))
+    }
+
+    @Test("the animate choice defaults on and round-trips")
+    func animateOption() {
+        let prefs = AgentDisplayPreferences(state: AppState())
+        #expect(prefs.animatesMenuBarIcons)
+        prefs.animatesMenuBarIcons = false
+        var state = AppState()
+        prefs.write(to: &state)
+        #expect(state.agentMenuBarAnimate == false)
+        #expect(!AgentDisplayPreferences(state: state).animatesMenuBarIcons)
     }
 }
