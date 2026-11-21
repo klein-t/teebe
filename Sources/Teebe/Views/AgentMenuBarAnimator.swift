@@ -9,7 +9,8 @@ import SwiftUI
 @MainActor
 final class AgentMenuBarAnimator {
     static let shared = AgentMenuBarAnimator()
-    static let framesPerSecond: Double = 8
+    /// Low on purpose: each frame costs a status item redraw in WindowServer.
+    static let framesPerSecond: Double = 5
 
     struct Request: Equatable {
         let title: AgentMenuBarTitle
@@ -18,6 +19,9 @@ final class AgentMenuBarAnimator {
 
     private var request: Request?
     private var frames: [NSImage] = []
+    /// Whether each frame differs from the one before it: the solving orb rests
+    /// between turns, and an unchanged frame is not set on the button again.
+    private var changes: [Bool] = []
     private var framesKey: (title: AgentMenuBarTitle, orbs: Set<AgentMenuBarAnimation.Orb>)?
     private var index = 0
     private var timer: Timer?
@@ -44,6 +48,10 @@ final class AgentMenuBarAnimator {
                                               itemVisible: visible) else { return stop() }
         if framesKey?.title != request.title || framesKey?.orbs != orbs {
             frames = AgentMenuBarImage.frames(request.title, animated: orbs, framesPerSecond: Self.framesPerSecond)
+            changes = frames.indices.map { index in
+                let previous = frames[(index + frames.count - 1) % frames.count]
+                return frames[index].tiffRepresentation != previous.tiffRepresentation
+            }
             framesKey = (request.title, orbs)
             index = 0
         }
@@ -59,7 +67,7 @@ final class AgentMenuBarAnimator {
     private func tick() {
         guard !frames.isEmpty, let button = statusButton() else { return }
         index = (index + 1) % frames.count
-        button.image = frames[index]
+        if changes[index] { button.image = frames[index] }
     }
 
     /// No timer; the still title, as SwiftUI drew it, goes back on the button.
