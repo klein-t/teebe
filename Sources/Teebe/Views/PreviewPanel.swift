@@ -24,6 +24,8 @@ struct PreviewPanel: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 560, minHeight: 400)
+        // The main window's glass, so the peek matches it (solid with Reduce Transparency).
+        .background(WindowBackdrop())
         .background(WindowAccessor { $0?.level = .floating }) // peek stays above the main window
         .focusable()
         .focusEffectDisabled()
