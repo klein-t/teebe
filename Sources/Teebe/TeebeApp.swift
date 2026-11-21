@@ -17,6 +17,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // with the raw full-bleed PNG, so the running app's Dock icon goes flat.
         // Leaving it unset lets the system icon render correctly while running too.
         NSApp.activate(ignoringOtherApps: true)
+        // Without a Dock icon, closing the last window would leave an invisible app
+        // holding the keyboard: hand focus back to the app used before.
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil,
+                                               queue: .main) { note in
+            guard let closing = note.object as? NSWindow, closing.canBecomeMain else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard DockPresence.isAccessory,
+                          !NSApp.windows.contains(where: { $0 !== closing && $0.isVisible && $0.canBecomeMain }) else { return }
+                    NSApp.hide(nil)
+                }
+            }
+        }
     }
     /// Quit when the main window goes away, but never while a regular window is
     /// still showing. Belt and braces for the pinned (floating-level) window, which
