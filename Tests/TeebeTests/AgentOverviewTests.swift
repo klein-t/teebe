@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Teebe
@@ -216,5 +217,73 @@ struct AgentMenuBarSectionsTests {
         prefs.write(to: &state)
         #expect(state.agentMenuBarAnimate == false)
         #expect(!AgentDisplayPreferences(state: state).animatesMenuBarIcons)
+    }
+}
+
+@Suite("Menu bar frames")
+@MainActor
+struct AgentMenuBarFramesTests {
+    /// The pixels of a frame's first digit, as alpha values.
+    func digitAlpha(_ image: NSImage, from x: CGFloat, width: CGFloat) -> [UInt8] {
+        guard let rep = image.representations.first as? NSBitmapImageRep else { return [] }
+        let scale = CGFloat(rep.pixelsWide) / image.size.width
+        var alphas: [UInt8] = []
+        for py in 0..<rep.pixelsHigh {
+            for px in Int(x * scale)..<min(rep.pixelsWide, Int((x + width) * scale)) {
+                alphas.append(UInt8((rep.colorAt(x: px, y: py)?.alphaComponent ?? 0) * 255))
+            }
+        }
+        return alphas
+    }
+
+    /// The digit drawn upright the plain way, in a y-up bitmap, as a reference.
+    func reference(_ digit: String, height: CGFloat, scale: CGFloat) -> NSBitmapImageRep? {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+        let size = (digit as NSString).size(withAttributes: attributes)
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(size.width * scale)),
+                                   pixelsHigh: Int(ceil(height * scale)), bitsPerSample: 8, samplesPerPixel: 4,
+                                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        guard let rep else { return nil }
+        rep.size = NSSize(width: size.width, height: height)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        (digit as NSString).draw(at: NSPoint(x: 0, y: (height - size.height) / 2), withAttributes: attributes)
+        NSGraphicsContext.restoreGraphicsState()
+        return rep
+    }
+
+    @Test("every frame draws both digits upright and the same; only the orbs move")
+    func digitsUpright() throws {
+        let title = AgentMenuBarTitle(waiting: 3, working: 2, showsWaiting: true, showsWorking: true)
+        let frames = AgentMenuBarImage.frames(title, animated: [.waiting, .working], framesPerSecond: 8)
+        let still = AgentMenuBarImage.render(title)
+        #expect(frames.count > 10)
+        let image = AgentMenuBarImage.self
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        let digitWidth = ("3" as NSString).size(withAttributes: [.font: font]).width
+        let firstDigit = image.glyphSize + image.digitGap
+        let secondDigit = 2 * (image.glyphSize + image.digitGap) + ceil(digitWidth) + image.segmentGap
+        for x in [firstDigit, secondDigit] {
+            let expected = digitAlpha(still, from: x, width: digitWidth)
+            #expect(expected.contains { $0 > 128 })
+            for frame in frames {
+                #expect(frame.size == still.size)
+                #expect(digitAlpha(frame, from: x, width: digitWidth) == expected)
+            }
+        }
+        // Upright: the still "2" matches a plainly drawn "2", not its mirror image.
+        let rep = try #require(still.representations.first as? NSBitmapImageRep)
+        let scale = CGFloat(rep.pixelsWide) / still.size.width
+        let plain = try #require(reference("2", height: still.size.height, scale: scale))
+        func rows(_ r: NSBitmapImageRep, x0: Int) -> [[Bool]] {
+            (0..<plain.pixelsHigh).map { py in
+                (0..<plain.pixelsWide).map { px in (r.colorAt(x: x0 + px, y: py)?.alphaComponent ?? 0) > 0.5 }
+            }
+        }
+        let drawn = rows(rep, x0: Int(secondDigit * scale))
+        let upright = rows(plain, x0: 0)
+        func mismatch(_ a: [[Bool]], _ b: [[Bool]]) -> Int { zip(a, b).map { zip($0, $1).filter { $0 != $1 }.count }.reduce(0, +) }
+        #expect(mismatch(drawn, upright) < mismatch(drawn, upright.reversed()))
     }
 }

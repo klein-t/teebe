@@ -30,6 +30,8 @@ struct AgentMenuBarLabel: View {
 enum AgentMenuBarImage {
     static let height: CGFloat = 18
     static let glyphSize: CGFloat = 16
+    static let digitGap: CGFloat = 2
+    static let segmentGap: CGFloat = 7
     private static let digitFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
 
     static func render(_ title: AgentMenuBarTitle) -> NSImage {
@@ -65,7 +67,6 @@ enum AgentMenuBarImage {
             }
         }
         let attributes: [NSAttributedString.Key: Any] = [.font: digitFont, .foregroundColor: NSColor.black]
-        let digitGap: CGFloat = 2, segmentGap: CGFloat = 7
         let widths = pieces.map { glyphSize + digitGap + ceil(($0.1 as NSString).size(withAttributes: attributes).width) }
         let width = widths.reduce(0, +) + segmentGap * CGFloat(max(0, pieces.count - 1))
         // A bitmap, drawn now: showing a frame is then a copy, never a redraw.
@@ -91,11 +92,12 @@ enum AgentMenuBarImage {
                                          bytesPerRow: 0, bitsPerPixel: 0) else { return NSImage(size: size) }
         rep.size = size
         NSGraphicsContext.saveGraphicsState()
-        if let context = NSGraphicsContext(bitmapImageRep: rep) {
-            NSGraphicsContext.current = context
-            // y-down, like the orb geometry and the layout above.
-            context.cgContext.translateBy(x: 0, y: size.height)
-            context.cgContext.scaleBy(x: 1, y: -1)
+        if let bitmap = NSGraphicsContext(bitmapImageRep: rep) {
+            // y-down, like the orb geometry and the layout above. The context is
+            // marked flipped too, so AppKit draws the digits upright in it.
+            bitmap.cgContext.translateBy(x: 0, y: size.height)
+            bitmap.cgContext.scaleBy(x: 1, y: -1)
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: bitmap.cgContext, flipped: true)
             draw()
         }
         NSGraphicsContext.restoreGraphicsState()
