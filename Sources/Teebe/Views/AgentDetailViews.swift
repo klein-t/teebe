@@ -14,17 +14,20 @@ struct WorktreeAgentLinesView: View {
                 .accessibilityLabel("Task: \(task)")
         }
         if let question = lines.question {
-            line(question, color: questionColor)
+            // Slides on hover when truncated, so the whole question can be read.
+            line(HoverSlidingLine(text: question), help: question, color: questionColor)
                 .accessibilityLabel("Agent asks: \(question)")
         }
     }
 
     private func line(_ text: String, color: Color) -> some View {
-        Text(text)
+        line(Text(text).lineLimit(1).truncationMode(.tail), help: text, color: color)
+    }
+
+    private func line(_ content: some View, help text: String, color: Color) -> some View {
+        content
             .font(Typography.secondary)
             .foregroundStyle(color)
-            .lineLimit(1)
-            .truncationMode(.tail)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: WorktreeListPresentation.agentLineHeight, alignment: .top)
             .padding(.leading, 2)

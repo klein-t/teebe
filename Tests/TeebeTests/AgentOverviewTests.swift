@@ -197,6 +197,16 @@ struct AgentMenuBarSectionsTests {
         #expect(!AgentMenuBarAnimation.timerRuns([.working], screenAsleep: false, sessionLocked: false, itemVisible: false))
     }
 
+    @Test("a question slides only when it is clipped, by the clipped width, at a reading pace")
+    func slide() {
+        #expect(HoverSlide(textWidth: 200, available: 240) == nil)
+        #expect(HoverSlide(textWidth: 240.5, available: 240) == nil)
+        #expect(HoverSlide(textWidth: 300, available: 0) == nil)
+        let slide = HoverSlide(textWidth: 390, available: 240)
+        #expect(slide?.distance == 150)
+        #expect(slide?.duration == 5)
+    }
+
     @Test("the animate choice defaults on and round-trips")
     func animateOption() {
         let prefs = AgentDisplayPreferences(state: AppState())
