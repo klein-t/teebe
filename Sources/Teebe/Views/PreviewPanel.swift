@@ -59,7 +59,7 @@ struct PreviewPanel: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
-        .background(Color.accentColor.opacity(0.10))
+        .background(Color.accentColor.opacity(0.16))
     }
 
     /// Arrow keys while the peek is key: move the list selection (Finder-style) and
@@ -406,7 +406,7 @@ private struct HunkHeader: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.10))
+            .background(Color.secondary.opacity(0.14))
     }
 }
 
@@ -440,8 +440,9 @@ private enum DiffStyle {
     }
     static func background(_ kind: DiffLineKind) -> Color {
         switch kind {
-        case .addition: return Color.green.opacity(0.12)
-        case .deletion: return Color.red.opacity(0.12)
+        // Strong enough to read over the glass with a busy desktop behind it.
+        case .addition: return Color.green.opacity(0.20)
+        case .deletion: return Color.red.opacity(0.20)
         case .context: return .clear
         }
     }
