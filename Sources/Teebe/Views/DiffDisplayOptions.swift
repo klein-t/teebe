@@ -36,9 +36,11 @@ struct DiffOptionToggles: View {
 
     private func toggle(_ title: String, _ symbol: String, _ help: String, _ isOn: Binding<Bool>) -> some View {
         Toggle(isOn: isOn) {
+            // One fixed box for every symbol: their own heights differ (the
+            // space glyph is flat), which made the buttons different sizes.
             Label(title, systemImage: symbol)
                 .labelStyle(.iconOnly)
-                .frame(width: 16)
+                .frame(width: 16, height: 14)
         }
         .toggleStyle(.button)
         .accessibilityLabel(title)
