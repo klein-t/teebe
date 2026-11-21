@@ -95,23 +95,23 @@ final class AgentMenuBarAnimator {
         guard !observing else { return }
         observing = true
         let workspace = NSWorkspace.shared.notificationCenter
-        let changes: [(NotificationCenter, Notification.Name, () -> Void)] = [
-            (workspace, NSWorkspace.screensDidSleepNotification, { [weak self] in self?.screenAsleep = true }),
-            (workspace, NSWorkspace.screensDidWakeNotification, { [weak self] in self?.screenAsleep = false }),
-            (workspace, NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, {}),
-            (NotificationCenter.default, .NSProcessInfoPowerStateDidChange, {}),
-            (NotificationCenter.default, NSWindow.didChangeOcclusionStateNotification, {}),
-            (DistributedNotificationCenter.default(), Notification.Name("com.apple.screenIsLocked"),
-             { [weak self] in self?.sessionLocked = true }),
-            (DistributedNotificationCenter.default(), Notification.Name("com.apple.screenIsUnlocked"),
-             { [weak self] in self?.sessionLocked = false })
-        ]
-        for (center, name, change) in changes {
-            center.addObserver(forName: name, object: nil, queue: .main) { _ in
-                MainActor.assumeIsolated {
-                    change()
-                    AgentMenuBarAnimator.shared.update()
-                }
+        let distributed = DistributedNotificationCenter.default()
+        observe(workspace, NSWorkspace.screensDidSleepNotification) { $0.screenAsleep = true }
+        observe(workspace, NSWorkspace.screensDidWakeNotification) { $0.screenAsleep = false }
+        observe(workspace, NSWorkspace.accessibilityDisplayOptionsDidChangeNotification) { _ in }
+        observe(.default, .NSProcessInfoPowerStateDidChange) { _ in }
+        observe(.default, NSWindow.didChangeOcclusionStateNotification) { _ in }
+        observe(distributed, Notification.Name("com.apple.screenIsLocked")) { $0.sessionLocked = true }
+        observe(distributed, Notification.Name("com.apple.screenIsUnlocked")) { $0.sessionLocked = false }
+    }
+
+    /// On `name`, apply `change` and decide again whether the timer runs.
+    private func observe(_ center: NotificationCenter, _ name: Notification.Name,
+                         change: @escaping @MainActor (AgentMenuBarAnimator) -> Void) {
+        center.addObserver(forName: name, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                change(AgentMenuBarAnimator.shared)
+                AgentMenuBarAnimator.shared.update()
             }
         }
     }
