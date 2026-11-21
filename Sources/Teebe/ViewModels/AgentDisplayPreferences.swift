@@ -31,6 +31,11 @@ enum AgentDisplayWording {
     static let taskSourceTitle = "Task from"
     static let menuBarTitle = "Show in menu bar"
     static let menuBarHelp = "A menu bar icon counts the agents working and waiting for you in all your projects."
+    static let waitingCountTitle = "Waiting count"
+    static let workingCountTitle = "Working count"
+    static let dockTitle = "Show Dock icon"
+    static let dockHelp = "Hide the Dock icon and use teebe from the menu bar. Needs the menu bar icon; "
+        + "hiding the menu bar icon brings the Dock icon back."
     static let sectionTitle = "Agent details"
     static let privacyNote = "Read from Claude Code and Codex logs on this Mac. Shown here only, never sent anywhere."
 }
@@ -42,14 +47,40 @@ final class AgentDisplayPreferences {
     var showsQuestion: Bool { didSet { if showsQuestion != oldValue { onChange() } } }
     var showsTask: Bool { didSet { if showsTask != oldValue { onChange() } } }
     var taskSource: AgentTaskSource { didSet { if taskSource != oldValue { onChange() } } }
-    var showsMenuBarIcon: Bool { didSet { if showsMenuBarIcon != oldValue { onChange() } } }
+    /// The menu bar item and the Dock icon, kept so that one of them always shows.
+    private(set) var presence: AppPresence
+    var showsMenuBarIcon: Bool {
+        get { presence.showsMenuBarIcon }
+        set { updatePresence { $0.setMenuBarIcon(newValue) } }
+    }
+    var showsDockIcon: Bool {
+        get { presence.showsDockIcon }
+        set { updatePresence { $0.setDockIcon(newValue) } }
+    }
+    var showsWaitingCount: Bool { didSet { if showsWaitingCount != oldValue { onChange() } } }
+    var showsWorkingCount: Bool { didSet { if showsWorkingCount != oldValue { onChange() } } }
     @ObservationIgnored var onChange: () -> Void = {}
+    /// Called with whether the Dock icon should show, whenever that changes.
+    @ObservationIgnored var onDockIconChange: (Bool) -> Void = { _ in }
+
+    private func updatePresence(_ change: (inout AppPresence) -> Void) {
+        var updated = presence
+        change(&updated)
+        guard updated != presence else { return }
+        let dockChanged = updated.showsDockIcon != presence.showsDockIcon
+        presence = updated
+        onChange()
+        if dockChanged { onDockIconChange(updated.showsDockIcon) }
+    }
 
     init(state: AppState) {
         showsQuestion = state.agentShowQuestion ?? true
         showsTask = state.agentShowTask ?? true
         taskSource = AgentTaskSource(rawValue: state.agentTaskSource ?? "") ?? .first
-        showsMenuBarIcon = state.agentMenuBarIcon ?? true
+        presence = AppPresence(showsMenuBarIcon: state.agentMenuBarIcon ?? true,
+                               showsDockIcon: state.showDockIcon ?? true)
+        showsWaitingCount = state.agentMenuBarWaiting ?? true
+        showsWorkingCount = state.agentMenuBarWorking ?? true
     }
 
     var options: AgentDisplayOptions {
@@ -61,6 +92,9 @@ final class AgentDisplayPreferences {
         state.agentShowTask = showsTask
         state.agentTaskSource = taskSource.rawValue
         state.agentMenuBarIcon = showsMenuBarIcon
+        state.agentMenuBarWaiting = showsWaitingCount
+        state.agentMenuBarWorking = showsWorkingCount
+        state.showDockIcon = showsDockIcon
     }
 }
 

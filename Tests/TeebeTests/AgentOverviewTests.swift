@@ -20,15 +20,6 @@ struct AgentOverviewTests {
         ])
         #expect(summary.waiting.map(\.name) == ["feat/z", "feat/a", "feat/b"])
         #expect(summary.working.map(\.name) == ["fix/a"])
-        #expect(AgentOverviewModel.title(summary) == "3 waiting · 1 working")
-        #expect(AgentOverviewModel.accessibilityLabel(summary) == "Teebe: 3 waiting for you, 1 working")
-    }
-
-    @Test("the title leaves out zero parts and is empty when nothing is going on")
-    func titles() {
-        #expect(AgentOverviewModel.title(.init()) == nil)
-        #expect(AgentOverviewModel.title(AgentOverviewModel.summarize([entry("a", repo: "x", .working)])) == "1 working")
-        #expect(AgentOverviewModel.title(AgentOverviewModel.summarize([entry("a", repo: "x", .needsAttention)])) == "1 waiting")
     }
 }
 
@@ -86,5 +77,69 @@ struct WorktreeAgentLinesTests {
                 == 2 * WorktreeListPresentation.agentLineHeight + WorktreeListPresentation.agentLinesBottomInset)
         #expect(WorktreeListPresentation.rowHeight(agentLines: 0) == WorktreeListPresentation.rowHeight)
         #expect(WorktreeListPresentation.rowHeight(agentLines: 2) == WorktreeListPresentation.rowHeight + 36)
+    }
+}
+
+@Suite("Menu bar title and app presence")
+@MainActor
+struct AgentMenuBarTitleTests {
+    @Test("waiting first, then working; a zero count or an option off leaves its segment out")
+    func segments() {
+        #expect(AgentMenuBarTitle(waiting: 3, working: 2, showsWaiting: true, showsWorking: true).segments
+                == [.waiting(3), .working(2)])
+        #expect(AgentMenuBarTitle(waiting: 3, working: 0, showsWaiting: true, showsWorking: true).segments == [.waiting(3)])
+        #expect(AgentMenuBarTitle(waiting: 0, working: 2, showsWaiting: true, showsWorking: true).segments == [.working(2)])
+        #expect(AgentMenuBarTitle(waiting: 3, working: 2, showsWaiting: false, showsWorking: true).segments == [.working(2)])
+        #expect(AgentMenuBarTitle(waiting: 3, working: 2, showsWaiting: true, showsWorking: false).segments == [.waiting(3)])
+    }
+
+    @Test("nothing to show falls back to the neutral glyph; VoiceOver still hears both counts")
+    func neutral() {
+        let idle = AgentMenuBarTitle(waiting: 0, working: 0, showsWaiting: true, showsWorking: true)
+        #expect(idle.isNeutral)
+        let off = AgentMenuBarTitle(waiting: 3, working: 2, showsWaiting: false, showsWorking: false)
+        #expect(off.isNeutral)
+        #expect(off.accessibilityLabel == "Teebe: 3 waiting, 2 working")
+    }
+
+    @Test("the Dock icon hides only while the menu bar item shows, and comes back when it hides")
+    func presenceRule() {
+        var presence = AppPresence(showsMenuBarIcon: true, showsDockIcon: true)
+        presence.setDockIcon(false)
+        #expect(!presence.showsDockIcon)
+        presence.setMenuBarIcon(false)
+        #expect(presence.showsDockIcon)
+        #expect(!presence.canHideDockIcon)
+        presence.setDockIcon(false)
+        #expect(presence.showsDockIcon)
+        // A saved state with neither is read as Dock on.
+        #expect(AppPresence(showsMenuBarIcon: false, showsDockIcon: false).showsDockIcon)
+    }
+
+    @Test("the choices round-trip through the saved state, and hiding the menu bar item restores the Dock")
+    func persistence() {
+        let prefs = AgentDisplayPreferences(state: AppState())
+        var dockCalls: [Bool] = []
+        prefs.onDockIconChange = { dockCalls.append($0) }
+        prefs.showsDockIcon = false
+        prefs.showsWorkingCount = false
+        var state = AppState()
+        prefs.write(to: &state)
+        #expect(state.showDockIcon == false && state.agentMenuBarWorking == false && state.agentMenuBarWaiting == true)
+        let reloaded = AgentDisplayPreferences(state: state)
+        #expect(!reloaded.showsDockIcon && !reloaded.showsWorkingCount && reloaded.showsWaitingCount)
+        prefs.showsMenuBarIcon = false
+        #expect(prefs.showsDockIcon)
+        #expect(dockCalls == [false, true])
+        prefs.write(to: &state)
+        #expect(state.showDockIcon == true && state.agentMenuBarIcon == false)
+    }
+
+    @Test("saved state from before these options decodes with everything on")
+    func migration() throws {
+        let old = #"{"repositories":[],"showChangedOnly":false,"showIgnored":false,"floatOnTop":false,"agentMenuBarIcon":true}"#
+        let state = try JSONDecoder().decode(AppState.self, from: Data(old.utf8))
+        let prefs = AgentDisplayPreferences(state: state)
+        #expect(prefs.showsWaitingCount && prefs.showsWorkingCount && prefs.showsDockIcon && prefs.showsMenuBarIcon)
     }
 }

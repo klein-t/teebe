@@ -165,6 +165,7 @@ final class AppModel {
         self.selector.isRemovalRunning = { [weak self] in self?.groupActionsStorage?.isWorking == true }
         self.openWith.onChange = { [weak self] in self?.persist() }
         self.agentDisplay.onChange = { [weak self] in self?.persist() }
+        self.agentDisplay.onDockIconChange = { DockPresence.apply(showsDockIcon: $0) }
         self.preferences.onChange = { [weak self] in
             guard let self else { return }
             self.applyFilePreferences()

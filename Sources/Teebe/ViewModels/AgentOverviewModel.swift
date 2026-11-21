@@ -41,19 +41,6 @@ final class AgentOverviewModel {
         return lhs.worktreePath < rhs.worktreePath
     }
 
-    /// The status item's title: "1 waiting · 2 working", zero parts left out;
-    /// nil when nothing is going on (the icon alone).
-    static func title(_ summary: Summary) -> String? {
-        let parts = [summary.waiting.isEmpty ? nil : "\(summary.waiting.count) waiting",
-                     summary.working.isEmpty ? nil : "\(summary.working.count) working"].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    /// What VoiceOver reads for the status item.
-    static func accessibilityLabel(_ summary: Summary) -> String {
-        "Teebe: \(summary.waiting.count) waiting for you, \(summary.working.count) working"
-    }
-
     let app: AppModel
     /// Agents in every added repository, from the last poll; only those outside
     /// the selected repository are shown from here.
@@ -138,10 +125,6 @@ final class AgentOverviewModel {
     }
 
     static func bringMainWindowForward() {
-        NSApp.activate(ignoringOtherApps: true)
-        let candidates = NSApp.windows.filter { $0.canBecomeMain && !($0 is NSPanel) }
-        guard let window = candidates.first(where: { $0.title == Brand.name }) ?? candidates.first else { return }
-        if window.isMiniaturized { window.deminiaturize(nil) }
-        window.makeKeyAndOrderFront(nil)
+        MainWindowOpener.bringForward()
     }
 }

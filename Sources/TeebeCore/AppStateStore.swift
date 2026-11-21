@@ -98,6 +98,11 @@ public struct AppState: Codable, Equatable, Sendable {
     public var agentShowTask: Bool?
     public var agentTaskSource: String?
     public var agentMenuBarIcon: Bool?
+    /// What the menu bar item counts, and whether the Dock icon shows. Optional
+    /// so older state files decode; nil means the default (on).
+    public var agentMenuBarWaiting: Bool?
+    public var agentMenuBarWorking: Bool?
+    public var showDockIcon: Bool?
 
     public init(
         repositories: [PersistedRepository] = [],

@@ -52,7 +52,22 @@ struct AgentRowOptionsMenuSection: View {
             }
             .disabled(!display.showsTask)
             Toggle(AgentDisplayWording.menuBarTitle, isOn: $display.showsMenuBarIcon)
+            MenuBarCountToggles(display: display, indent: "    ")
         }
+    }
+}
+
+/// What the menu bar item counts, under "Show in menu bar" and off while it is.
+/// `indent` sets them under it in a menu, where rows can't be padded.
+struct MenuBarCountToggles: View {
+    @Bindable var display: AgentDisplayPreferences
+    var indent = ""
+
+    var body: some View {
+        Toggle(indent + AgentDisplayWording.waitingCountTitle, isOn: $display.showsWaitingCount)
+            .disabled(!display.showsMenuBarIcon)
+        Toggle(indent + AgentDisplayWording.workingCountTitle, isOn: $display.showsWorkingCount)
+            .disabled(!display.showsMenuBarIcon)
     }
 }
 
@@ -69,6 +84,10 @@ struct AgentDisplaySettingsSection: View {
             }
             .disabled(!display.showsTask)
             Toggle(isOn: $display.showsMenuBarIcon) { labeled(AgentDisplayWording.menuBarTitle, AgentDisplayWording.menuBarHelp) }
+            MenuBarCountToggles(display: display).padding(.leading, 16)
+            Toggle(isOn: $display.showsDockIcon) { labeled(AgentDisplayWording.dockTitle, AgentDisplayWording.dockHelp) }
+                // Reads as on while the menu bar icon is off: the Dock icon is the only way in.
+                .disabled(!display.presence.canHideDockIcon)
         } header: { Text(AgentDisplayWording.sectionTitle) } footer: {
             Text(AgentDisplayWording.privacyNote)
         }

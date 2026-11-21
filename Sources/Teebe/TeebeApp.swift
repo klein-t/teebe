@@ -7,7 +7,8 @@ import TeebeCore
 /// window never appears (no activation policy → background process).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        // The saved Dock choice, applied before any window shows.
+        NSApp.setActivationPolicy(DockPresence.savedShowsDockIcon() ? .regular : .accessory)
         AgentNotifier.showWhileFrontmost()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -21,7 +22,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// still showing. Belt and braces for the pinned (floating-level) window, which
     /// window-tracking code tends to overlook (#105).
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        !Self.hasVisibleWindow(in: sender.windows)
+        // Without a Dock icon the app lives in the menu bar, window or not.
+        guard !DockPresence.isAccessory else { return false }
+        return !Self.hasVisibleWindow(in: sender.windows)
+    }
+
+    /// Opening teebe again (Finder, Spotlight, the Dock) brings its window back,
+    /// also when it runs from the menu bar with its window closed.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        MainWindowOpener.bringForward()
+        return false
     }
 
     /// True if any regular (non-panel) window is still on screen.
@@ -64,7 +74,7 @@ struct TeebeApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(Brand.name) {
+        WindowGroup(Brand.name, id: WindowID.main) {
             RootWindowContent(app: app, preview: preview, whatsNew: whatsNew)
         }
         .windowStyle(.hiddenTitleBar)
@@ -109,7 +119,7 @@ struct TeebeApp: App {
                                          set: { app.agentDisplay.showsMenuBarIcon = $0 })) {
             AgentMenuBarMenu(overview: agentOverview, display: app.agentDisplay)
         } label: {
-            AgentMenuBarLabel(overview: agentOverview)
+            AgentMenuBarLabel(overview: agentOverview, display: app.agentDisplay)
         }
 
         // Adds "Settings…" (⌘,) to the app menu.
@@ -121,6 +131,7 @@ struct TeebeApp: App {
 
 /// Stable identifiers for the secondary windows opened via `openWindow(id:)`.
 enum WindowID {
+    static let main = "main"
     static let whatsNew = "whatsNew"
     static let shortcuts = "shortcuts"
 }
