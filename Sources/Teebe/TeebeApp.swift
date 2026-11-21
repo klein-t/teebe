@@ -34,6 +34,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    /// Without a Dock icon, launching teebe again only activates it, with no
+    /// reopen event: bring the window back when it was closed.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard DockPresence.isAccessory, MainWindowOpener.mainWindow?.isVisible != true else { return }
+        MainWindowOpener.bringForward()
+    }
+
     /// True if any regular (non-panel) window is still on screen.
     static func hasVisibleWindow(in windows: [NSWindow]) -> Bool {
         hasVisibleWindow(windows.map { (visible: $0.isVisible, isPanel: $0 is NSPanel) })
