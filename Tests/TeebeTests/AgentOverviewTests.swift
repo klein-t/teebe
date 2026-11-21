@@ -72,7 +72,7 @@ struct WorktreeAgentLinesTests {
         #expect(unknown.card.subtitle == "An agent is waiting for your input.")
     }
 
-    @Test("the list grows by one line height per agent line")
+    @Test("the list grows by each agent line and one bottom inset; one-line rows keep their height")
     func listHeight() {
         let worktree = Worktree(path: "/feature", branch: "feature", head: "abc")
         var info = SelectorModel.WorktreeInfo()
@@ -82,7 +82,9 @@ struct WorktreeAgentLinesTests {
         let plain = WorktreeListPresentation(worktrees: [worktree], statuses: [:], grouped: false, collapsed: [], hasRepository: true)
         let lined = WorktreeListPresentation(worktrees: [worktree], statuses: [worktree.path: status], grouped: false,
                                              collapsed: [], hasRepository: true)
-        #expect(lined.naturalHeight - plain.naturalHeight == 2 * WorktreeListPresentation.agentLineHeight)
-        #expect(WorktreeListPresentation.rowHeight(agentLines: 2) == WorktreeListPresentation.rowHeight + 30)
+        #expect(lined.naturalHeight - plain.naturalHeight
+                == 2 * WorktreeListPresentation.agentLineHeight + WorktreeListPresentation.agentLinesBottomInset)
+        #expect(WorktreeListPresentation.rowHeight(agentLines: 0) == WorktreeListPresentation.rowHeight)
+        #expect(WorktreeListPresentation.rowHeight(agentLines: 2) == WorktreeListPresentation.rowHeight + 36)
     }
 }
