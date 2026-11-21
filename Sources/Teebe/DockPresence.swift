@@ -39,6 +39,9 @@ enum MainWindowOpener {
 
     /// Bring the main window forward and make it key, opening it if it was closed.
     static func bringForward() {
+        // Closing the last window without a Dock icon hides the app; its windows
+        // stay hidden, new ones too, until it is unhidden.
+        if NSApp.isHidden { NSApp.unhide(nil) }
         NSApp.activate(ignoringOtherApps: true)
         if let window = mainWindow {
             if window.isMiniaturized { window.deminiaturize(nil) }
