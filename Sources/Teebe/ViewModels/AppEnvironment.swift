@@ -130,9 +130,7 @@ struct AppEnvironment {
     static func live() -> AppEnvironment {
         // `TEEBE_CLAUDE_PROJECTS_DIR` override exists for live testing against a
         // synthetic projects tree; real runs use `~/.claude/projects`.
-        let projectsRoot = ProcessInfo.processInfo.environment["TEEBE_CLAUDE_PROJECTS_DIR"]
-            .map { URL(fileURLWithPath: $0, isDirectory: true) }
-            ?? AgentSessionScanner.defaultProjectsRoot
+        let projectsRoot = AgentSessionScanner.configuredProjectsRoot()
         let codexSessions = ProcessInfo.processInfo.environment["TEEBE_CODEX_SESSIONS_DIR"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? CodexRolloutScanner.defaultSessionsRoot

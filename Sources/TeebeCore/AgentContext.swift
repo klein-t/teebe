@@ -15,14 +15,17 @@ public struct AgentContext: Equatable, Sendable {
     /// What the agent waits on: its pending question or request, otherwise the
     /// end of its last message. Only set while the session waits for the user.
     public var waitingReason: String?
+    /// The exact session whose log supplied these lines. Not saved in app state.
+    public var terminalSession: AgentTerminalSession?
 
     public init(state: AgentActivityState, lastActivity: Date? = nil, firstPrompt: String? = nil,
-                latestPrompt: String? = nil, waitingReason: String? = nil) {
+                latestPrompt: String? = nil, waitingReason: String? = nil, terminalSession: AgentTerminalSession? = nil) {
         self.state = state
         self.lastActivity = lastActivity
         self.firstPrompt = firstPrompt
         self.latestPrompt = latestPrompt
         self.waitingReason = waitingReason
+        self.terminalSession = terminalSession
     }
 }
 

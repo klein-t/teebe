@@ -290,7 +290,11 @@ struct AgentSnapshotTests {
         #expect(snapshot.contexts[worktree] == AgentContext(state: .needsAttention, lastActivity: snapshot.contexts[worktree]?.lastActivity,
                                                             firstPrompt: "Replace the payments client",
                                                             latestPrompt: "Replace the payments client",
-                                                            waitingReason: "Keep the old API?"))
+                                                            waitingReason: "Keep the old API?",
+                                                            terminalSession: AgentTerminalSession(provider: .claude,
+                                                                id: "11111111-2222-3333-4444-555555555555",
+                                                                transcriptPath: dir.appendingPathComponent("11111111-2222-3333-4444-555555555555.jsonl").resolvingSymlinksInPath().path,
+                                                                claudeProjectsPath: root.path)))
         // `states` alone reads no context and reports the same state.
         #expect(scanner.states(forWorktreePaths: [worktree], now: now) == snapshot.states)
     }
@@ -311,6 +315,9 @@ struct AgentSnapshotTests {
         #expect(snapshot.states[worktree] == .working)
         #expect(snapshot.contexts[worktree]?.firstPrompt == "Retry failed webhooks")
         #expect(snapshot.contexts[worktree]?.waitingReason == nil)
+        #expect(snapshot.contexts[worktree]?.terminalSession == AgentTerminalSession(provider: .codex,
+            id: "0199a000-0000-7000-8000-000000000001",
+            transcriptPath: folder.appendingPathComponent("rollout-2026-11-19T10-00-00-0199a000-0000-7000-8000-000000000001.jsonl").resolvingSymlinksInPath().path))
     }
 
     @Test("combined: the waiting session's context wins over the working one's")

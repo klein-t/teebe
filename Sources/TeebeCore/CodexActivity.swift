@@ -252,8 +252,11 @@ public struct CodexRolloutScanner: AgentActivitySource {
     private func contexts(of winners: [String: SessionWinner])
         -> [String: AgentContext] {
         winners.mapValues { winner in
-            contextCache.context(of: winner.url, state: winner.state, lastActivity: winner.lastActivity,
-                                 tailBytes: tailBytes, reader: .codex)
+            var context = contextCache.context(of: winner.url, state: winner.state, lastActivity: winner.lastActivity,
+                                               tailBytes: tailBytes, reader: .codex)
+            context.terminalSession = AgentTerminalSession(provider: .codex, id: Self.threadID(of: winner.url),
+                                                           transcriptPath: winner.url.path)
+            return context
         }
     }
 

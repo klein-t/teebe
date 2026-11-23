@@ -356,6 +356,12 @@ public struct AgentSessionScanner: Sendable {
             .appendingPathComponent("projects", isDirectory: true)
     }
 
+    /// Shared by the live app and explicit resolve-only diagnostics.
+    public static func configuredProjectsRoot(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        environment["TEEBE_CLAUDE_PROJECTS_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? defaultProjectsRoot
+    }
+
     /// Claude Code names each project dir by replacing every character of the
     /// cwd that isn't an ASCII letter or digit with "-".
     public static func projectDirName(forWorktreePath path: String) -> String {
@@ -440,8 +446,11 @@ public struct AgentSessionScanner: Sendable {
     private func contexts(of winners: [String: SessionWinner])
         -> [String: AgentContext] {
         winners.mapValues { winner in
-            contextCache.context(of: winner.url, state: winner.state, lastActivity: winner.lastActivity,
-                                 tailBytes: tailBytes, reader: .claude)
+            var context = contextCache.context(of: winner.url, state: winner.state, lastActivity: winner.lastActivity,
+                                               tailBytes: tailBytes, reader: .claude)
+            context.terminalSession = AgentTerminalSession(provider: .claude, id: Self.sessionID(of: winner.url),
+                                                           transcriptPath: winner.url.path, claudeProjectsPath: projectsRoot.path)
+            return context
         }
     }
 
