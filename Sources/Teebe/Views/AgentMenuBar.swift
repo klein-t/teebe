@@ -186,8 +186,8 @@ enum AgentMenuBarImage {
 }
 
 /// The status item's menu: the worktrees waiting for you (with what the agent
-/// asks), then those working (with their task). Choosing one brings teebe
-/// forward on it.
+/// asks), then those working (with their task). Choosing one opens its verified
+/// terminal session, or teebe on that worktree when no route is available.
 struct AgentMenuBarMenu: View {
     let overview: AgentOverviewModel
     @Bindable var display: AgentDisplayPreferences
@@ -219,10 +219,11 @@ struct AgentMenuBarMenu: View {
         }
         .keyboardShortcut(",")
         Divider()
-        Menu("Show") {
+        Menu("Options") {
             Toggle(AgentDisplayWording.waitingAgentsTitle, isOn: $display.showsWaitingAgents)
             Toggle(AgentDisplayWording.workingAgentsTitle, isOn: $display.showsWorkingAgents)
             Toggle(AgentDisplayWording.animateTitle, isOn: $display.animatesMenuBarIcons)
+            AgentClickDestinationPicker(display: display)
             Divider()
             Toggle(AgentDisplayWording.dockTitle, isOn: $display.showsDockIcon)
         }

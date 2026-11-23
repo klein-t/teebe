@@ -14,6 +14,12 @@ enum AgentTaskSource: String, CaseIterable, Identifiable {
     }
 }
 
+enum AgentClickDestination: String, CaseIterable, Identifiable {
+    case terminal, teebe
+    var id: String { rawValue }
+    var title: String { self == .terminal ? "Its terminal" : "teebe" }
+}
+
 /// What the worktree rows and hover cards show about agents.
 struct AgentDisplayOptions: Equatable {
     var showsQuestion = true
@@ -35,6 +41,9 @@ enum AgentDisplayWording {
     static let waitingAgentsTitle = "Waiting agents"
     static let workingAgentsTitle = "Working agents"
     static let animateTitle = "Animate icons"
+    static let clickDestinationTitle = "Clicking an agent opens"
+    static let clickDestinationHelp = "Open the session's existing cmux terminal when it can be verified. "
+        + "Otherwise, open its worktree in teebe."
     static let dockTitle = "Show Dock icon"
     static let dockHelp = "Hide the Dock icon and use teebe from the menu bar. Needs the menu bar icon; "
         + "hiding the menu bar icon brings the Dock icon back."
@@ -62,6 +71,7 @@ final class AgentDisplayPreferences {
     var showsWaitingAgents: Bool { didSet { if showsWaitingAgents != oldValue { onChange() } } }
     var showsWorkingAgents: Bool { didSet { if showsWorkingAgents != oldValue { onChange() } } }
     var animatesMenuBarIcons: Bool { didSet { if animatesMenuBarIcons != oldValue { onChange() } } }
+    var clickDestination: AgentClickDestination { didSet { if clickDestination != oldValue { onChange() } } }
     @ObservationIgnored var onChange: () -> Void = {}
     /// Called with whether the Dock icon should show, whenever that changes.
     @ObservationIgnored var onDockIconChange: (Bool) -> Void = { _ in }
@@ -85,6 +95,7 @@ final class AgentDisplayPreferences {
         showsWaitingAgents = state.agentMenuBarWaiting ?? true
         showsWorkingAgents = state.agentMenuBarWorking ?? true
         animatesMenuBarIcons = state.agentMenuBarAnimate ?? true
+        clickDestination = AgentClickDestination(rawValue: state.agentClickDestination ?? "") ?? .terminal
     }
 
     var options: AgentDisplayOptions {
@@ -99,6 +110,7 @@ final class AgentDisplayPreferences {
         state.agentMenuBarWaiting = showsWaitingAgents
         state.agentMenuBarWorking = showsWorkingAgents
         state.agentMenuBarAnimate = animatesMenuBarIcons
+        state.agentClickDestination = clickDestination.rawValue
         state.showDockIcon = showsDockIcon
     }
 }

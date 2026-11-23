@@ -47,6 +47,9 @@ final class AgentOverviewModel {
     private(set) var others: [Entry] = []
     @ObservationIgnored private var worktreesByRepo: [String: (listedAt: Date, paths: [(path: String, name: String)])] = [:]
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored var openTerminalSession: (AgentTerminalSession) async -> Bool = AgentTerminalJump.open
+    @ObservationIgnored var openMainWindow: () -> Void = MainWindowOpener.bringForward
+    @ObservationIgnored private var openingAgent = false
     var pollInterval: TimeInterval = 15
     /// How long a repository's worktree list is reused before it is read again.
     var worktreeListInterval: TimeInterval = 120
@@ -111,9 +114,15 @@ final class AgentOverviewModel {
         }
     }
 
-    /// Bring teebe forward on this worktree, switching project if needed.
+    /// Try this exact session once, then preserve the existing teebe navigation.
+    /// Repeated clicks while resolution is running cannot race two focus requests.
     func open(_ entry: Entry) async {
-        Self.bringMainWindowForward()
+        guard !openingAgent else { return }
+        openingAgent = true
+        defer { openingAgent = false }
+        if app.agentDisplay.clickDestination == .terminal, entry.state != .idle,
+           let session = entry.context?.terminalSession, await openTerminalSession(session) { return }
+        openMainWindow()
         app.activeSection = .worktrees
         if app.selector.selectedRepo?.path == entry.repoPath {
             if let worktree = app.selector.worktrees.first(where: { $0.path == entry.worktreePath }) {

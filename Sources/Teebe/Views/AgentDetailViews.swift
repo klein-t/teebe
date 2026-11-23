@@ -68,6 +68,20 @@ struct MenuBarCountToggles: View {
             .disabled(!display.showsMenuBarIcon)
         Toggle(indent + AgentDisplayWording.animateTitle, isOn: $display.animatesMenuBarIcons)
             .disabled(!display.showsMenuBarIcon)
+        AgentClickDestinationPicker(display: display, indent: indent)
+            .disabled(!display.showsMenuBarIcon)
+    }
+}
+
+struct AgentClickDestinationPicker: View {
+    @Bindable var display: AgentDisplayPreferences
+    var indent = ""
+
+    var body: some View {
+        Picker(indent + AgentDisplayWording.clickDestinationTitle, selection: $display.clickDestination) {
+            ForEach(AgentClickDestination.allCases) { Text($0.title).tag($0) }
+        }
+        .help(AgentDisplayWording.clickDestinationHelp)
     }
 }
 

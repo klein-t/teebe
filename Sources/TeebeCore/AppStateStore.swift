@@ -105,6 +105,8 @@ public struct AppState: Codable, Equatable, Sendable {
     public var showDockIcon: Bool?
     /// Whether the menu bar orbs move. Optional so older state files decode.
     public var agentMenuBarAnimate: Bool?
+    /// Destination of agent menu clicks. Missing or unknown means its terminal.
+    public var agentClickDestination: String?
 
     public init(
         repositories: [PersistedRepository] = [],
