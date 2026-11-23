@@ -287,3 +287,31 @@ struct AgentMenuBarFramesTests {
         #expect(mismatch(drawn, upright) < mismatch(drawn, upright.reversed()))
     }
 }
+
+/// The bundled logo, read from the sources: tests run without the app bundle.
+func sourceLogo() -> NSImage? {
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().appendingPathComponent("Sources/Teebe/Resources/teebe-logo.png")
+    return NSImage(contentsOf: url)
+}
+
+@Suite("Menu bar neutral glyph")
+@MainActor
+struct AgentMenuBarNeutralTests {
+    @Test("the neutral item is the teebe mark from the app icon, as a template at 1x and 2x")
+    func teebeMark() throws {
+        let glyph = try #require(AgentMenuBarImage.teebeGlyph(from: sourceLogo()))
+        #expect(glyph.isTemplate)
+        #expect(glyph.size.height == 16)
+        let reps = glyph.representations.compactMap { $0 as? NSBitmapImageRep }
+        #expect(Set(reps.map(\.pixelsHigh)) == [16, 32])
+        let rep = try #require(reps.first { $0.pixelsHigh == 32 })
+        func ink(_ x: Int, _ y: Int) -> Bool { (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 }
+        let w = rep.pixelsWide, h = rep.pixelsHigh
+        // The stem of the "i" runs down the middle; the dark tile between the
+        // chevrons and the stem is transparent; the corners stay empty.
+        #expect(ink(w / 2, h - 4))
+        #expect(!ink(w / 4, h - 3) && !ink(w / 2, 1))
+        #expect(!ink(w / 2 - 5, h / 2 + 6))
+    }
+}

@@ -119,12 +119,45 @@ enum AgentMenuBarImage {
         }
     }
 
-    private static let neutral: NSImage = {
-        let symbol = NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium)) ?? NSImage()
-        symbol.isTemplate = true
-        return symbol
-    }()
+    /// The teebe mark, when there is nothing to count.
+    private static let neutral: NSImage = teebeGlyph(from: Brand.logo) ?? NSImage(size: NSSize(width: 16, height: height))
+
+    /// The white mark inside the app icon's dark tile, as a template image at
+    /// menu bar size: the tile is cropped away and the mark's brightness becomes
+    /// opacity, drawn at 1x and 2x so it stays crisp on either screen.
+    static func teebeGlyph(from logo: NSImage?, height: CGFloat = 16) -> NSImage? {
+        guard let logo, let source = logo.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        // The mark's bounds in the 1024 px icon, a little padded.
+        let unit = CGFloat(source.width) / 1_024
+        let markRect = CGRect(x: 180 * unit, y: 236 * unit, width: 670 * unit, height: 606 * unit).integral
+        guard let mark = source.cropping(to: markRect) else { return nil }
+        let size = NSSize(width: (height * markRect.width / markRect.height).rounded(), height: height)
+        let image = NSImage(size: size)
+        for scale in [1, 2] {
+            let pixelsWide = Int(size.width) * scale, pixelsHigh = Int(size.height) * scale
+            guard let gray = CGContext(data: nil, width: pixelsWide, height: pixelsHigh, bitsPerComponent: 8,
+                                       bytesPerRow: pixelsWide, space: CGColorSpaceCreateDeviceGray(),
+                                       bitmapInfo: CGImageAlphaInfo.none.rawValue),
+                  let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixelsWide, pixelsHigh: pixelsHigh,
+                                             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                             colorSpaceName: .deviceRGB, bytesPerRow: pixelsWide * 4, bitsPerPixel: 32),
+                  let luminance = gray.data, let pixels = rep.bitmapData else { return nil }
+            gray.interpolationQuality = .high
+            gray.draw(mark, in: CGRect(x: 0, y: 0, width: pixelsWide, height: pixelsHigh))
+            let light = luminance.bindMemory(to: UInt8.self, capacity: pixelsWide * pixelsHigh)
+            for index in 0..<(pixelsWide * pixelsHigh) {
+                // Black ink, the mark's brightness as opacity: the dark tile drops out.
+                pixels[index * 4] = 0
+                pixels[index * 4 + 1] = 0
+                pixels[index * 4 + 2] = 0
+                pixels[index * 4 + 3] = light[index]
+            }
+            rep.size = size
+            image.addRepresentation(rep)
+        }
+        image.isTemplate = true
+        return image
+    }
 }
 
 /// The status item's menu: the worktrees waiting for you (with what the agent
