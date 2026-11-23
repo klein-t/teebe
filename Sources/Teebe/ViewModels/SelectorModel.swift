@@ -824,6 +824,13 @@ final class SelectorModel {
         refreshLiveState(now: now)
     }
 
+    /// Selection and cursor move to `wt` at once, without loading it, so a click
+    /// paints before `selectWorktree` gets to run.
+    func markSelected(_ wt: Worktree) {
+        selectedWorktree = wt
+        highlightedWorktree = wt
+    }
+
     func selectWorktree(_ wt: Worktree) async {
         selectedWorktree = wt
         highlightedWorktree = wt

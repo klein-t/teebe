@@ -28,17 +28,15 @@ struct HoverSlide: Equatable {
 /// nothing runs for rows that aren't hovered or with Reduce Motion.
 struct HoverSlidingLine: View {
     let text: String
-    var selection = false
     @Environment(\.rowHovered) private var hovered
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var available: CGFloat = 0
     @State private var intrinsic: CGFloat = 0
     @State private var offset: CGFloat = 0
     @State private var moving = false
-    @State private var hoverSuppressed = false
 
     private var slide: HoverSlide? { HoverSlide(textWidth: intrinsic, available: available) }
-    private var active: Bool { hovered && !hoverSuppressed && !reduceMotion && slide != nil }
+    private var active: Bool { hovered && !reduceMotion && slide != nil }
 
     var body: some View {
         Text(text).lineLimit(1).truncationMode(.tail)
@@ -71,7 +69,7 @@ struct HoverSlidingLine: View {
                     Rectangle()
                 }
             }
-            .task(id: Identity(text: text, active: active, slide: slide, selection: selection)) {
+            .task(id: Identity(text: text, active: active, slide: slide)) {
                 reset()
                 guard active, let slide else { return }
                 do {
@@ -88,11 +86,6 @@ struct HoverSlidingLine: View {
                 }
             }
             .onChange(of: active) { _, isActive in if !isActive { reset() } }
-            .onChange(of: selection) { _, _ in
-                hoverSuppressed = hovered
-                reset()
-            }
-            .onChange(of: hovered) { _, value in if !value { hoverSuppressed = false } }
     }
 
     /// Back to the start at once, without animating.
@@ -109,6 +102,5 @@ struct HoverSlidingLine: View {
         let text: String
         let active: Bool
         let slide: HoverSlide?
-        let selection: Bool
     }
 }
