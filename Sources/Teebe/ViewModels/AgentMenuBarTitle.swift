@@ -1,4 +1,5 @@
 import Foundation
+import TeebeCore
 
 /// What the menu bar item draws: the waiting glyph and count, then the working
 /// glyph and count, each left out when its count is zero or its option is off.
@@ -78,7 +79,12 @@ struct AgentMenuBarSections: Equatable {
 /// "Animate icons" choice is on and Reduce Motion is off. Nothing moving means
 /// no timer runs. Pure.
 enum AgentMenuBarAnimation {
-    enum Orb: Hashable { case waiting, working }
+    enum Orb: Hashable {
+        case waiting, working
+
+        /// The rows' orb for this kind: waiting breathes, working solves.
+        var state: ThinkingOrbState { self == .waiting ? .breathing : .solving }
+    }
 
     static func animated(_ title: AgentMenuBarTitle, animates: Bool, reduceMotion: Bool) -> Set<Orb> {
         guard animates, !reduceMotion else { return [] }

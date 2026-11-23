@@ -14,15 +14,24 @@ struct AgentMenuBarLabel: View {
         let summary = overview.summary
         let title = AgentMenuBarTitle(waiting: summary.waiting.count, working: summary.working.count,
                                       showsWaiting: display.showsWaitingAgents, showsWorking: display.showsWorkingAgents)
-        Image(nsImage: AgentMenuBarImage.render(title))
+        // Orbs that move are left out of the image: Core Animation draws them on
+        // top of the button, so the image only holds what stays still.
+        Image(nsImage: AgentMenuBarImage.render(title, leavingOut: AgentMenuBarAnimator.shared.movingOrbs))
             .accessibilityLabel(title.accessibilityLabel)
             // This view lives as long as the item, so it can reopen a closed window.
             .onAppear { MainWindowOpener.open = { openWindow(id: WindowID.main) } }
-            // The motion runs outside SwiftUI: a frame swaps only the button's image.
             .task(id: AgentMenuBarAnimator.Request(title: title, animates: display.animatesMenuBarIcons)) {
                 AgentMenuBarAnimator.shared.configure(title: title, animates: display.animatesMenuBarIcons)
             }
     }
+}
+
+/// One orb and its count in the menu bar title, in points, y down.
+struct AgentMenuBarPiece {
+    let orb: AgentMenuBarAnimation.Orb
+    let count: String
+    let orbRect: NSRect
+    let digitX: CGFloat
 }
 
 /// Draws `AgentMenuBarTitle` as a template image.
@@ -32,57 +41,73 @@ enum AgentMenuBarImage {
     static let glyphSize: CGFloat = 16
     static let digitGap: CGFloat = 2
     static let segmentGap: CGFloat = 7
-    private static let digitFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+    fileprivate static let digitFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
 
-    static func render(_ title: AgentMenuBarTitle) -> NSImage {
-        render(title, orbTime: { _ in ThinkingOrbStyle.staticTime })
-    }
-
-    /// One loop of frames for an animated title, drawn once. The loop lasts one
-    /// solving cycle at the rows' speed; the ring breathes twice in it, within a
-    /// few percent of its speed in the rows, so the loop closes on itself.
-    static func frames(_ title: AgentMenuBarTitle, animated: Set<AgentMenuBarAnimation.Orb>,
-                       framesPerSecond: Double) -> [NSImage] {
-        let loop = ThinkingOrbStyle.phaseSpan / ThinkingOrbStyle(state: .solving).speed
-        let count = max(1, Int((loop * framesPerSecond).rounded()))
-        return (0..<count).map { index in
-            let progress = Double(index) / Double(count)
-            return render(title, orbTime: { state in
-                switch state {
-                case .solving: return animated.contains(.working) ? progress * ThinkingOrbStyle.phaseSpan : ThinkingOrbStyle.staticTime
-                case .breathing:
-                    return animated.contains(.waiting) ? (2 * progress).truncatingRemainder(dividingBy: 1) * ThinkingOrbStyle.phaseSpan
-                        : ThinkingOrbStyle.staticTime
-                }
-            })
-        }
-    }
-
-    private static func render(_ title: AgentMenuBarTitle, orbTime: (ThinkingOrbState) -> Double) -> NSImage {
+    static func render(_ title: AgentMenuBarTitle, leavingOut moving: Set<AgentMenuBarAnimation.Orb> = []) -> NSImage {
         guard !title.isNeutral else { return neutral }
-        let pieces: [(ThinkingOrbState, String)] = title.segments.map { segment in
-            switch segment {
-            case .waiting(let count): return (.breathing, "\(count)")
-            case .working(let count): return (.solving, "\(count)")
-            }
-        }
+        let layout = Layout(title)
         let attributes: [NSAttributedString.Key: Any] = [.font: digitFont, .foregroundColor: NSColor.black]
-        let widths = pieces.map { glyphSize + digitGap + ceil(($0.1 as NSString).size(withAttributes: attributes).width) }
-        let width = widths.reduce(0, +) + segmentGap * CGFloat(max(0, pieces.count - 1))
-        // A bitmap, drawn now: showing a frame is then a copy, never a redraw.
         let scale = NSScreen.main?.backingScaleFactor ?? 2
-        let image = bitmapImage(size: NSSize(width: width, height: height), scale: scale) {
-            var x: CGFloat = 0
-            for (index, piece) in pieces.enumerated() {
-                drawOrb(piece.0, at: orbTime(piece.0), in: NSRect(x: x, y: (height - glyphSize) / 2, width: glyphSize, height: glyphSize))
-                let text = piece.1 as NSString
+        let image = bitmapImage(size: layout.size, scale: scale) {
+            for piece in layout.pieces {
+                if !moving.contains(piece.orb) {
+                    drawOrb(piece.orb.state, at: ThinkingOrbStyle.staticTime, in: piece.orbRect)
+                }
+                let text = piece.count as NSString
                 let size = text.size(withAttributes: attributes)
-                text.draw(at: NSPoint(x: x + glyphSize + digitGap, y: (height - size.height) / 2), withAttributes: attributes)
-                x += widths[index] + segmentGap
+                text.draw(at: NSPoint(x: piece.digitX, y: (height - size.height) / 2), withAttributes: attributes)
             }
         }
         image.isTemplate = true
         return image
+    }
+
+    /// Where each orb and count sits in the title image, in points, y down.
+    @MainActor
+    struct Layout {
+        let pieces: [AgentMenuBarPiece]
+        let size: NSSize
+
+        init(_ title: AgentMenuBarTitle) {
+            let attributes: [NSAttributedString.Key: Any] = [.font: AgentMenuBarImage.digitFont]
+            var x: CGFloat = 0
+            var pieces: [AgentMenuBarPiece] = []
+            for segment in title.segments {
+                let (orb, count): (AgentMenuBarAnimation.Orb, Int) = switch segment {
+                case .waiting(let count): (.waiting, count)
+                case .working(let count): (.working, count)
+                }
+                let text = "\(count)"
+                let rect = NSRect(x: x, y: (AgentMenuBarImage.height - AgentMenuBarImage.glyphSize) / 2,
+                                  width: AgentMenuBarImage.glyphSize, height: AgentMenuBarImage.glyphSize)
+                pieces.append(AgentMenuBarPiece(orb: orb, count: text, orbRect: rect, digitX: x + AgentMenuBarImage.glyphSize + AgentMenuBarImage.digitGap))
+                x += AgentMenuBarImage.glyphSize + AgentMenuBarImage.digitGap
+                    + ceil((text as NSString).size(withAttributes: attributes).width) + AgentMenuBarImage.segmentGap
+            }
+            self.pieces = pieces
+            size = NSSize(width: max(0, x - AgentMenuBarImage.segmentGap), height: AgentMenuBarImage.height)
+        }
+    }
+
+    /// One full cycle of an orb, at the rows' speed and `framesPerSecond`, as
+    /// masks: the dots' opacity, to be filled with the menu bar's ink. Drawn once.
+    static func orbFrames(_ state: ThinkingOrbState, framesPerSecond: Double, scale: CGFloat) -> [CGImage] {
+        let style = ThinkingOrbStyle(state: state)
+        let cycle = ThinkingOrbStyle.phaseSpan / style.speed
+        let count = max(1, Int((cycle * framesPerSecond).rounded()))
+        let size = NSSize(width: glyphSize, height: glyphSize)
+        return (0..<count).compactMap { index in
+            let time = Double(index) / Double(count) * ThinkingOrbStyle.phaseSpan
+            let image = bitmapImage(size: size, scale: scale) {
+                drawOrb(state, at: time, in: NSRect(origin: .zero, size: size))
+            }
+            return image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        }
+    }
+
+    /// One cycle's length for an orb, in seconds: the rows' speed.
+    static func cycle(_ state: ThinkingOrbState) -> Double {
+        ThinkingOrbStyle.phaseSpan / ThinkingOrbStyle(state: state).speed
     }
 
     private static func bitmapImage(size: NSSize, scale: CGFloat, draw: () -> Void) -> NSImage {

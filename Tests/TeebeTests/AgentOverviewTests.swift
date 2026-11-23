@@ -252,23 +252,26 @@ struct AgentMenuBarFramesTests {
         return rep
     }
 
-    @Test("every frame draws both digits upright and the same; only the orbs move")
+    @Test("the still title draws both digits upright; leaving an orb out keeps size and digits")
     func digitsUpright() throws {
         let title = AgentMenuBarTitle(waiting: 3, working: 2, showsWaiting: true, showsWorking: true)
-        let frames = AgentMenuBarImage.frames(title, animated: [.waiting, .working], framesPerSecond: 8)
         let still = AgentMenuBarImage.render(title)
-        #expect(frames.count > 10)
         let image = AgentMenuBarImage.self
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         let digitWidth = ("3" as NSString).size(withAttributes: [.font: font]).width
         let firstDigit = image.glyphSize + image.digitGap
         let secondDigit = 2 * (image.glyphSize + image.digitGap) + ceil(digitWidth) + image.segmentGap
-        for x in [firstDigit, secondDigit] {
-            let expected = digitAlpha(still, from: x, width: digitWidth)
-            #expect(expected.contains { $0 > 128 })
-            for frame in frames {
-                #expect(frame.size == still.size)
-                #expect(digitAlpha(frame, from: x, width: digitWidth) == expected)
+        for moving in [Set<AgentMenuBarAnimation.Orb>([.waiting]), [.working], [.waiting, .working]] {
+            let base = AgentMenuBarImage.render(title, leavingOut: moving)
+            #expect(base.size == still.size)
+            for x in [firstDigit, secondDigit] {
+                let expected = digitAlpha(still, from: x, width: digitWidth)
+                #expect(expected.contains { $0 > 128 })
+                #expect(digitAlpha(base, from: x, width: digitWidth) == expected)
+            }
+            // The orbs Core Animation draws are not in the image.
+            for piece in AgentMenuBarImage.Layout(title).pieces where moving.contains(piece.orb) {
+                #expect(!digitAlpha(base, from: piece.orbRect.minX, width: piece.orbRect.width).contains { $0 > 0 })
             }
         }
         // Upright: the still "2" matches a plainly drawn "2", not its mirror image.
@@ -284,6 +287,19 @@ struct AgentMenuBarFramesTests {
         let upright = rows(plain, x0: 0)
         func mismatch(_ a: [[Bool]], _ b: [[Bool]]) -> Int { zip(a, b).map { zip($0, $1).filter { $0 != $1 }.count }.reduce(0, +) }
         #expect(mismatch(drawn, upright) < mismatch(drawn, upright.reversed()))
+    }
+
+    @Test("each orb's frames cover one cycle at the rows' speed and the rows' frame rate, and move")
+    func orbFrames() {
+        for state in [ThinkingOrbState.solving, .breathing] {
+            let frames = AgentMenuBarImage.orbFrames(state, framesPerSecond: AgentMenuBarAnimator.framesPerSecond, scale: 2)
+            let cycle = ThinkingOrbStyle.phaseSpan / ThinkingOrbStyle(state: state).speed
+            #expect(AgentMenuBarImage.cycle(state) == cycle)
+            #expect(frames.count == Int((cycle * AgentMenuBarAnimator.framesPerSecond).rounded()))
+            #expect(frames.allSatisfy { $0.width == 32 && $0.height == 32 })
+            let distinct = Set(frames.compactMap { $0.dataProvider?.data as Data? })
+            #expect(distinct.count > frames.count / 2)
+        }
     }
 }
 
