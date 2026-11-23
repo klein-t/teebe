@@ -207,6 +207,19 @@ struct AgentMenuBarSectionsTests {
         #expect(slide?.duration == 5)
     }
 
+    @Test("on a row with a task and a question each line slides its own length, from the same start")
+    func twoLines() {
+        // A waiting row 240 pt wide: the task fits, the question does not.
+        #expect(HoverSlide(textWidth: 230, available: 240) == nil)
+        let question = HoverSlide(textWidth: 300, available: 240)
+        #expect(question?.distance == 60 && question?.duration == 2)
+        // Both cut off: each its own distance and time at the same pace, same dwell.
+        let task = HoverSlide(textWidth: 330, available: 240)
+        let longer = HoverSlide(textWidth: 480, available: 240)
+        #expect(task?.duration == 3 && longer?.duration == 8)
+        #expect(HoverSlide.dwell == .milliseconds(500))
+    }
+
     @Test("the animate choice defaults on and round-trips")
     func animateOption() {
         let prefs = AgentDisplayPreferences(state: AppState())

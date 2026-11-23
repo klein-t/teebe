@@ -2,7 +2,8 @@ import SwiftUI
 import TeebeCore
 
 /// The agent lines under a worktree's branch name: the task, then what the
-/// waiting agent asks. One truncated line each; the full text is in the hover help.
+/// waiting agent asks. One truncated line each; hovering the row slides any that
+/// are cut off, so they can be read in full.
 struct WorktreeAgentLinesView: View {
     let lines: WorktreeAgentLines
     let isSelected: Bool
@@ -14,24 +15,18 @@ struct WorktreeAgentLinesView: View {
                 .accessibilityLabel("Task: \(task)")
         }
         if let question = lines.question {
-            // Slides on hover when truncated, so the whole question can be read.
-            line(HoverSlidingLine(text: question), help: question, color: questionColor)
+            line(question, color: questionColor)
                 .accessibilityLabel("Agent asks: \(question)")
         }
     }
 
     private func line(_ text: String, color: Color) -> some View {
-        line(Text(text).lineLimit(1).truncationMode(.tail), help: text, color: color)
-    }
-
-    private func line(_ content: some View, help text: String, color: Color) -> some View {
-        content
+        HoverSlidingLine(text: text)
             .font(Typography.secondary)
             .foregroundStyle(color)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: WorktreeListPresentation.agentLineHeight, alignment: .top)
             .padding(.leading, 2)
-            .hoverHelp(text, highlight: false)
     }
 
     /// The waiting orb's ink, so the question reads as part of that mark.
