@@ -398,7 +398,8 @@ struct WorktreesSection: View {
         .padding(.leading, 24).padding(.trailing, 11)
         .frame(height: WorktreeListPresentation.rowHeight(agentLines: status.agentLines.count), alignment: .top)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .rowHighlight(isSelected: isActive)
+        // Only the fill fades. A selection must not animate text, line layout or hover offsets.
+        .rowHighlight(isSelected: isActive, selectionAnimation: .easeInOut(duration: 0.18))
         .foregroundStyle(isActive ? .white : .primary)
         .overlay {
             if isHighlighted, !isActive {
@@ -406,7 +407,6 @@ struct WorktreesSection: View {
                     .padding(.horizontal, RowHighlight.horizontalInset)
             }
         }
-        .animation(.easeInOut(duration: 0.18), value: isActive)
         .contentShape(Rectangle())
         .onTapGesture {
             app.activeSection = .worktrees

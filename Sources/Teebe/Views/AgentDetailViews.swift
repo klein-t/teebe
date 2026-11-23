@@ -21,7 +21,7 @@ struct WorktreeAgentLinesView: View {
     }
 
     private func line(_ text: String, color: Color) -> some View {
-        HoverSlidingLine(text: text)
+        HoverSlidingLine(text: text, selection: isSelected)
             .font(Typography.secondary)
             .foregroundStyle(color)
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -42,6 +42,7 @@ private final class RowHoverOwner {
 /// Hover, selection and the keyboard cursor all use the same rounded rectangle.
 private struct RowHighlightModifier: ViewModifier {
     let isSelected: Bool
+    let selectionAnimation: Animation?
     @State private var isHovered = false
     @State private var hoverID = UUID()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -56,6 +57,11 @@ private struct RowHighlightModifier: ViewModifier {
                     RowHighlight.shape.fill(Color.primary.opacity(isHovered && !isSelected ? 0.06 : 0))
                         .animation(reduceMotion || !isHovered ? nil : .easeOut(duration: 0.12), value: isHovered)
                     RowHighlight.shape.fill(Palette.accent.opacity(isSelected ? 1 : 0))
+                        .transaction(value: isSelected) { transaction in
+                            if let selectionAnimation, !transaction.disablesAnimations {
+                                transaction.animation = selectionAnimation
+                            }
+                        }
                 }
                 .padding(.horizontal, RowHighlight.horizontalInset)
             }
@@ -86,7 +92,7 @@ enum RowHighlight {
 }
 
 extension View {
-    func rowHighlight(isSelected: Bool) -> some View {
-        modifier(RowHighlightModifier(isSelected: isSelected))
+    func rowHighlight(isSelected: Bool, selectionAnimation: Animation? = nil) -> some View {
+        modifier(RowHighlightModifier(isSelected: isSelected, selectionAnimation: selectionAnimation))
     }
 }
