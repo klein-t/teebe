@@ -9,6 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // The saved Dock choice, applied before any window shows.
         NSApp.setActivationPolicy(DockPresence.savedShowsDockIcon() ? .regular : .accessory)
+        // A menu bar item must outlive its windows: without a Dock icon and with
+        // the window closed, macOS would otherwise end the app on its own.
+        ProcessInfo.processInfo.disableAutomaticTermination("teebe keeps its menu bar item")
         AgentNotifier.showWhileFrontmost()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
