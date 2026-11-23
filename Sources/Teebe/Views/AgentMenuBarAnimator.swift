@@ -4,8 +4,8 @@ import SwiftUI
 /// Moves the menu bar orbs. Frames for the current title are drawn once into
 /// bitmaps; each tick only swaps the status button's image, with no drawing and
 /// no SwiftUI or model update. The timer runs only while an orb moves and the
-/// item can be seen: not with Reduce Motion or Low Power Mode, nor while the
-/// screen sleeps, the session is locked or the item is covered.
+/// item can be seen: not with Reduce Motion, nor while the screen sleeps, the
+/// session is locked or the item is covered.
 @MainActor
 final class AgentMenuBarAnimator {
     static let shared = AgentMenuBarAnimator()
@@ -37,12 +37,11 @@ final class AgentMenuBarAnimator {
     }
 
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
-    private var lowPower: Bool { ProcessInfo.processInfo.isLowPowerModeEnabled }
 
     private func update() {
         guard let request else { return stop() }
         let orbs = AgentMenuBarAnimation.animated(request.title, animates: request.animates,
-                                                  reduceMotion: reduceMotion, lowPower: lowPower)
+                                                  reduceMotion: reduceMotion)
         let visible = statusButton()?.window?.occlusionState.contains(.visible) ?? true
         guard AgentMenuBarAnimation.timerRuns(orbs, screenAsleep: screenAsleep, sessionLocked: sessionLocked,
                                               itemVisible: visible) else { return stop() }
@@ -99,7 +98,6 @@ final class AgentMenuBarAnimator {
         observe(workspace, NSWorkspace.screensDidSleepNotification) { $0.screenAsleep = true }
         observe(workspace, NSWorkspace.screensDidWakeNotification) { $0.screenAsleep = false }
         observe(workspace, NSWorkspace.accessibilityDisplayOptionsDidChangeNotification) { _ in }
-        observe(.default, .NSProcessInfoPowerStateDidChange) { _ in }
         observe(.default, NSWindow.didChangeOcclusionStateNotification) { _ in }
         observe(distributed, Notification.Name("com.apple.screenIsLocked")) { $0.sessionLocked = true }
         observe(distributed, Notification.Name("com.apple.screenIsUnlocked")) { $0.sessionLocked = false }

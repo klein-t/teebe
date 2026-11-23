@@ -174,7 +174,7 @@ struct AgentMenuBarSectionsTests {
         #expect(AgentMenuBarSections(waiting: 0, working: 2, showsWaiting: true, showsWorking: true).emptyNote == nil)
     }
 
-    @Test("only drawn segments move, and nothing moves with the option off, Reduce Motion or Low Power Mode")
+    @Test("only drawn segments move, and nothing moves with the option off or Reduce Motion")
     func animationGating() {
         let both = AgentMenuBarTitle(waiting: 2, working: 1, showsWaiting: true, showsWorking: true)
         #expect(AgentMenuBarAnimation.animated(both, animates: true, reduceMotion: false) == [.waiting, .working])
@@ -184,7 +184,6 @@ struct AgentMenuBarSectionsTests {
         #expect(AgentMenuBarAnimation.animated(hiddenWaiting, animates: true, reduceMotion: false) == [.working])
         #expect(AgentMenuBarAnimation.animated(both, animates: false, reduceMotion: false).isEmpty)
         #expect(AgentMenuBarAnimation.animated(both, animates: true, reduceMotion: true).isEmpty)
-        #expect(AgentMenuBarAnimation.animated(both, animates: true, reduceMotion: false, lowPower: true).isEmpty)
         let idle = AgentMenuBarTitle(waiting: 0, working: 0, showsWaiting: true, showsWorking: true)
         #expect(AgentMenuBarAnimation.animated(idle, animates: true, reduceMotion: false).isEmpty)
     }

@@ -80,10 +80,8 @@ struct AgentMenuBarSections: Equatable {
 enum AgentMenuBarAnimation {
     enum Orb: Hashable { case waiting, working }
 
-    /// Low Power Mode shows still icons, like Reduce Motion.
-    static func animated(_ title: AgentMenuBarTitle, animates: Bool, reduceMotion: Bool,
-                         lowPower: Bool = false) -> Set<Orb> {
-        guard animates, !reduceMotion, !lowPower else { return [] }
+    static func animated(_ title: AgentMenuBarTitle, animates: Bool, reduceMotion: Bool) -> Set<Orb> {
+        guard animates, !reduceMotion else { return [] }
         return Set(title.segments.map { segment in
             switch segment {
             case .waiting: return .waiting
