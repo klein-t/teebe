@@ -6,6 +6,7 @@ import TeebeCore
 struct WorktreesSection: View {
     @State private var choosingComparison = false
     @Bindable var app: AppModel
+    @Environment(\.openSettings) private var openSettings
     @Binding var isOpen: Bool
     @Binding var collapsedGroups: Set<WorktreeGroup>
     /// Built once by RootView (which also sizes the window from it) and handed down.
@@ -92,7 +93,11 @@ struct WorktreesSection: View {
                             Button("Use Global Defaults") { app.preferences.reset() }
                                 .disabled(!app.preferences.hasOverrides)
                             Divider()
-                            AgentRowOptionsMenuSection(display: app.agentDisplay)
+                            Button("Agent Settings…") {
+                                app.settingsTab = .integrations
+                                NSApp.activate(ignoringOtherApps: true)
+                                openSettings()
+                            }
                         } label: {
                             Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(Palette.secondaryText).hoverChip()

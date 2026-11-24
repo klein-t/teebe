@@ -191,6 +191,8 @@ enum AgentMenuBarImage {
 struct AgentMenuBarMenu: View {
     let overview: AgentOverviewModel
     @Bindable var display: AgentDisplayPreferences
+    /// Holds the Settings tab, so "Settings…" opens on Integrations.
+    let app: AppModel
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
@@ -214,19 +216,12 @@ struct AgentMenuBarMenu: View {
         Divider()
         Button("Open teebe") { MainWindowOpener.bringForward() }
         Button("Settings…") {
+            app.settingsTab = .integrations
             NSApp.activate(ignoringOtherApps: true)
             openSettings()
         }
         .keyboardShortcut(",")
         Divider()
-        Menu("Options") {
-            Toggle(AgentDisplayWording.waitingAgentsTitle, isOn: $display.showsWaitingAgents)
-            Toggle(AgentDisplayWording.workingAgentsTitle, isOn: $display.showsWorkingAgents)
-            Toggle(AgentDisplayWording.animateTitle, isOn: $display.animatesMenuBarIcons)
-            AgentClickDestinationPicker(display: display)
-            Divider()
-            Toggle(AgentDisplayWording.dockTitle, isOn: $display.showsDockIcon)
-        }
         Button("Hide Menu Bar Icon") { display.showsMenuBarIcon = false }
     }
 

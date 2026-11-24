@@ -80,6 +80,10 @@ final class AppModel {
     enum FocusSection: Equatable { case worktrees, changes, files }
     var activeSection: FocusSection = .files
 
+    /// The tab Settings shows. Not saved: menus set it before opening Settings,
+    /// and it keeps the tab last looked at for the rest of the run.
+    var settingsTab: SettingsTab = .general
+
     /// Auto-dismiss timer for the current error banner, so a transient failure
     /// (e.g. "Not a git repository") never sticks around indefinitely.
     @ObservationIgnored private var errorClearTask: Task<Void, Never>?

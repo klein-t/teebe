@@ -137,7 +137,7 @@ struct TeebeApp: App {
         // Agents working and waiting in every project, from the menu bar.
         MenuBarExtra(isInserted: Binding(get: { app.agentDisplay.showsMenuBarIcon },
                                          set: { app.agentDisplay.showsMenuBarIcon = $0 })) {
-            AgentMenuBarMenu(overview: agentOverview, display: app.agentDisplay)
+            AgentMenuBarMenu(overview: agentOverview, display: app.agentDisplay, app: app)
         } label: {
             AgentMenuBarLabel(overview: agentOverview, display: app.agentDisplay)
         }

@@ -37,48 +37,27 @@ struct WorktreeAgentLinesView: View {
     }
 }
 
-/// The agent options of the WORKTREES "···" menu. Global, like Settings.
-struct AgentRowOptionsMenuSection: View {
-    @Bindable var display: AgentDisplayPreferences
-
-    var body: some View {
-        Section("Agents, all projects") {
-            Toggle(AgentDisplayWording.questionTitle, isOn: $display.showsQuestion)
-            Toggle(AgentDisplayWording.taskTitle, isOn: $display.showsTask)
-            Picker(AgentDisplayWording.taskSourceTitle, selection: $display.taskSource) {
-                ForEach(AgentTaskSource.allCases) { Text($0.title).tag($0) }
-            }
-            .disabled(!display.showsTask)
-            Toggle(AgentDisplayWording.menuBarTitle, isOn: $display.showsMenuBarIcon)
-            MenuBarCountToggles(display: display, indent: "    ")
-        }
-    }
-}
-
 /// What the menu bar item shows and lists, under "Show in menu bar" and off while it is.
-/// `indent` sets them under it in a menu, where rows can't be padded.
 struct MenuBarCountToggles: View {
     @Bindable var display: AgentDisplayPreferences
-    var indent = ""
 
     var body: some View {
-        Toggle(indent + AgentDisplayWording.waitingAgentsTitle, isOn: $display.showsWaitingAgents)
+        Toggle(AgentDisplayWording.waitingAgentsTitle, isOn: $display.showsWaitingAgents)
             .disabled(!display.showsMenuBarIcon)
-        Toggle(indent + AgentDisplayWording.workingAgentsTitle, isOn: $display.showsWorkingAgents)
+        Toggle(AgentDisplayWording.workingAgentsTitle, isOn: $display.showsWorkingAgents)
             .disabled(!display.showsMenuBarIcon)
-        Toggle(indent + AgentDisplayWording.animateTitle, isOn: $display.animatesMenuBarIcons)
+        Toggle(AgentDisplayWording.animateTitle, isOn: $display.animatesMenuBarIcons)
             .disabled(!display.showsMenuBarIcon)
-        AgentClickDestinationPicker(display: display, indent: indent)
+        AgentClickDestinationPicker(display: display)
             .disabled(!display.showsMenuBarIcon)
     }
 }
 
 struct AgentClickDestinationPicker: View {
     @Bindable var display: AgentDisplayPreferences
-    var indent = ""
 
     var body: some View {
-        Picker(indent + AgentDisplayWording.clickDestinationTitle, selection: $display.clickDestination) {
+        Picker(AgentDisplayWording.clickDestinationTitle, selection: $display.clickDestination) {
             ForEach(AgentClickDestination.allCases) { Text($0.title).tag($0) }
         }
         .help(AgentDisplayWording.clickDestinationHelp)
