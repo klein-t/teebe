@@ -150,10 +150,15 @@ struct WorktreeListPresentation {
             return rows.isEmpty ? nil : Group(kind: kind, worktrees: rows)
         }
         visibleWorktrees = pinned + groups.filter { !collapsed.contains($0.kind) }.flatMap(\.worktrees)
-        naturalHeight = (hasRepository ? Self.repoHeight : 0) + Self.verticalPadding
-            + CGFloat(max(visibleWorktrees.count, worktrees.isEmpty ? 1 : 0)) * Self.rowHeight
-            + visibleWorktrees.reduce(0) { $0 + Self.rowHeight(agentLines: statuses[$1.path]?.agentLines.count ?? 0) - Self.rowHeight }
-            + CGFloat(groups.count) * Self.groupHeight
+        // In steps: as one expression this is too much for older Swift compilers.
+        let rowCount = max(visibleWorktrees.count, worktrees.isEmpty ? 1 : 0)
+        let agentLinesHeight: CGFloat = visibleWorktrees.reduce(0) { total, worktree in
+            let lines = statuses[worktree.path]?.agentLines.count ?? 0
+            return total + Self.rowHeight(agentLines: lines) - Self.rowHeight
+        }
+        let headerHeight: CGFloat = (hasRepository ? Self.repoHeight : 0) + Self.verticalPadding
+        let rowsHeight: CGFloat = CGFloat(rowCount) * Self.rowHeight + agentLinesHeight
+        naturalHeight = headerHeight + rowsHeight + CGFloat(groups.count) * Self.groupHeight
     }
 }
 
