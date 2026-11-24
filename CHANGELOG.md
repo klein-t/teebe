@@ -4,6 +4,36 @@ All notable changes to teebe are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-11-24
+
+### Added
+- **What each agent is doing.** A worktree with an agent shows the task it was
+  given under the branch name and, while it waits for you, what it is asking.
+  Hover a line that does not fit and it slides. The text comes from Claude Code
+  and Codex logs on your Mac and is shown only in teebe.
+- **Agents in the menu bar.** A menu bar item counts the agents waiting for you
+  and the agents working, across all your repositories, and its menu lists them
+  with their question or task. With it on, you can hide the Dock icon and use
+  teebe from the menu bar.
+- **Jump to the agent's terminal.** Choose an agent in the menu and teebe brings
+  its cmux terminal to the front when it can verify the session. Otherwise it
+  opens teebe on that worktree. A setting picks which of the two a click does.
+- **Diffs that are easier to read.** The diff preview colors code by language,
+  marks the words that changed inside edited lines, and can hide changes that
+  only touch whitespace (press W). Each has a toggle in the preview header.
+- **Agent options in one place.** Settings, under Integrations, holds what the
+  rows show, whether the task is the first or the latest prompt, and everything
+  about the menu bar item.
+
+### Changed
+- An agent started in one repository but working in another is shown on the
+  worktree where it works.
+- The diff preview, Settings, What's New and Keyboard Shortcuts share the main
+  window's translucent background.
+- Selecting a worktree is instant. The highlight no longer fades in.
+- The notice shown after deleted worktrees are cleaned up leaves on its own
+  after a few seconds, and slides on hover when it does not fit.
+
 ## [0.8.1] - 2026-10-06
 
 ### Fixed
