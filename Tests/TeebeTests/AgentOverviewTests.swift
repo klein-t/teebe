@@ -23,6 +23,37 @@ struct AgentOverviewTests {
         #expect(summary.working.map(\.name) == ["fix/a"])
     }
 
+    @Test("the open menu keeps the rows it opened with; the counts stay live and closing lets it follow again")
+    func menuHoldsStillWhileOpen() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let states = StateBox()
+        let git = FakeGitClient()
+        git.worktreesByRepo = ["/repo-a": [Worktree(path: "/repo-a", branch: "main", isPrimary: true)],
+                               "/repo-b": [Worktree(path: "/repo-b", branch: "feature", isPrimary: true)]]
+        let environment = makeTestEnvironment(git: git, store: AppStateStore(url: root.appendingPathComponent("state.json")),
+            agentSnapshot: { paths, _ in AgentSnapshot(states: Dictionary(uniqueKeysWithValues: paths.map { ($0, states.value[$0] ?? .idle) })) })
+        let app = AppModel(environment: environment)
+        defer { app.selector.clearSelection() }
+        #expect(await app.addRepository(path: "/repo-a"))
+        #expect(await app.addRepository(path: "/repo-b"))
+        await app.selector.selectRepo(Repository(path: "/repo-a"))
+        let overview = AgentOverviewModel(app: app)
+        states.value = ["/repo-b": .working]
+        await overview.refreshOthers()
+        #expect(overview.menuSummary.working.map(\.worktreePath) == ["/repo-b"])
+
+        overview.menuOpened()
+        states.value = ["/repo-b": .needsAttention]
+        await overview.refreshOthers()
+        #expect(overview.summary.waiting.map(\.worktreePath) == ["/repo-b"])
+        #expect(overview.menuSummary.working.map(\.worktreePath) == ["/repo-b"])
+        #expect(overview.menuSummary.waiting.isEmpty)
+
+        overview.menuClosed()
+        #expect(overview.menuSummary == overview.summary)
+    }
+
     @Test("shared ownership lists a session once and corrects selected rows even with the icon hidden", arguments: [true, false])
     func crossRepositorySessionAppearsOnce(iconShown: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -413,5 +444,15 @@ struct AgentMenuBarNeutralTests {
         #expect(ink(w / 2, h - 4))
         #expect(!ink(w / 4, h - 3) && !ink(w / 2, 1))
         #expect(!ink(w / 2 - 5, h / 2 + 6))
+    }
+}
+
+/// A value a `@Sendable` closure can read while the test changes it.
+private final class StateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String: AgentActivityState] = [:]
+    var value: [String: AgentActivityState] {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
     }
 }

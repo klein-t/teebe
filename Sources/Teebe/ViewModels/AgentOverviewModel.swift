@@ -77,9 +77,26 @@ final class AgentOverviewModel {
 
     var summary: Summary { Self.summarize(entries) }
 
+    /// What the open menu showed when it opened; nil while it is closed.
+    private(set) var heldSummary: Summary?
+    /// The menu's rows. They hold still while the menu is open: rows should not
+    /// move under the pointer, and a row whose text grows in an open menu is cut
+    /// off by the menu's edge. The counts in the menu bar stay live.
+    var menuSummary: Summary { heldSummary ?? summary }
+
+    func menuOpened() { heldSummary = summary }
+    func menuClosed() { heldSummary = nil }
+
     /// Keep worktree ownership current; scan agents while the icon is shown.
     func start() {
         guard pollTask == nil else { return }
+        for (name, opened) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    if opened { self?.menuOpened() } else { self?.menuClosed() }
+                }
+            }
+        }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }

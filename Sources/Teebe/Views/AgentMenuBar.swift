@@ -197,7 +197,7 @@ struct AgentMenuBarMenu: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        let summary = overview.summary
+        let summary = overview.menuSummary
         // The same choices as the title: a kind switched off is not listed either.
         let sections = AgentMenuBarSections(waiting: summary.waiting.count, working: summary.working.count,
                                             showsWaiting: display.showsWaitingAgents, showsWorking: display.showsWorkingAgents)
