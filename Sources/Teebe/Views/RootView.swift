@@ -198,7 +198,8 @@ struct RootView: View {
                 .measuredAsTransientRow()
             }
             if let notice = app.selector.cleanupNotice {
-                CleanupNoticeRow(notice: notice) { app.selector.dismissCleanupNotice() }
+                CleanupNoticeRow(notice: notice, isInView: { window?.occlusionState.contains(.visible) ?? true },
+                                 dismiss: { app.selector.dismissCleanupNotice() })
                     .measuredAsTransientRow()
             }
         }
