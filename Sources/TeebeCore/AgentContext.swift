@@ -98,29 +98,37 @@ public enum AgentText {
         return line(ending.joined(separator: " "))
     }
 
+    /// Room for the combining marks and joiners of real text, per character of a line's limit.
+    static let scalarsPerCharacter = 8
+
     /// One display line: control and format characters (newlines, tabs, bidi
     /// overrides) become spaces, runs of spaces collapse, and the result is
     /// capped at `limit` characters with an ellipsis. nil when empty.
     public static func line(_ raw: String, limit: Int = maximumLength) -> String? {
         var scalars = String.UnicodeScalarView()
         var lastWasSpace = true
+        var kept = 0
+        var cut = false
         for scalar in raw.unicodeScalars {
+            // A character counts once however many marks ride on it: cap what is read too.
+            guard kept < limit * scalarsPerCharacter else { cut = true; break }
             let isSpace = scalar.properties.generalCategory == .control
                 || scalar.properties.generalCategory == .format
                 || scalar.properties.generalCategory == .lineSeparator
                 || scalar.properties.generalCategory == .paragraphSeparator
                 || scalar.properties.isWhitespace
             if isSpace {
-                if !lastWasSpace { scalars.append(" ") }
+                if !lastWasSpace { scalars.append(" "); kept += 1 }
                 lastWasSpace = true
             } else {
                 scalars.append(scalar)
+                kept += 1
                 lastWasSpace = false
             }
         }
         let collapsed = String(scalars).trimmingCharacters(in: .whitespaces)
         guard !collapsed.isEmpty else { return nil }
-        guard collapsed.count > limit else { return collapsed }
+        guard collapsed.count > limit else { return cut ? collapsed + "…" : collapsed }
         return String(collapsed.prefix(max(1, limit - 1))).trimmingCharacters(in: .whitespaces) + "…"
     }
 
@@ -142,23 +150,27 @@ public enum AgentText {
     }
 
     /// Removes every `<tag …>…</tag>` block; an unclosed one runs to the end.
+    /// One pass, no recursion: the text is not ours, and one stack frame per
+    /// `<tag` look-alike let a long enough prompt overflow the stack.
     static func removingBlocks(_ tag: String, from text: String) -> String {
-        var result = text
-        while let open = result.range(of: "<\(tag)") {
-            let after = result[open.upperBound...]
-            // Only a real tag opening: `<tag>` or `<tag attr…>`.
+        let opening = "<\(tag)", closing = "</\(tag)>"
+        var result = ""
+        var rest = text[...]
+        // `firstRange` searches the text in place; Foundation's `range(of:)` copies what
+        // is left on every call, which made this quadratic.
+        while let open = rest.firstRange(of: opening) {
+            let after = rest[open.upperBound...]
+            // Only a real tag opening: `<tag>` or `<tag attr…>`. Anything else is text to keep.
             guard let next = after.first, next == ">" || next == " " else {
-                // Look past this occurrence by splitting there.
-                let head = String(result[..<open.upperBound])
-                return head + removingBlocks(tag, from: String(after))
+                result += rest[..<open.upperBound]
+                rest = after
+                continue
             }
-            if let close = result.range(of: "</\(tag)>", range: open.upperBound..<result.endIndex) {
-                result.removeSubrange(open.lowerBound..<close.upperBound)
-            } else {
-                result.removeSubrange(open.lowerBound..<result.endIndex)
-            }
+            result += rest[..<open.lowerBound]
+            guard let close = after.firstRange(of: closing) else { return result }
+            rest = after[close.upperBound...]
         }
-        return result
+        return result + rest
     }
 
     /// A line that is only an opening or closing tag, like `<task>` or `</task>`.
