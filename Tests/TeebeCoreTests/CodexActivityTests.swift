@@ -219,7 +219,7 @@ struct CodexRolloutScannerTests {
         try write(userTurn([record]), id: parentID, fx)
         let original = fx.scanner.snapshot(forWorktreePaths: [launch], now: now)
         #expect(original.states[launch] == (byTarget ? .working : .idle))
-        known.update([launch, lens])
+        known.update([launch, lens], forRepository: "/repo")
         let local = fx.scanner.snapshot(forWorktreePaths: [launch], now: now)
         #expect(local.states == [launch: .idle])
         #expect(local.contexts.isEmpty)
@@ -241,7 +241,7 @@ struct CodexRolloutScannerTests {
                                 at: now.addingTimeInterval(-30)),
                    Rollout.event("task_started", at: now.addingTimeInterval(-30)),
                    Rollout.commandDone(cwd: lens, at: now.addingTimeInterval(-3))], id: childID, fx)
-        known.update([launch, lens])
+        known.update([launch, lens], forRepository: "/repo")
         // A parent owned here is still busy while its subagent works elsewhere.
         let here: AgentActivityState = parentHere ? .working : .idle
         #expect(fx.scanner.states(forWorktreePaths: [launch], now: now) == [launch: here])

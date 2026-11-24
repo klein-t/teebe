@@ -56,6 +56,7 @@ final class AgentOverviewModel {
 
     init(app: AppModel) {
         self.app = app
+        app.onBootstrap = { [weak self] in await self?.refreshOthers() }
     }
 
     var entries: [Entry] {
@@ -109,16 +110,33 @@ final class AgentOverviewModel {
     func refreshOthers(now: Date = Date()) async {
         // The selected repository is scanned too, so its agents are already known
         // here the moment another one is picked.
-        let repos = app.repositories
         let environment = app.environment
-        for repo in repos where worktreesByRepo[repo.path].map({ now.timeIntervalSince($0.listedAt) >= worktreeListInterval }) ?? true {
-            let listed = (try? await environment.worktreeService.worktrees(for: repo)) ?? []
+        let previousPaths = environment.knownWorktrees.paths
+        for repo in app.repositories {
+            if repo.path == app.selector.selectedRepo?.path {
+                // The selector owns this repository's filtered list, including
+                // an empty one. Keep its names ready when selection changes.
+                worktreesByRepo[repo.path] = (now, app.selector.worktrees.map { ($0.path, $0.branch ?? $0.name) })
+                continue
+            }
+            guard worktreesByRepo[repo.path].map({ now.timeIntervalSince($0.listedAt) >= worktreeListInterval }) ?? true,
+                  let listed = try? await environment.worktreeService.worktrees(for: repo),
+                  app.repositories.contains(repo), app.selector.selectedRepo?.path != repo.path else { continue }
             worktreesByRepo[repo.path] = (now, listed.map { ($0.path, $0.branch ?? $0.name) })
+            environment.knownWorktrees.update(listed.map(\.path), forRepository: repo.path)
         }
-        let owners = Dictionary(repos.flatMap { repo in (worktreesByRepo[repo.path]?.paths ?? []).map { ($0.path, (repo, $0.name)) } },
-                                uniquingKeysWith: { first, _ in first })
+        let repos = app.repositories
+        let added = Set(repos.map(\.path))
+        worktreesByRepo = worktreesByRepo.filter { added.contains($0.key) }
+        environment.knownWorktrees.retainRepositories(Array(added))
+        let owners = Dictionary(repos.flatMap { repo in
+            let names = Dictionary(worktreesByRepo[repo.path]?.paths ?? [], uniquingKeysWith: { first, _ in first })
+            return environment.knownWorktrees.paths(forRepository: repo.path).map { path in
+                (path, (repo, names[path] ?? Worktree(path: path).name))
+            }
+        }, uniquingKeysWith: { first, _ in first })
         let paths = Array(owners.keys)
-        if environment.knownWorktrees.update(paths), app.selector.selectedRepo != nil {
+        if previousPaths != environment.knownWorktrees.paths, app.selector.selectedRepo != nil {
             await app.selector.refreshAgentStates(now: now)
         }
         guard repos.count > 1, app.agentDisplay.showsMenuBarIcon else { others = []; return }

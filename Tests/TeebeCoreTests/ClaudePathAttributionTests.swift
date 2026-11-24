@@ -139,7 +139,7 @@ struct ClaudePathAttributionTests {
         let original = fx.scanner.snapshot(forWorktreePaths: [launch], now: now)
         #expect(original.states[launch] == .working)
         #expect(original.contexts[launch] != nil)
-        known.update([launch, lens])
+        known.update([launch, lens], forRepository: "/repo")
         let local = fx.scanner.snapshot(forWorktreePaths: [launch], now: now)
         #expect(local.states == [launch: .idle])
         #expect(local.contexts.isEmpty)
@@ -147,12 +147,16 @@ struct ClaudePathAttributionTests {
         let all = fx.scanner.snapshot(forWorktreePaths: [launch, lens], now: now)
         #expect(all.states == [launch: .idle, lens: .working])
         #expect(Set(all.contexts.keys) == [lens])
+        let foreign = fx.scanner.snapshot(forWorktreePaths: [lens], now: now)
+        #expect(foreign.states == [lens: .working])
+        #expect(foreign.contexts[lens]?.terminalSession == AgentTerminalSession(provider: .claude, id: "s1",
+            transcriptPath: fx.launchDir.appendingPathComponent("s1.jsonl").path, claudeProjectsPath: fx.root.path))
     }
 
     @Test("targets and cwd outside all known worktrees keep the launch fallback")
     func unknownWorktreeKeepsLaunchFallback() throws {
         let known = KnownWorktrees()
-        known.update([launch, lens])
+        known.update([launch, lens], forRepository: "/repo")
         let fx = try makeFixture(knownWorktrees: known)
         defer { try? FileManager.default.removeItem(at: fx.root) }
         try write([toolUse("Read", input: #"{"file_path":"/outside/file"}"#,
@@ -160,6 +164,9 @@ struct ClaudePathAttributionTests {
         let snapshot = fx.scanner.snapshot(forWorktreePaths: [launch], now: now)
         #expect(snapshot.states[launch] == .working)
         #expect(snapshot.contexts[launch] != nil)
+        let foreign = fx.scanner.snapshot(forWorktreePaths: [lens], now: now)
+        #expect(foreign.states == [lens: .idle])
+        #expect(foreign.contexts.isEmpty)
     }
 
     @Test("a busy subagent in another repository marks only where it and its parent are owned, in every scan",
@@ -179,11 +186,30 @@ struct ClaudePathAttributionTests {
         try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-2)], ofItemAtPath: file.path)
         // Nothing else known: the launch worktree is all there is to mark.
         #expect(fx.scanner.states(forWorktreePaths: [launch], now: now)[launch] == .working)
-        known.update([launch, lens])
+        known.update([launch, lens], forRepository: "/repo")
         // A parent owned here is still busy while its subagent works elsewhere;
         // the subagent itself no longer falls back to the launch worktree.
         let here: AgentActivityState = parentHere ? .working : .idle
         #expect(fx.scanner.states(forWorktreePaths: [launch], now: now) == [launch: here])
         #expect(fx.scanner.states(forWorktreePaths: [launch, lens], now: now) == [launch: here, lens: .working])
+        #expect(fx.scanner.states(forWorktreePaths: [lens], now: now) == [lens: .working])
+    }
+
+    @Test("foreign logs keep the mtime filter and live-session exception", arguments: [true, false])
+    func foreignOldLogNeedsLiveSession(isLive: Bool) throws {
+        let known = KnownWorktrees()
+        known.update([launch, lens], forRepository: "/repo")
+        var fx = try makeFixture(knownWorktrees: known)
+        defer { try? FileManager.default.removeItem(at: fx.root) }
+        try write([toolUse("Read", input: #"{"file_path":"\#(lens)/file.swift"}"#,
+                           at: now.addingTimeInterval(-5), cwd: launch)], fx)
+        let file = fx.launchDir.appendingPathComponent("s1.jsonl")
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-4_000)], ofItemAtPath: file.path)
+        fx.scanner.sessionsRoot = fx.root.appendingPathComponent("sessions")
+        fx.scanner.isProcessAlive = { _ in isLive }
+        try FileManager.default.createDirectory(at: fx.scanner.sessionsRoot, withIntermediateDirectories: true)
+        try #"{"pid":123,"sessionId":"s1","cwd":"\#(launch)","status":"busy"}"#
+            .write(to: fx.scanner.sessionsRoot.appendingPathComponent("123.json"), atomically: true, encoding: .utf8)
+        #expect(fx.scanner.states(forWorktreePaths: [lens], now: now) == [lens: isLive ? .working : .idle])
     }
 }

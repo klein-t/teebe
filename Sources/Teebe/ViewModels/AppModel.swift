@@ -114,6 +114,8 @@ final class AppModel {
     /// `persist()` that property assignments would otherwise trigger during load.
     @ObservationIgnored private var isHydrating = false
     @ObservationIgnored private var isApplyingPreferences = false
+    /// Awaited after restoring selection, so shared agent ownership is ready too.
+    @ObservationIgnored var onBootstrap: (() async -> Void)?
 
     /// 0.7.0 and earlier always posted agent notifications with sound and saved no
     /// choice, so keep them on for those users while new installs start with them off.
@@ -234,10 +236,14 @@ final class AppModel {
         let target = lastRepoPath.flatMap { last in repositories.first { $0.path == last } }
             ?? repositories.first
         isHydrating = false
-        guard let target else { persist(); return }
         // One shot: the saved worktree (when it still exists) is selected directly,
         // never primary-then-saved — the double load crashed the first layout pass.
-        await selector.selectRepo(target, preferredWorktreePath: lastWorktreePath)
+        if let target {
+            await selector.selectRepo(target, preferredWorktreePath: lastWorktreePath)
+        } else {
+            persist()
+        }
+        await onBootstrap?()
     }
 
     // MARK: - Low-power mode + Claude Code hook

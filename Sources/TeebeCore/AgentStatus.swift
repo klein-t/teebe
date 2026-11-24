@@ -372,10 +372,9 @@ public struct AgentSessionScanner: Sendable {
     }
 
     /// Whether a batch of watched file events can change what
-    /// `states(forWorktreePaths:)` reports for `worktreePaths`. The scan only
-    /// reads those paths' project dirs, so writes by sessions of other projects
-    /// under `projectsRoot` cannot; anything outside the root (the live
-    /// registry, other harnesses' folders) and an empty batch always count.
+    /// `states(forWorktreePaths:)` reports. Pass the scanned and known worktree
+    /// paths: a session can be logged in any of their project directories.
+    /// Anything outside the root and an empty batch always count.
     public static func eventsMatter(_ eventPaths: [String], projectsRoot: String, worktreePaths: [String]) -> Bool {
         guard !eventPaths.isEmpty else { return true }
         let root = WorktreeAttribution.normalized(projectsRoot) + "/"
@@ -388,8 +387,7 @@ public struct AgentSessionScanner: Sendable {
         }
     }
 
-    /// The agent state for a single worktree, judged only from sessions logged
-    /// under its own project dir.
+    /// The agent state for a single worktree, including sessions logged elsewhere.
     public func state(forWorktreePath path: String, now: Date = Date()) -> AgentActivityState {
         states(forWorktreePaths: [path], now: now)[path] ?? .idle
     }
@@ -407,19 +405,28 @@ public struct AgentSessionScanner: Sendable {
     }
 
     private func scan(_ paths: [String], now: Date, readingContexts: Bool) -> AgentSnapshot {
+        guard !paths.isEmpty else { return AgentSnapshot(states: [:]) }
         var result: [String: AgentActivityState] = [:]
         var winners: [String: SessionWinner] = [:]
         for path in paths { result[path] = .idle }
         let live = liveSessions()
+        let directories = projectDirectories(for: paths + knownWorktrees.paths)
+        var readings: [URL: SessionReading] = [:]
+        func read(_ url: URL, _ sidechains: Bool) -> SessionReading {
+            if let cached = readings[url] { return cached }
+            let data = tail(of: url) ?? Data()
+            let reading = SessionReading(entry: lastEntry(in: data, includingSidechains: sidechains),
+                                         targets: recentTargets(in: data, includingSidechains: sidechains))
+            readings[url] = reading
+            return reading
+        }
         // Every fresh session file across every project dir (files idle-old by
-        // mtime can only be idle — skip without reading them — unless the
+        // mtime can only be idle, so skip without reading them unless the
         // session is live: a parent waiting on a long background agent logs
         // nothing).
         var files: [SessionFile] = []
         var seen = Set<URL>()
-        for path in paths {
-            let dir = projectsRoot.appendingPathComponent(
-                Self.projectDirName(forWorktreePath: path), isDirectory: true)
+        for (path, dir) in directories {
             for file in sessionFiles(in: dir)
             where now.timeIntervalSince(file.mtime) < thresholds.idle || live[Self.sessionID(of: file.url)] != nil {
                 guard seen.insert(file.url.standardizedFileURL).inserted else { continue }
@@ -429,17 +436,18 @@ public struct AgentSessionScanner: Sendable {
         // Oldest first, so when two sessions land on the same worktree the newer
         // session's verdict wins (the per-dir "newest file wins" rule, kept).
         for file in files.sorted(by: { $0.mtime < $1.mtime }) {
-            let entry = lastEntry(in: file.url, includingSidechains: false)
+            let reading = read(file.url, false)
+            let entry = reading.entry
             let session = live[Self.sessionID(of: file.url)]
             let state = AgentStateDeriver.derive(lastEntry: entry, live: session, now: now, thresholds: thresholds)
             guard state != .idle else { continue }
             guard let owner = owner(
-                targets: recentTargets(in: file.url, includingSidechains: false),
+                targets: reading.targets,
                 cwd: entry?.cwd ?? session?.cwd, among: paths, launchPath: file.launchPath) else { continue }
             result[owner] = state
             winners[owner] = SessionWinner(url: file.url, state: state, lastActivity: entry?.timestamp ?? file.mtime)
         }
-        markBusySubagents(in: &result, paths: paths, live: live, now: now)
+        markBusySubagents(in: &result, directories: directories, live: live, now: now, read: read)
         return AgentSnapshot(states: result, contexts: readingContexts ? contexts(of: winners).reconciled(with: result) : [:])
     }
 
@@ -447,7 +455,21 @@ public struct AgentSessionScanner: Sendable {
         switch WorktreeAttribution.claim(targets: targets, cwd: cwd, among: paths, knownPaths: knownWorktrees.paths) {
         case let .here(path): return path
         case .elsewhere: return nil
-        case .nowhere: return launchPath
+        case .nowhere: return paths.contains(launchPath) ? launchPath : nil
+        }
+    }
+
+    private struct SessionReading {
+        let entry: AgentSessionEntry?
+        let targets: [String]
+    }
+
+    private func projectDirectories(for paths: [String]) -> [(path: String, url: URL)] {
+        var seen = Set<URL>()
+        return paths.compactMap { path in
+            let dir = projectsRoot.appendingPathComponent(Self.projectDirName(forWorktreePath: path), isDirectory: true)
+                .standardizedFileURL
+            return seen.insert(dir).inserted ? (path, dir) : nil
         }
     }
 
@@ -507,32 +529,27 @@ public struct AgentSessionScanner: Sendable {
     /// worktree it runs in and in its parent's: a parent that launched a
     /// background subagent and ended its own turn is still busy. Each is marked
     /// only where it is owned, so every scan gives a worktree the same answer.
-    private func markBusySubagents(in result: inout [String: AgentActivityState], paths: [String],
-                                   live: [String: LiveAgentSession], now: Date) {
-        var seen = Set<URL>()
-        for path in paths {
-            let dir = projectsRoot.appendingPathComponent(
-                Self.projectDirName(forWorktreePath: path), isDirectory: true)
-            guard seen.insert(dir.standardizedFileURL).inserted else { continue }
+    private func markBusySubagents(in result: inout [String: AgentActivityState], directories: [(path: String, url: URL)],
+                                   live: [String: LiveAgentSession], now: Date, read: (URL, Bool) -> SessionReading) {
+        let paths = Array(result.keys)
+        for (path, dir) in directories {
             for sessionDir in subdirectories(of: dir) {
                 // A live parent that isn't busy has no agent running under it.
                 if let parent = live[sessionDir.lastPathComponent], parent.status != .busy { continue }
                 let subagents = sessionDir.appendingPathComponent("subagents", isDirectory: true)
                 let busy = sessionFiles(in: subagents)
                     .filter { now.timeIntervalSince($0.mtime) < thresholds.stall }
-                    .compactMap { file in lastEntry(in: file.url, includingSidechains: true).map { (file.url, $0) } }
-                    .filter { AgentStateDeriver.derive(lastEntry: $0.1, now: now, thresholds: thresholds) == .working }
+                    .map { read($0.url, true) }
+                    .filter { AgentStateDeriver.derive(lastEntry: $0.entry, now: now, thresholds: thresholds) == .working }
                 guard !busy.isEmpty else { continue }
-                for (url, entry) in busy {
-                    let targets = recentTargets(in: url, includingSidechains: true)
-                    if let owner = owner(targets: targets, cwd: entry.cwd, among: paths, launchPath: path) {
+                for reading in busy {
+                    if let owner = owner(targets: reading.targets, cwd: reading.entry?.cwd, among: paths, launchPath: path) {
                         result[owner] = .working
                     }
                 }
                 let parent = dir.appendingPathComponent(sessionDir.lastPathComponent + ".jsonl")
-                let parentCwd = lastEntry(in: parent, includingSidechains: false)?.cwd
-                let parentTargets = recentTargets(in: parent, includingSidechains: false)
-                if let owner = owner(targets: parentTargets, cwd: parentCwd, among: paths, launchPath: path) {
+                let reading = read(parent, false)
+                if let owner = owner(targets: reading.targets, cwd: reading.entry?.cwd, among: paths, launchPath: path) {
                     result[owner] = .working
                 }
             }
@@ -569,8 +586,7 @@ public struct AgentSessionScanner: Sendable {
     /// first truncated line instead of poisoning a whole-buffer decode, and the
     /// scan stops at the first hit instead of materializing every line of the
     /// window when only the last one or two matter.
-    private func lastEntry(in url: URL, includingSidechains: Bool) -> AgentSessionEntry? {
-        guard let data = tail(of: url) else { return nil }
+    private func lastEntry(in data: Data, includingSidechains: Bool) -> AgentSessionEntry? {
         let newline = UInt8(ascii: "\n")
         var end = data.endIndex
         while end > data.startIndex {
@@ -606,9 +622,8 @@ public struct AgentSessionScanner: Sendable {
 
     /// The paths the session's recent tool calls worked on, newest first: calls
     /// within `WorktreeAttribution.targetWindow` of its newest entry, at most
-    /// `targetLimit` of them. Only read for sessions that are not idle.
-    private func recentTargets(in url: URL, includingSidechains: Bool) -> [String] {
-        guard let data = tail(of: url) else { return [] }
+    /// `targetLimit` of them. Shares the tail read with the last entry.
+    private func recentTargets(in data: Data, includingSidechains: Bool) -> [String] {
         var targets: [String] = []
         var newest: Date?
         let newline = UInt8(ascii: "\n")

@@ -78,12 +78,27 @@ struct AgentActivitySourceTests {
     func knownWorktreesTrackSetChanges() {
         let known = KnownWorktrees()
         #expect(known.paths.isEmpty)
-        #expect(!known.update([]))
-        #expect(known.update(["/a", "/b"]))
-        #expect(!known.update(["/b", "/a", "/a"]))
+        #expect(!known.update([], forRepository: "/repo"))
+        #expect(known.update(["/a", "/b"], forRepository: "/repo"))
+        #expect(!known.update(["/b", "/a", "/a"], forRepository: "/repo"))
         #expect(Set(known.paths) == ["/a", "/b"])
-        #expect(known.update(["/b"]))
+        #expect(known.update(["/b"], forRepository: "/repo"))
         #expect(known.paths == ["/b"])
-        #expect(known.update([]))
+        #expect(known.update([], forRepository: "/repo"))
+    }
+
+    @Test("repository lists replace independently and removed repositories are forgotten")
+    func knownWorktreesKeepRepositoryLists() {
+        let known = KnownWorktrees()
+        known.update(["/a", "/a-worktree"], forRepository: "/a")
+        known.update(["/b"], forRepository: "/b")
+        known.update(["/a"], forRepository: "/a")
+        #expect(known.paths(forRepository: "/a") == ["/a"])
+        #expect(known.paths == ["/a", "/b"])
+        known.retainRepositories(["/a"])
+        #expect(known.paths == ["/a"])
+        #expect(known.paths(forRepository: "/b").isEmpty)
+        known.update([], forRepository: "/a")
+        #expect(known.paths.isEmpty)
     }
 }

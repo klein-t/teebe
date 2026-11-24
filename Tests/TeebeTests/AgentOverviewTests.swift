@@ -80,8 +80,6 @@ struct AgentOverviewTests {
         #expect(await app.addRepository(path: "/repo-b"))
         await app.selector.selectRepo(Repository(path: launch))
         app.agentDisplay.showsMenuBarIcon = iconShown
-        #expect(app.selector.info(for: worktree).agentState == .working)
-        #expect(app.selector.info(for: worktree).agentContext != nil)
         let overview = AgentOverviewModel(app: app)
         let gitCalls = git.statusCallCount
         await overview.refreshOthers(now: now)
@@ -96,6 +94,15 @@ struct AgentOverviewTests {
         }
         #expect(overview.entries.map(\.worktreePath) == [target])
         #expect(overview.entries.first?.context?.terminalSession?.id == "session")
+        await app.selector.selectRepo(Repository(path: "/repo-b"))
+        let targetRow = try #require(app.selector.worktrees.first)
+        #expect(app.selector.info(for: targetRow).agentState == .working)
+        #expect(app.selector.info(for: targetRow).agentContext?.terminalSession == AgentTerminalSession(provider: .claude, id: "session",
+            transcriptPath: file.path, claudeProjectsPath: root.path))
+        await overview.refreshOthers(now: now)
+        #expect(overview.entries.map(\.worktreePath) == [target])
+        #expect(overview.menuSummary.working.map(\.worktreePath) == [target])
+        #expect(overview.menuSummary.waiting.isEmpty)
     }
 
     @Test("worktree discovery follows the listing interval and removes forgotten repositories")
@@ -119,11 +126,152 @@ struct AgentOverviewTests {
         await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval))
         #expect(Set(app.environment.knownWorktrees.paths) == ["/repo-a", "/repo-b", "/repo-b/new"])
         app.removeRepository(Repository(path: "/repo-b"))
+        #expect(app.environment.knownWorktrees.paths == ["/repo-a"])
         await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval + 1))
         #expect(app.environment.knownWorktrees.paths == ["/repo-a"])
         app.removeRepository(Repository(path: "/repo-a"))
         await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval + 2))
         #expect(app.environment.knownWorktrees.paths.isEmpty)
+    }
+
+    @Test("bootstrap discovers all repositories before returning, even after an empty startup poll", arguments: [true, false])
+    func bootstrapKnowsWorktrees(iconShown: Bool) async throws {
+        let git = FakeGitClient()
+        git.worktreesByRepo = ["/repo-a": [Worktree(path: "/repo-a", isPrimary: true)],
+                               "/repo-b": [Worktree(path: "/repo-b/worktree")]]
+        let environment = makeTestEnvironment(git: git)
+        var state = AppState()
+        state.repositories = [PersistedRepository(path: "/repo-a"), PersistedRepository(path: "/repo-b")]
+        state.lastSelectedRepoPath = "/repo-a"
+        state.agentMenuBarIcon = iconShown
+        try environment.store.save(state)
+        let app = AppModel(environment: environment)
+        defer { app.selector.clearSelection() }
+        let overview = AgentOverviewModel(app: app)
+        await overview.refreshOthers()
+        #expect(environment.knownWorktrees.paths.isEmpty)
+        await app.bootstrap()
+        #expect(Set(environment.knownWorktrees.paths) == ["/repo-a", "/repo-b/worktree"])
+    }
+
+    @Test("a failed overview listing keeps the last successful paths and retries next poll")
+    func failedListingKeepsPaths() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo-a", isPrimary: true)]
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+        defer { app.selector.clearSelection() }
+        #expect(await app.addRepository(path: "/repo-a"))
+        app.selector.clearSelection()
+        let overview = AgentOverviewModel(app: app)
+        let now = Date()
+        await overview.refreshOthers(now: now)
+        git.worktreesError = .commandFailed(command: ["worktree", "list"], exitCode: 1, stderr: "Unavailable")
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval))
+        #expect(app.environment.knownWorktrees.paths == ["/repo-a"])
+        git.worktreesError = nil
+        git.worktreesResult.append(Worktree(path: "/repo-a/new"))
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval + overview.pollInterval))
+        #expect(Set(app.environment.knownWorktrees.paths) == ["/repo-a", "/repo-a/new"])
+    }
+
+    @Test("the selected visible list removes stale ownership and the poll cannot restore it", arguments: [true, false], [true, false])
+    func selectedVisiblePathsWin(hidden: Bool, byTarget: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launch = "/repo-a", removed = "/repo-a-worktree"
+        let file = root.appendingPathComponent(AgentSessionScanner.projectDirName(forWorktreePath: launch))
+            .appendingPathComponent("session.jsonl")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let command = byTarget ? "cd \(removed) && swift test" : "swift test"
+        let record = #"{"type":"assistant","cwd":"\#(byTarget ? launch : removed)","timestamp":"\#(ISO8601DateFormatter().string(from: Date()))","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"\#(command)"}}]}}"#
+        try (record + "\n").write(to: file, atomically: true, encoding: .utf8)
+        let known = KnownWorktrees()
+        let scanner = AgentSessionScanner(projectsRoot: root, knownWorktrees: known)
+        let git = FakeGitClient()
+        let primary = Worktree(path: launch, isPrimary: true)
+        git.worktreesByRepo = [launch: [primary, Worktree(path: removed)], "/repo-b": [Worktree(path: "/repo-b", isPrimary: true)]]
+        let environment = makeTestEnvironment(git: git, folderExists: { $0 != removed }, isVolumeMounted: { $0 != removed },
+            agentSnapshot: { paths, date in scanner.snapshot(forWorktreePaths: paths, now: date) }, knownWorktrees: known)
+        let app = AppModel(environment: environment)
+        defer { app.selector.clearSelection() }
+        #expect(await app.addRepository(path: launch))
+        #expect(await app.addRepository(path: "/repo-b"))
+        let overview = AgentOverviewModel(app: app)
+        let now = Date()
+        await overview.refreshOthers(now: now)
+        #expect(known.paths.contains(removed))
+        if !hidden { git.worktreesByRepo[launch] = [primary] }
+        await app.selector.selectRepo(Repository(path: launch))
+        #expect(app.selector.worktrees == [primary])
+        #expect(!known.paths.contains(removed))
+        #expect(app.selector.info(for: primary).agentState == .working)
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval))
+        #expect(!known.paths.contains(removed))
+        #expect(overview.entries.map(\.worktreePath) == [launch])
+        // Switching away must not resurrect an older cached poll list either.
+        await app.selector.selectRepo(Repository(path: "/repo-b"))
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval + 1))
+        #expect(!known.paths.contains(removed))
+        #expect(overview.entries.map(\.worktreePath) == [launch])
+    }
+
+    @Test("selector refresh publishes its latest list and failed listings keep known paths")
+    func selectorRefreshKeepsKnownPathsCurrent() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo-a", isPrimary: true), Worktree(path: "/repo-a-worktree")]
+        let environment = makeTestEnvironment(git: git)
+        let selector = SelectorModel(environment: environment)
+        defer { selector.clearSelection() }
+        await selector.selectRepo(Repository(path: "/repo-a"))
+        #expect(environment.knownWorktrees.paths == ["/repo-a", "/repo-a-worktree"])
+        git.worktreesResult.removeLast()
+        await selector.refreshWorktrees()
+        #expect(environment.knownWorktrees.paths == ["/repo-a"])
+        git.worktreesError = .commandFailed(command: ["worktree", "list"], exitCode: 1, stderr: "Unavailable")
+        await selector.refreshWorktrees()
+        #expect(environment.knownWorktrees.paths == ["/repo-a"])
+        await selector.selectRepo(Repository(path: "/repo-a"))
+        #expect(environment.knownWorktrees.paths == ["/repo-a"])
+    }
+
+    @Test("known foreign project events refresh the selected rows while unknown projects stay ignored")
+    func foreignProjectEventsRefreshSelectedRows() async {
+        let known = KnownWorktrees()
+        known.update(["/repo-a"], forRepository: "/repo-a")
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo-b", isPrimary: true)]
+        let states = StateBox()
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git,
+            agentStatuses: { _, _ in states.value }, agentProjectsRootPath: "/logs/projects", knownWorktrees: known))
+        defer { selector.clearSelection() }
+        await selector.selectRepo(Repository(path: "/repo-b"))
+        states.value = ["/repo-b": .working]
+        await selector.handleAgentWatchEvent(["/logs/projects/-unknown/session.jsonl"])
+        #expect(selector.info(for: git.worktreesResult[0]).agentState == .idle)
+        await selector.handleAgentWatchEvent(["/logs/projects/-repo-a/session.jsonl"])
+        #expect(selector.info(for: git.worktreesResult[0]).agentState == .working)
+    }
+
+    @Test("a poll already listing a repository cannot replace its newly selected visible list")
+    func selectedListWinsOverInFlightPoll() async {
+        let git = FakeGitClient()
+        git.worktreesByRepo = ["/repo-a": [Worktree(path: "/repo-a", isPrimary: true), Worktree(path: "/missing")],
+                               "/repo-b": [Worktree(path: "/repo-b", isPrimary: true)]]
+        let environment = makeTestEnvironment(git: git, folderExists: { $0 != "/missing" }, isVolumeMounted: { $0 != "/missing" })
+        let app = AppModel(environment: environment)
+        defer { app.selector.clearSelection() }
+        #expect(await app.addRepository(path: "/repo-a"))
+        #expect(await app.addRepository(path: "/repo-b"))
+        let overview = AgentOverviewModel(app: app)
+        let entered = Gate(), gate = Gate()
+        git.beforeWorktrees = { await entered.open(); await gate.wait() }
+        let poll = Task { await overview.refreshOthers() }
+        await entered.wait()
+        git.beforeWorktrees = nil
+        await app.selector.selectRepo(Repository(path: "/repo-a"))
+        await gate.open()
+        await poll.value
+        #expect(environment.knownWorktrees.paths == ["/repo-a", "/repo-b"])
     }
 }
 

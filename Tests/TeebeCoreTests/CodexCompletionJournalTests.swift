@@ -24,7 +24,7 @@ struct CodexCompletionJournalTests {
         let now = epoch.addingTimeInterval(4)
         let original = scanner.turnEnds(forWorktreePaths: ["/repo"], now: now)
         #expect(original.count == (byTarget ? 1 : 0))
-        known.update(["/repo", "/other/worktree"])
+        known.update(["/repo", "/other/worktree"], forRepository: "/repo")
         #expect(scanner.turnEnds(forWorktreePaths: ["/repo"], now: now).isEmpty)
         let ends = scanner.turnEnds(forWorktreePaths: ["/repo", "/other/worktree"], now: now)
         #expect(ends.map(\.worktreePath) == ["/other/worktree"])

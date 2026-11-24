@@ -201,6 +201,7 @@ final class SelectorModel {
 
     func setRepositories(_ repos: [Repository]) {
         repositories = repos
+        environment.knownWorktrees.retainRepositories(repos.map(\.path))
     }
 
     /// The calm one-line notice after deleted worktrees were forgotten.
@@ -266,7 +267,7 @@ final class SelectorModel {
             errorMessage = nil
         } catch {
             guard isCurrent() else { return }
-            applyDiscovered([])
+            applyDiscovered([], rememberPaths: false)
             branches = []
             errorMessage = WorktreeModel.describe(error)
         }
@@ -454,7 +455,10 @@ final class SelectorModel {
     /// when the set of checkouts changed or one of their HEADs did, so discovery
     /// bumps `mergeRevision` only then. Fetch completion and leaving low power
     /// invalidate separately because comparison refs may move with unchanged HEADs.
-    private func applyDiscovered(_ discovered: [Worktree]) {
+    private func applyDiscovered(_ discovered: [Worktree], rememberPaths: Bool = true) {
+        if rememberPaths, let repo = selectedRepo {
+            environment.knownWorktrees.update(discovered.map(\.path), forRepository: repo.path)
+        }
         func identity(_ trees: [Worktree]) -> [String] { trees.map { $0.path + "\u{0}" + $0.head } }
         if identity(discovered) != identity(worktrees) { mergeRevision += 1 }
         let pathsChanged = discovered.map(\.path) != worktrees.map(\.path)
@@ -725,15 +729,15 @@ final class SelectorModel {
         await refreshAgentStates()
     }
 
-    /// A coalesced batch of session-log writes — re-derive the badges, unless
-    /// every write belongs to another project's sessions (which the scan never
-    /// reads): Claude Code sessions elsewhere log continuously.
+    /// Re-derive for writes in any known launch directory, including sessions
+    /// launched in another repository that now work in the selected one.
     func handleAgentWatchEvent(_ paths: [String]) async {
         let otherAgentChanged = paths.contains { path in
             environment.agentExtraWatchPaths.contains { root in path == root || path.hasPrefix(root + "/") }
         }
         if !otherAgentChanged, let root = environment.agentProjectsRootPath,
-           !AgentSessionScanner.eventsMatter(paths, projectsRoot: root, worktreePaths: worktrees.map(\.path)) {
+           !AgentSessionScanner.eventsMatter(paths, projectsRoot: root,
+                                            worktreePaths: worktrees.map(\.path) + environment.knownWorktrees.paths) {
             return
         }
         await refreshAgentStates()
