@@ -123,13 +123,13 @@ struct TeebeApp: App {
         // you drag them). Chrome-less to match their in-content header; closed via the
         // footer button, Esc, or ⌘W.
         Window("What's New in \(Brand.name)", id: WindowID.whatsNew) {
-            WhatsNewView(model: whatsNew)
+            WhatsNewView(model: whatsNew).background(WindowBackdrop())
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
 
         Window("Keyboard Shortcuts", id: WindowID.shortcuts) {
-            KeyboardShortcutsView()
+            KeyboardShortcutsView().background(WindowBackdrop())
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
