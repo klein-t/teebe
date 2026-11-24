@@ -190,8 +190,9 @@ enum AgentMenuBarImage {
 /// terminal session, or teebe on that worktree when no route is available.
 struct AgentMenuBarMenu: View {
     let overview: AgentOverviewModel
-    @Bindable var display: AgentDisplayPreferences
-    /// Holds the Settings tab, so "Settings…" opens on Integrations.
+    let display: AgentDisplayPreferences
+    /// Holds the Settings tab, so "Settings…" opens on Integrations, where the
+    /// item itself is switched off.
     let app: AppModel
     @Environment(\.openSettings) private var openSettings
 
@@ -221,8 +222,6 @@ struct AgentMenuBarMenu: View {
             openSettings()
         }
         .keyboardShortcut(",")
-        Divider()
-        Button("Hide Menu Bar Icon") { display.showsMenuBarIcon = false }
     }
 
     private func task(of entry: AgentOverviewModel.Entry) -> String? {
