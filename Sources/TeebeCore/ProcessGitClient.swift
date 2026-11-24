@@ -47,9 +47,10 @@ public struct ProcessGitClient: GitClient {
 
     // MARK: - Diffs
 
-    public func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? {
+    public func workingDiff(worktreePath: String, path: String, staged: Bool, ignoreWhitespace: Bool) async throws -> DiffFile? {
         var args = ["diff"]
         if staged { args.append("--staged") }
+        if ignoreWhitespace { args.append("-w") }
         args.append(contentsOf: ["--", path])
         let result = try await runChecked(args, in: worktreePath)
         return DiffParser.parse(result.stdoutString).first

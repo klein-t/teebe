@@ -40,4 +40,65 @@ struct AgentActivitySourceTests {
         #expect(WorktreeAttribution.deepest(containing: "/tmp/w/a", among: paths) == "/private/tmp/w")
         #expect(WorktreeAttribution.deepest(containing: "file:///private/tmp/w", among: paths) == "/private/tmp/w")
     }
+
+    @Test("claims distinguish local, foreign and unknown worktrees before cwd fallback")
+    func claimAcrossKnownWorktrees() {
+        let paths = ["/a"]
+        let known = ["/a", "/b"]
+        #expect(WorktreeAttribution.claim(targets: ["/a/file"], cwd: "/b", among: paths, knownPaths: known) == .here("/a"))
+        #expect(WorktreeAttribution.claim(targets: ["/b/file", "/a/old"], cwd: "/a", among: paths, knownPaths: known) == .elsewhere)
+        #expect(WorktreeAttribution.claim(targets: [], cwd: "/b/src", among: paths, knownPaths: known) == .elsewhere)
+        #expect(WorktreeAttribution.claim(targets: ["/outside"], cwd: "/a", among: paths, knownPaths: known) == .here("/a"))
+        #expect(WorktreeAttribution.claim(targets: ["/outside"], cwd: nil, among: paths, knownPaths: known) == .nowhere)
+    }
+
+    @Test("nested worktrees win across scan boundaries and aliases keep the local path")
+    func claimPrefersDeepestKnownWorktree() {
+        let known = ["/a", "/a/nested"]
+        #expect(WorktreeAttribution.claim(targets: ["/a/nested/file"], cwd: "/a", among: ["/a"], knownPaths: known) == .elsewhere)
+        #expect(WorktreeAttribution.claim(targets: [], cwd: "/a/nested", among: ["/a"], knownPaths: known) == .elsewhere)
+        #expect(WorktreeAttribution.claim(targets: ["/a/nested/file"], cwd: "/a", among: known, knownPaths: known) == .here("/a/nested"))
+        #expect(WorktreeAttribution.claim(targets: ["file:///tmp/w/file"], cwd: nil,
+                                          among: ["/tmp/w"], knownPaths: ["/private/tmp/w/"]) == .here("/tmp/w"))
+    }
+
+    @Test("an empty known set preserves the old owner rule")
+    func emptyKnownPathsPreserveOwner() {
+        let paths = ["/a", "/a/nested", "/private/tmp/w"]
+        for targets in [[], ["/outside"], ["/a/nested/file", "/a/file"], ["/tmp/w/file"], Array(repeating: "/outside", count: 20) + ["/a"]] {
+            for cwd: String? in [nil, "/outside", "/a", "/a/nested", "/tmp/w"] {
+                let expected = WorktreeAttribution.owner(targets: targets, cwd: cwd, among: paths)
+                    .map { WorktreeAttribution.Claim.here($0) } ?? .nowhere
+                #expect(WorktreeAttribution.claim(targets: targets, cwd: cwd, among: paths, knownPaths: []) == expected)
+            }
+        }
+    }
+
+    @Test("known worktrees report set changes including removals")
+    func knownWorktreesTrackSetChanges() {
+        let known = KnownWorktrees()
+        #expect(known.paths.isEmpty)
+        #expect(!known.update([], forRepository: "/repo"))
+        #expect(known.update(["/a", "/b"], forRepository: "/repo"))
+        #expect(!known.update(["/b", "/a", "/a"], forRepository: "/repo"))
+        #expect(Set(known.paths) == ["/a", "/b"])
+        #expect(known.update(["/b"], forRepository: "/repo"))
+        #expect(known.paths == ["/b"])
+        #expect(known.update([], forRepository: "/repo"))
+    }
+
+    @Test("repository lists replace independently and removed repositories are forgotten")
+    func knownWorktreesKeepRepositoryLists() {
+        let known = KnownWorktrees()
+        known.update(["/a", "/a-worktree"], forRepository: "/a")
+        known.update(["/b"], forRepository: "/b")
+        known.update(["/a"], forRepository: "/a")
+        #expect(known.paths(forRepository: "/a") == ["/a"])
+        #expect(known.paths == ["/a", "/b"])
+        known.retainRepositories(["/a"])
+        #expect(known.paths == ["/a"])
+        #expect(known.paths(forRepository: "/b").isEmpty)
+        known.update([], forRepository: "/a")
+        #expect(known.paths.isEmpty)
+    }
 }

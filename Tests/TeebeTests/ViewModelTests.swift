@@ -181,6 +181,20 @@ struct SelectorModelTests {
         #expect(selector.worktree.worktreePath == "/repo")
     }
 
+    @Test("a click marks the worktree selected at once, before it is loaded")
+    func markSelected() async {
+        let git = FakeGitClient()
+        let feature = Worktree(path: "/repo-wt", branch: "feature")
+        git.worktreesResult = [Worktree(path: "/repo", branch: "main", isPrimary: true), feature]
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git))
+        await selector.selectRepo(Repository(path: "/repo"))
+
+        selector.markSelected(feature)
+        #expect(selector.selectedWorktree?.path == "/repo-wt")
+        #expect(selector.highlightedWorktree?.path == "/repo-wt")
+        #expect(selector.worktree.worktreePath == "/repo")
+    }
+
     @Test("hasSync only when there is something to pull or push")
     func worktreeInfoHasSync() {
         #expect(SelectorModel.WorktreeInfo().hasSync == false)

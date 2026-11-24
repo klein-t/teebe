@@ -45,12 +45,17 @@ transmitted anywhere.
   decline, teebe simply can't display repositories in that folder. Nothing
   else breaks, and you can change your mind any time in System Settings →
   Privacy & Security → Files & Folders.
-- **Claude Code session logs** (`~/.claude/projects`). To show the per-worktree
-  agent badge ("working" / "needs you"), teebe reads the tail of the newest
-  session log for each worktree and reduces it to that single status. The
-  content of your agent conversations is never stored, indexed, displayed, or
-  sent anywhere: it is parsed in memory, only to tell whether the agent is
-  mid-turn or waiting for you.
+- **Claude Code and Codex session logs** (`~/.claude/projects`,
+  `~/.claude/sessions`, `~/.codex/sessions`). teebe reads the start and the end
+  of recent session logs to tell whether an agent is working or waiting in a
+  worktree, and to show the task it was given and what it is asking you. That
+  text appears only in teebe's window and menu bar. It is kept in memory while
+  it is shown: it is not saved, indexed, put in notifications, or sent
+  anywhere. You can hide it in Settings, under Integrations.
+- **Running processes.** To show activity from other tools, teebe checks which
+  processes are running inside your worktrees. When you choose an agent in the
+  menu bar list, it also looks up that session's process and its cmux terminal
+  to bring it to the front. That lookup happens only on the click.
 
 ## Updates
 

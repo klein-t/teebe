@@ -9,16 +9,23 @@ struct PreviewPanel: View {
     @Environment(\.dismiss) private var dismiss
     /// Unified vs. side-by-side diff, persisted across sessions.
     @AppStorage("diff.splitView") private var splitView = false
+    @AppStorage(DiffDisplayOptions.ignoreWhitespaceKey) private var ignoreWhitespace = false
     @FocusState private var focused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
+            if ignoreWhitespace, diffFile != nil {
+                whitespaceBanner
+                Divider()
+            }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 560, minHeight: 400)
+        // The main window's glass, so the peek matches it (solid with Reduce Transparency).
+        .background(WindowBackdrop())
         .background(WindowAccessor { $0?.level = .floating }) // peek stays above the main window
         .focusable()
         .focusEffectDisabled()
@@ -29,7 +36,30 @@ struct PreviewPanel: View {
         // Space toggles the peek shut (Quick Look convention); Esc does too.
         .onKeyPress(.space) { close(); return .handled }
         .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { step($0.key) }
+        // W: ignore whitespace, as long as no command key is held.
+        .onKeyPress(characters: CharacterSet(charactersIn: "wW"), phases: .down) { press in
+            guard diffFile != nil, press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+            ignoreWhitespace.toggle()
+            return .handled
+        }
+        .onChange(of: ignoreWhitespace) { Task { await preview.reload() } }
         .onExitCommand { close() }
+    }
+
+    private var whitespaceBanner: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "space")
+            Text("Whitespace changes hidden")
+            Spacer()
+            Button("Show") { ignoreWhitespace = false }
+                .buttonStyle(.link)
+                .hoverHelp(DiffDisplayOptions.ignoreWhitespaceHelp, highlight: false)
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(Color.accentColor.opacity(0.16))
     }
 
     /// Arrow keys while the peek is key: move the list selection (Finder-style) and
@@ -74,6 +104,7 @@ struct PreviewPanel: View {
             }
             Spacer()
             if diffFile != nil {
+                DiffOptionToggles()
                 Picker("", selection: $splitView) {
                     Image(systemName: "text.alignleft").tag(false)
                     Image(systemName: "rectangle.split.2x1").tag(true)
@@ -129,18 +160,70 @@ struct PreviewPanel: View {
 struct DiffContentView: View {
     let file: DiffFile
     var splitView: Bool = false
+    @AppStorage(DiffDisplayOptions.ignoreWhitespaceKey) private var ignoreWhitespace = false
+    @AppStorage(DiffDisplayOptions.syntaxColorsKey) private var syntaxColors = true
+    @AppStorage(DiffDisplayOptions.changedWordsKey) private var changedWords = true
+    @State private var highlight: (key: HighlightKey, value: DiffHighlight)?
+
+    private struct HighlightKey: Equatable {
+        let file: DiffFile
+        let syntaxColors: Bool
+        let changedWords: Bool
+        let ignoreWhitespace: Bool
+    }
+
+    private var key: HighlightKey {
+        HighlightKey(file: file, syntaxColors: syntaxColors, changedWords: changedWords,
+                     ignoreWhitespace: ignoreWhitespace)
+    }
+
+    /// Styling for this exact diff and options only; until it is ready, plain text.
+    private var style: DiffStyling {
+        let current = highlight.flatMap { $0.key == key ? $0.value : nil }
+        let colored = syntaxColors && current != nil && SyntaxLanguage.forPath(file.displayPath) != nil
+        return DiffStyling(highlight: current, syntaxColors: colored)
+    }
 
     var body: some View {
-        if file.isBinary {
-            ContentUnavailableView("Binary file", systemImage: "doc.zipper")
-        } else if file.hunks.isEmpty {
-            ContentUnavailableView("No textual changes", systemImage: "doc")
-        } else if splitView {
-            SplitDiffView(file: file)
-        } else {
-            UnifiedDiffView(file: file)
+        Group {
+            if file.isBinary {
+                ContentUnavailableView("Binary file", systemImage: "doc.zipper")
+            } else if file.onlyWhitespaceChanged {
+                VStack(spacing: 12) {
+                    ContentUnavailableView("Only whitespace changed", systemImage: "space",
+                        description: Text("Whitespace changes are hidden. Press W to show them."))
+                    Button("Show Whitespace Changes") { ignoreWhitespace = false }
+                }
+                .padding()
+            } else if file.hunks.isEmpty {
+                ContentUnavailableView("No textual changes", systemImage: "doc")
+            } else if splitView {
+                SplitDiffView(file: file, style: style)
+            } else {
+                UnifiedDiffView(file: file, style: style)
+            }
+        }
+        // Off the main actor and cancelled when the diff or an option changes, so
+        // a large diff opens plain right away and gains its colors a moment later.
+        .task(id: key) {
+            let key = key
+            guard key.syntaxColors || key.changedWords, !key.file.hunks.isEmpty else { return }
+            guard let value = await DiffHighlighter.make(file: key.file, syntaxColors: key.syntaxColors,
+                                                         changedWords: key.changedWords,
+                                                         ignoringWhitespace: key.ignoreWhitespace),
+                  !Task.isCancelled else { return }
+            highlight = (key, value)
         }
     }
+}
+
+/// What the rows need to draw styled text.
+private struct DiffStyling {
+    let highlight: DiffHighlight?
+    /// Token colors replace the red and green text, as on GitHub.
+    let syntaxColors: Bool
+
+    func text(_ hunk: Int, _ line: Int) -> AttributedString? { highlight?.line(hunk, line) }
 }
 
 // MARK: - Unified
@@ -149,14 +232,16 @@ struct DiffContentView: View {
 /// gutter) so the text fills the window instead of scrolling sideways.
 private struct UnifiedDiffView: View {
     let file: DiffFile
+    let style: DiffStyling
 
     var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(file.hunks.enumerated()), id: \.offset) { _, hunk in
+                ForEach(Array(file.hunks.enumerated()), id: \.offset) { hunkIndex, hunk in
                     HunkHeader(hunk: hunk)
-                    ForEach(Array(hunk.lines.enumerated()), id: \.offset) { _, line in
-                        UnifiedLineRow(line: line)
+                    ForEach(Array(hunk.lines.enumerated()), id: \.offset) { lineIndex, line in
+                        UnifiedLineRow(line: line, styled: style.text(hunkIndex, lineIndex),
+                                       syntaxColors: style.syntaxColors)
                     }
                 }
             }
@@ -168,6 +253,8 @@ private struct UnifiedDiffView: View {
 
 private struct UnifiedLineRow: View {
     let line: DiffLine
+    var styled: AttributedString?
+    var syntaxColors = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -176,7 +263,8 @@ private struct UnifiedLineRow: View {
             Text(DiffStyle.marker(line.kind))
                 .foregroundStyle(DiffStyle.foreground(line.kind).opacity(0.7))
                 .frame(width: 14, alignment: .center)
-            Text(line.content.isEmpty ? " " : line.content)
+            DiffLineText(content: line.content, styled: styled)
+                .foregroundStyle(syntaxColors ? .primary : DiffStyle.foreground(line.kind))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(size: 12, design: .monospaced))
@@ -194,17 +282,22 @@ private struct UnifiedLineRow: View {
 /// additions paired row-for-row (VSCode-style). Each column wraps within its half.
 private struct SplitDiffView: View {
     let file: DiffFile
+    let style: DiffStyling
 
     var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(file.hunks.enumerated()), id: \.offset) { _, hunk in
+                ForEach(Array(file.hunks.enumerated()), id: \.offset) { hunkIndex, hunk in
                     HunkHeader(hunk: hunk)
                     ForEach(Array(SplitRow.rows(for: hunk).enumerated()), id: \.offset) { _, row in
                         HStack(alignment: .top, spacing: 0) {
-                            SplitCell(line: row.left, number: row.left?.oldLineNumber)
+                            SplitCell(line: row.left?.line, number: row.left?.line.oldLineNumber,
+                                      styled: row.left.flatMap { style.text(hunkIndex, $0.index) },
+                                      syntaxColors: style.syntaxColors)
                             Divider()
-                            SplitCell(line: row.right, number: row.right?.newLineNumber)
+                            SplitCell(line: row.right?.line, number: row.right?.line.newLineNumber,
+                                      styled: row.right.flatMap { style.text(hunkIndex, $0.index) },
+                                      syntaxColors: style.syntaxColors)
                         }
                     }
                 }
@@ -217,24 +310,21 @@ private struct SplitDiffView: View {
 private struct SplitCell: View {
     let line: DiffLine?
     let number: Int?
+    var styled: AttributedString?
+    var syntaxColors = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             LineNumber(number)
-            Text(content)
+            DiffLineText(content: line?.content ?? "", styled: styled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(size: 12, design: .monospaced))
-        .foregroundStyle(line.map { DiffStyle.foreground($0.kind) } ?? .primary)
+        .foregroundStyle(syntaxColors ? .primary : line.map { DiffStyle.foreground($0.kind) } ?? .primary)
         .padding(.vertical, 1)
         .padding(.trailing, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(background)
-    }
-
-    private var content: String {
-        guard let line, !line.content.isEmpty else { return " " }
-        return line.content
     }
 
     // No counterpart on this side → a faint filler band, like VSCode's gaps.
@@ -247,15 +337,17 @@ private struct SplitCell: View {
 /// A paired row for the split view: the left (old) and right (new) line, either of
 /// which may be absent.
 private struct SplitRow {
-    var left: DiffLine?
-    var right: DiffLine?
+    /// A line with its index in the hunk, to find its styling.
+    typealias Side = (line: DiffLine, index: Int)
+    var left: Side?
+    var right: Side?
 
     /// Pair a hunk's lines: context lines sit on both sides; a run of deletions and
     /// additions is zipped row-for-row, with leftovers landing on one side only.
     static func rows(for hunk: DiffHunk) -> [SplitRow] {
         var rows: [SplitRow] = []
-        var dels: [DiffLine] = []
-        var adds: [DiffLine] = []
+        var dels: [Side] = []
+        var adds: [Side] = []
 
         func flush() {
             for index in 0..<max(dels.count, adds.count) {
@@ -268,15 +360,15 @@ private struct SplitRow {
             adds.removeAll(keepingCapacity: true)
         }
 
-        for line in hunk.lines {
+        for (index, line) in hunk.lines.enumerated() {
             switch line.kind {
             case .context:
                 flush()
-                rows.append(SplitRow(left: line, right: line))
+                rows.append(SplitRow(left: (line, index), right: (line, index)))
             case .deletion:
-                dels.append(line)
+                dels.append((line, index))
             case .addition:
-                adds.append(line)
+                adds.append((line, index))
             }
         }
         flush()
@@ -285,6 +377,21 @@ private struct SplitRow {
 }
 
 // MARK: - Shared pieces
+
+/// A line's text: styled when its colors are ready, plain otherwise. An empty
+/// line keeps one space so the row keeps its height.
+private struct DiffLineText: View {
+    let content: String
+    let styled: AttributedString?
+
+    var body: some View {
+        if let styled, !content.isEmpty {
+            Text(styled)
+        } else {
+            Text(content.isEmpty ? " " : content)
+        }
+    }
+}
 
 private struct HunkHeader: View {
     let hunk: DiffHunk
@@ -299,7 +406,7 @@ private struct HunkHeader: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.10))
+            .background(Color.secondary.opacity(0.14))
     }
 }
 
@@ -333,8 +440,9 @@ private enum DiffStyle {
     }
     static func background(_ kind: DiffLineKind) -> Color {
         switch kind {
-        case .addition: return Color.green.opacity(0.12)
-        case .deletion: return Color.red.opacity(0.12)
+        // Strong enough to read over the glass with a busy desktop behind it.
+        case .addition: return Color.green.opacity(0.20)
+        case .deletion: return Color.red.opacity(0.20)
         case .context: return .clear
         }
     }

@@ -198,24 +198,9 @@ struct RootView: View {
                 .measuredAsTransientRow()
             }
             if let notice = app.selector.cleanupNotice {
-                // News, not an error: muted, and it stays until dismissed.
-                VStack(spacing: 0) {
-                    Divider()
-                    HStack(spacing: 6) {
-                        Label(notice, systemImage: "checkmark.circle")
-                            .font(.caption).foregroundStyle(Palette.secondaryText).lineLimit(1)
-                        Spacer(minLength: 4)
-                        Button { app.selector.dismissCleanupNotice() } label: {
-                            Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
-                        }
-                        .buttonStyle(IconButtonStyle(size: CGSize(width: 18, height: 18)))
-                        .foregroundStyle(Palette.secondaryText)
-                        .accessibilityLabel("Dismiss")
-                        .hoverHelp("Dismiss")
-                    }
-                    .padding(.leading, 11).padding(.trailing, 6).padding(.vertical, 2)
-                }
-                .measuredAsTransientRow()
+                CleanupNoticeRow(notice: notice, isInView: { window?.occlusionState.contains(.visible) ?? true },
+                                 dismiss: { app.selector.dismissCleanupNotice() })
+                    .measuredAsTransientRow()
             }
         }
         .onPreferenceChange(TransientRowsHeightKey.self) { height in
