@@ -1,0 +1,180 @@
+import AppKit
+import Foundation
+import Observation
+import TeebeCore
+
+/// Every agent working or waiting across all added repositories, for the menu
+/// bar: the selected repository's rows, plus a slower scan of all repositories.
+/// It also keeps every repository's worktrees known to the agent readers, icon
+/// shown or not, so both scans give a session to the same single worktree.
+@MainActor
+@Observable
+final class AgentOverviewModel {
+    struct Entry: Identifiable, Equatable {
+        let repoPath: String
+        let repoTitle: String
+        let worktreePath: String
+        let name: String
+        let state: AgentActivityState
+        let context: AgentContext?
+        var id: String { worktreePath }
+    }
+
+    /// The menu's two groups, each ordered by project, then name.
+    struct Summary: Equatable {
+        var waiting: [Entry] = []
+        var working: [Entry] = []
+    }
+
+    /// Pure: who is waiting and who is working. Idle entries count for nothing.
+    static func summarize(_ entries: [Entry]) -> Summary {
+        func ordered(_ rows: [Entry]) -> [Entry] { rows.sorted(by: orderedBefore) }
+        return Summary(waiting: ordered(entries.filter { $0.state == .needsAttention }),
+                       working: ordered(entries.filter { $0.state == .working }))
+    }
+
+    private static func orderedBefore(_ lhs: Entry, _ rhs: Entry) -> Bool {
+        let repo = lhs.repoTitle.localizedStandardCompare(rhs.repoTitle)
+        if repo != .orderedSame { return repo == .orderedAscending }
+        let name = lhs.name.localizedStandardCompare(rhs.name)
+        if name != .orderedSame { return name == .orderedAscending }
+        return lhs.worktreePath < rhs.worktreePath
+    }
+
+    let app: AppModel
+    /// Agents in every added repository, from the last poll; only those outside
+    /// the selected repository are shown from here.
+    private(set) var others: [Entry] = []
+    @ObservationIgnored private var worktreesByRepo: [String: (listedAt: Date, paths: [(path: String, name: String)])] = [:]
+    @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored var openTerminalSession: (AgentTerminalSession) async -> Bool = AgentTerminalJump.open
+    @ObservationIgnored var openMainWindow: () -> Void = MainWindowOpener.bringForward
+    @ObservationIgnored private var openingAgent = false
+    var pollInterval: TimeInterval = 15
+    /// How long a repository's worktree list is reused before it is read again.
+    var worktreeListInterval: TimeInterval = 120
+
+    init(app: AppModel) {
+        self.app = app
+        app.onBootstrap = { [weak self] in await self?.refreshOthers() }
+    }
+
+    var entries: [Entry] {
+        let selected = app.selector.selectedRepo
+        let added = Set(app.repositories.map(\.path))
+        var result = others.filter { $0.repoPath != selected?.path && added.contains($0.repoPath) }
+        if let selected {
+            let title = app.repositoryTitle(selected)
+            for worktree in app.selector.worktrees {
+                let info = app.selector.info(for: worktree)
+                guard info.agentState != .idle else { continue }
+                result.append(Entry(repoPath: selected.path, repoTitle: title, worktreePath: worktree.path,
+                                    name: worktree.branch ?? worktree.name, state: info.agentState,
+                                    context: info.agentContext))
+            }
+        }
+        return result
+    }
+
+    var summary: Summary { Self.summarize(entries) }
+
+    /// What the open menu showed when it opened; nil while it is closed.
+    private(set) var heldSummary: Summary?
+    /// The menu's rows. They hold still while the menu is open: rows should not
+    /// move under the pointer, and a row whose text grows in an open menu is cut
+    /// off by the menu's edge. The counts in the menu bar stay live.
+    var menuSummary: Summary { heldSummary ?? summary }
+
+    func menuOpened() { heldSummary = summary }
+    func menuClosed() { heldSummary = nil }
+
+    /// Keep worktree ownership current; scan agents while the icon is shown.
+    func start() {
+        guard pollTask == nil else { return }
+        for (name, opened) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    if opened { self?.menuOpened() } else { self?.menuClosed() }
+                }
+            }
+        }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.refreshOthers()
+                try? await Task.sleep(for: .seconds(self.pollInterval))
+            }
+        }
+    }
+
+    func refreshOthers(now: Date = Date()) async {
+        // The selected repository is scanned too, so its agents are already known
+        // here the moment another one is picked.
+        let environment = app.environment
+        let previousPaths = environment.knownWorktrees.paths
+        for repo in app.repositories {
+            if repo.path == app.selector.selectedRepo?.path {
+                // The selector owns this repository's filtered list, including
+                // an empty one. Keep its names ready when selection changes. An
+                // empty list (the repository could not be read) stays due, so it
+                // is listed here as soon as another repository is picked.
+                let visible = app.selector.worktrees.map { ($0.path, $0.branch ?? $0.name) }
+                worktreesByRepo[repo.path] = (visible.isEmpty ? .distantPast : now, visible)
+                continue
+            }
+            guard worktreesByRepo[repo.path].map({ now.timeIntervalSince($0.listedAt) >= worktreeListInterval }) ?? true,
+                  let listed = try? await environment.worktreeService.worktrees(for: repo),
+                  app.repositories.contains(repo), app.selector.selectedRepo?.path != repo.path else { continue }
+            worktreesByRepo[repo.path] = (now, listed.map { ($0.path, $0.branch ?? $0.name) })
+            environment.knownWorktrees.update(listed.map(\.path), forRepository: repo.path)
+        }
+        let repos = app.repositories
+        let added = Set(repos.map(\.path))
+        worktreesByRepo = worktreesByRepo.filter { added.contains($0.key) }
+        environment.knownWorktrees.retainRepositories(Array(added))
+        let owners = Dictionary(repos.flatMap { repo in
+            let names = Dictionary(worktreesByRepo[repo.path]?.paths ?? [], uniquingKeysWith: { first, _ in first })
+            return environment.knownWorktrees.paths(forRepository: repo.path).map { path in
+                (path, (repo, names[path] ?? Worktree(path: path).name))
+            }
+        }, uniquingKeysWith: { first, _ in first })
+        let paths = Array(owners.keys)
+        if previousPaths != environment.knownWorktrees.paths, app.selector.selectedRepo != nil {
+            await app.selector.refreshAgentStates(now: now)
+        }
+        guard repos.count > 1, app.agentDisplay.showsMenuBarIcon else { others = []; return }
+        let snapshot = environment.agentSnapshot
+        let statuses = environment.agentStatuses
+        let agents = await Task.detached {
+            AppEnvironment.readAgents(paths, now, snapshot: snapshot, statuses: statuses)
+        }.value
+        others = agents.states.compactMap { path, state in
+            guard state != .idle, let (repo, name) = owners[path] else { return nil }
+            return Entry(repoPath: repo.path, repoTitle: app.repositoryTitle(repo), worktreePath: path, name: name,
+                         state: state, context: agents.contexts[path])
+        }
+    }
+
+    /// Try this exact session once, then preserve the existing teebe navigation.
+    /// Repeated clicks while resolution is running cannot race two focus requests.
+    func open(_ entry: Entry) async {
+        guard !openingAgent else { return }
+        openingAgent = true
+        defer { openingAgent = false }
+        if app.agentDisplay.clickDestination == .terminal, entry.state != .idle,
+           let session = entry.context?.terminalSession, await openTerminalSession(session) { return }
+        openMainWindow()
+        app.activeSection = .worktrees
+        if app.selector.selectedRepo?.path == entry.repoPath {
+            if let worktree = app.selector.worktrees.first(where: { $0.path == entry.worktreePath }) {
+                await app.selector.selectWorktree(worktree)
+            }
+        } else if let repo = app.repositories.first(where: { $0.path == entry.repoPath }) {
+            await app.selector.selectRepo(repo, preferredWorktreePath: entry.worktreePath)
+        }
+    }
+
+    static func bringMainWindowForward() {
+        MainWindowOpener.bringForward()
+    }
+}

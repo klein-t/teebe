@@ -7,7 +7,8 @@ import TeebeCore
 /// window never appears (no activation policy → background process).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        // The saved Dock choice, applied before any window shows.
+        NSApp.setActivationPolicy(DockPresence.savedShowsDockIcon() ? .regular : .accessory)
         AgentNotifier.showWhileFrontmost()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -16,12 +17,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // with the raw full-bleed PNG, so the running app's Dock icon goes flat.
         // Leaving it unset lets the system icon render correctly while running too.
         NSApp.activate(ignoringOtherApps: true)
+        // Without a Dock icon, closing the last window would leave an invisible app
+        // holding the keyboard: hand focus back to the app used before.
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil,
+                                               queue: .main) { note in
+            guard let closing = note.object as? NSWindow, closing.canBecomeMain else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard DockPresence.isAccessory,
+                          !NSApp.windows.contains(where: { $0 !== closing && $0.isVisible && $0.canBecomeMain }) else { return }
+                    NSApp.hide(nil)
+                }
+            }
+        }
     }
     /// Quit when the main window goes away, but never while a regular window is
     /// still showing. Belt and braces for the pinned (floating-level) window, which
     /// window-tracking code tends to overlook (#105).
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        !Self.hasVisibleWindow(in: sender.windows)
+        // Without a Dock icon the app lives in the menu bar, window or not.
+        guard !DockPresence.isAccessory else { return false }
+        return !Self.hasVisibleWindow(in: sender.windows)
+    }
+
+    /// Opening teebe again (Finder, Spotlight, the Dock) brings its window back,
+    /// also when it runs from the menu bar with its window closed.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        MainWindowOpener.bringForward()
+        return false
+    }
+
+    /// Without a Dock icon, launching teebe again only activates it, with no
+    /// reopen event: bring the window back when it was closed.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard DockPresence.isAccessory, MainWindowOpener.mainWindow?.isVisible != true else { return }
+        MainWindowOpener.bringForward()
     }
 
     /// True if any regular (non-panel) window is still on screen.
@@ -44,12 +74,17 @@ struct TeebeApp: App {
     @State private var app: AppModel
     @State private var preview: PreviewModel
     @State private var whatsNew: WhatsNewModel
+    @State private var agentOverview: AgentOverviewModel
     @StateObject private var updater = UpdaterController()
 
     init() {
         // One shared environment, constructed exactly once.
         let environment = AppEnvironment.live()
-        _app = State(initialValue: AppModel(environment: environment))
+        let appModel = AppModel(environment: environment)
+        _app = State(initialValue: appModel)
+        let overview = AgentOverviewModel(app: appModel)
+        overview.start()
+        _agentOverview = State(initialValue: overview)
         _preview = State(initialValue: PreviewModel(environment: environment))
         _whatsNew = State(initialValue: WhatsNewModel(
             version: Brand.appVersion,
@@ -59,7 +94,7 @@ struct TeebeApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(Brand.name) {
+        WindowGroup(Brand.name, id: WindowID.main) {
             RootWindowContent(app: app, preview: preview, whatsNew: whatsNew)
         }
         .windowStyle(.hiddenTitleBar)
@@ -99,6 +134,14 @@ struct TeebeApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
 
+        // Agents working and waiting in every project, from the menu bar.
+        MenuBarExtra(isInserted: Binding(get: { app.agentDisplay.showsMenuBarIcon },
+                                         set: { app.agentDisplay.showsMenuBarIcon = $0 })) {
+            AgentMenuBarMenu(overview: agentOverview, display: app.agentDisplay, app: app)
+        } label: {
+            AgentMenuBarLabel(overview: agentOverview, display: app.agentDisplay)
+        }
+
         // Adds "Settings…" (⌘,) to the app menu.
         Settings {
             SettingsView(app: app, updater: updater)
@@ -108,6 +151,7 @@ struct TeebeApp: App {
 
 /// Stable identifiers for the secondary windows opened via `openWindow(id:)`.
 enum WindowID {
+    static let main = "main"
     static let whatsNew = "whatsNew"
     static let shortcuts = "shortcuts"
 }

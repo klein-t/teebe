@@ -187,19 +187,24 @@ public struct CodexRolloutScanner: AgentActivitySource {
     /// are reused: a busy agent rewrites one or two rollouts a second, not all.
     private let cache = CodexSummaryCache()
     private let archive = CodexArchive()
-    private let completions = CodexCompletionJournal()
+    private let completions: CodexCompletionJournal
+    private let knownWorktrees: KnownWorktrees
     /// One poll asks for `states` and then `turnEnds` at the same instant; they
     /// share one listing of the rollout folders instead of listing them twice.
     private let pollListing = CodexPollListing()
+    private let contextCache = AgentContextCache()
 
     public init(sessionsRoot: URL = CodexRolloutScanner.defaultSessionsRoot,
                 thresholds: AgentStatusThresholds = AgentStatusThresholds(),
-                tailBytes: Int = 256 * 1_024, lookbackDays: Int = 30, archiveInterval: TimeInterval = 15) {
+                tailBytes: Int = 256 * 1_024, lookbackDays: Int = 30, archiveInterval: TimeInterval = 15,
+                knownWorktrees: KnownWorktrees = KnownWorktrees()) {
         self.sessionsRoot = sessionsRoot
         self.thresholds = thresholds
         self.tailBytes = tailBytes
         self.lookbackDays = lookbackDays
         self.archiveInterval = archiveInterval
+        self.knownWorktrees = knownWorktrees
+        self.completions = CodexCompletionJournal(knownWorktrees: knownWorktrees)
     }
 
     public static var defaultSessionsRoot: URL {
@@ -209,7 +214,17 @@ public struct CodexRolloutScanner: AgentActivitySource {
     }
 
     public func states(forWorktreePaths paths: [String], now: Date) -> [String: AgentActivityState] {
+        scan(paths, now: now, readingContexts: false).states
+    }
+
+    /// `states`, plus the context of each worktree's winning thread.
+    public func snapshot(forWorktreePaths paths: [String], now: Date) -> AgentSnapshot {
+        scan(paths, now: now, readingContexts: true)
+    }
+
+    private func scan(_ paths: [String], now: Date, readingContexts: Bool) -> AgentSnapshot {
         var result: [String: AgentActivityState] = [:]
+        var winners: [String: SessionWinner] = [:]
         for path in paths { result[path] = .idle }
         let files = rolloutFiles(now: now)
         pollListing.store(files, at: now)
@@ -224,8 +239,10 @@ public struct CodexRolloutScanner: AgentActivitySource {
             let state = Self.state(of: thread, now: now, thresholds: thresholds)
             guard state != .idle, let owner = owner(of: thread, among: paths) else { continue }
             result[owner] = state
+            winners[owner] = SessionWinner(url: file.url, state: state, lastActivity: thread.lastActivity ?? file.mtime)
         }
-        // Busy subagents: work where they are, and where their parent is.
+        // Busy subagents: work where they are, and where their parent is. Each is
+        // marked only where it is owned.
         for thread in summaries.values {
             guard case let .subagent(parentID) = thread.role,
                   Self.state(of: thread, now: now, thresholds: thresholds) == .working else { continue }
@@ -233,7 +250,19 @@ public struct CodexRolloutScanner: AgentActivitySource {
             let parent = summaries[parentID] ?? files[parentID].flatMap { cachedSummary(of: $0.url, id: parentID) }
             if let parent, let owner = owner(of: parent, among: paths) { result[owner] = .working }
         }
-        return result
+        return AgentSnapshot(states: result, contexts: readingContexts ? contexts(of: winners).reconciled(with: result) : [:])
+    }
+
+    /// The context of each worktree's winning session file.
+    private func contexts(of winners: [String: SessionWinner])
+        -> [String: AgentContext] {
+        winners.mapValues { winner in
+            var context = contextCache.context(of: winner.url, state: winner.state, lastActivity: winner.lastActivity,
+                                               tailBytes: tailBytes, reader: .codex)
+            context.terminalSession = AgentTerminalSession(provider: .codex, id: Self.threadID(of: winner.url),
+                                                           transcriptPath: winner.url.path)
+            return context
+        }
     }
 
     public func turnEnds(forWorktreePaths paths: [String], now: Date) -> [AgentTurnEnd] {
@@ -257,8 +286,12 @@ public struct CodexRolloutScanner: AgentActivitySource {
         return .working
     }
 
+    /// The worktree of `paths` this thread belongs to; nil when it is outside
+    /// them, including in another repository's known worktree.
     private func owner(of thread: CodexThreadSummary, among paths: [String]) -> String? {
-        WorktreeAttribution.owner(targets: thread.targets, cwd: thread.cwd, among: paths)
+        guard case let .here(path) = WorktreeAttribution.claim(
+            targets: thread.targets, cwd: thread.cwd, among: paths, knownPaths: knownWorktrees.paths) else { return nil }
+        return path
     }
 
     // MARK: - Files

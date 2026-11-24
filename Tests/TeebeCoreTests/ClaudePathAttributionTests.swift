@@ -43,14 +43,14 @@ struct ClaudePathAttributionTests {
         var launchDir: URL
     }
 
-    func makeFixture() throws -> Fixture {
+    func makeFixture(knownWorktrees: KnownWorktrees = KnownWorktrees()) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("teebe-tests", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let launchDir = root.appendingPathComponent(
             AgentSessionScanner.projectDirName(forWorktreePath: launch), isDirectory: true)
         try FileManager.default.createDirectory(at: launchDir, withIntermediateDirectories: true)
-        return Fixture(scanner: AgentSessionScanner(projectsRoot: root), root: root, launchDir: launchDir)
+        return Fixture(scanner: AgentSessionScanner(projectsRoot: root, knownWorktrees: knownWorktrees), root: root, launchDir: launchDir)
     }
 
     func write(_ lines: [String], _ fx: Fixture) throws {
@@ -127,5 +127,89 @@ struct ClaudePathAttributionTests {
         let states = fx.scanner.states(forWorktreePaths: paths, now: now)
         #expect(states[launch] == .working)
         #expect(states[lens] == .idle)
+    }
+
+    @Test("another known repository owns a session by targets or entry cwd", arguments: [true, false])
+    func knownRepositoryOwnsSession(byTarget: Bool) throws {
+        let known = KnownWorktrees()
+        let fx = try makeFixture(knownWorktrees: known)
+        defer { try? FileManager.default.removeItem(at: fx.root) }
+        try write([toolUse("Read", input: byTarget ? #"{"file_path":"\#(lens)/file.swift"}"# : #"{"file_path":"/outside/file"}"#,
+                           at: now.addingTimeInterval(-5), cwd: byTarget ? launch : lens)], fx)
+        let original = fx.scanner.snapshot(forWorktreePaths: [launch], now: now)
+        #expect(original.states[launch] == .working)
+        #expect(original.contexts[launch] != nil)
+        known.update([launch, lens], forRepository: "/repo")
+        let local = fx.scanner.snapshot(forWorktreePaths: [launch], now: now)
+        #expect(local.states == [launch: .idle])
+        #expect(local.contexts.isEmpty)
+        #expect(fx.scanner.turnEnds(forWorktreePaths: [launch], now: now).isEmpty)
+        let all = fx.scanner.snapshot(forWorktreePaths: [launch, lens], now: now)
+        #expect(all.states == [launch: .idle, lens: .working])
+        #expect(Set(all.contexts.keys) == [lens])
+        let foreign = fx.scanner.snapshot(forWorktreePaths: [lens], now: now)
+        #expect(foreign.states == [lens: .working])
+        #expect(foreign.contexts[lens]?.terminalSession == AgentTerminalSession(provider: .claude, id: "s1",
+            transcriptPath: fx.launchDir.appendingPathComponent("s1.jsonl").path, claudeProjectsPath: fx.root.path))
+    }
+
+    @Test("targets and cwd outside all known worktrees keep the launch fallback")
+    func unknownWorktreeKeepsLaunchFallback() throws {
+        let known = KnownWorktrees()
+        known.update([launch, lens], forRepository: "/repo")
+        let fx = try makeFixture(knownWorktrees: known)
+        defer { try? FileManager.default.removeItem(at: fx.root) }
+        try write([toolUse("Read", input: #"{"file_path":"/outside/file"}"#,
+                           at: now.addingTimeInterval(-5), cwd: "/outside")], fx)
+        let snapshot = fx.scanner.snapshot(forWorktreePaths: [launch], now: now)
+        #expect(snapshot.states[launch] == .working)
+        #expect(snapshot.contexts[launch] != nil)
+        let foreign = fx.scanner.snapshot(forWorktreePaths: [lens], now: now)
+        #expect(foreign.states == [lens: .idle])
+        #expect(foreign.contexts.isEmpty)
+    }
+
+    @Test("a busy subagent in another repository marks only where it and its parent are owned, in every scan",
+          arguments: [true, false], [true, false])
+    func busySubagentInKnownRepository(byTarget: Bool, parentHere: Bool) throws {
+        let known = KnownWorktrees()
+        let fx = try makeFixture(knownWorktrees: known)
+        defer { try? FileManager.default.removeItem(at: fx.root) }
+        try write([toolResult(at: now.addingTimeInterval(-4_000), cwd: parentHere ? launch : lens)], fx)
+        let directory = fx.launchDir.appendingPathComponent("s1/subagents")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("agent-child.jsonl")
+        let line = toolUse("Read", input: byTarget ? #"{"file_path":"\#(lens)/file.swift"}"# : #"{"file_path":"/outside/file"}"#,
+                           at: now.addingTimeInterval(-5), cwd: byTarget ? launch : lens)
+            .replacingOccurrences(of: #""isSidechain":false"#, with: #""isSidechain":true"#)
+        try (line + "\n").write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-2)], ofItemAtPath: file.path)
+        // Nothing else known: the launch worktree is all there is to mark.
+        #expect(fx.scanner.states(forWorktreePaths: [launch], now: now)[launch] == .working)
+        known.update([launch, lens], forRepository: "/repo")
+        // A parent owned here is still busy while its subagent works elsewhere;
+        // the subagent itself no longer falls back to the launch worktree.
+        let here: AgentActivityState = parentHere ? .working : .idle
+        #expect(fx.scanner.states(forWorktreePaths: [launch], now: now) == [launch: here])
+        #expect(fx.scanner.states(forWorktreePaths: [launch, lens], now: now) == [launch: here, lens: .working])
+        #expect(fx.scanner.states(forWorktreePaths: [lens], now: now) == [lens: .working])
+    }
+
+    @Test("foreign logs keep the mtime filter and live-session exception", arguments: [true, false])
+    func foreignOldLogNeedsLiveSession(isLive: Bool) throws {
+        let known = KnownWorktrees()
+        known.update([launch, lens], forRepository: "/repo")
+        var fx = try makeFixture(knownWorktrees: known)
+        defer { try? FileManager.default.removeItem(at: fx.root) }
+        try write([toolUse("Read", input: #"{"file_path":"\#(lens)/file.swift"}"#,
+                           at: now.addingTimeInterval(-5), cwd: launch)], fx)
+        let file = fx.launchDir.appendingPathComponent("s1.jsonl")
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-4_000)], ofItemAtPath: file.path)
+        fx.scanner.sessionsRoot = fx.root.appendingPathComponent("sessions")
+        fx.scanner.isProcessAlive = { _ in isLive }
+        try FileManager.default.createDirectory(at: fx.scanner.sessionsRoot, withIntermediateDirectories: true)
+        try #"{"pid":123,"sessionId":"s1","cwd":"\#(launch)","status":"busy"}"#
+            .write(to: fx.scanner.sessionsRoot.appendingPathComponent("123.json"), atomically: true, encoding: .utf8)
+        #expect(fx.scanner.states(forWorktreePaths: [lens], now: now) == [lens: isLive ? .working : .idle])
     }
 }

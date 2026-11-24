@@ -22,6 +22,8 @@ enum WorktreePreferences {
 final class AppModel {
     private(set) var repositories: [Repository] = []
     let preferences: PreferencesModel
+    /// What rows and the menu bar show about agents (global, not per project).
+    let agentDisplay: AgentDisplayPreferences
     var groupWorktreesByMergeStatus: Bool {
         get { preferences.effective.groupByStatus ?? false }
         set { preferences.set(\.groupByStatus, newValue) }
@@ -78,6 +80,10 @@ final class AppModel {
     enum FocusSection: Equatable { case worktrees, changes, files }
     var activeSection: FocusSection = .files
 
+    /// The tab Settings shows. Not saved: menus set it before opening Settings,
+    /// and it keeps the tab last looked at for the rest of the run.
+    var settingsTab: SettingsTab = .general
+
     /// Auto-dismiss timer for the current error banner, so a transient failure
     /// (e.g. "Not a git repository") never sticks around indefinitely.
     @ObservationIgnored private var errorClearTask: Task<Void, Never>?
@@ -108,6 +114,8 @@ final class AppModel {
     /// `persist()` that property assignments would otherwise trigger during load.
     @ObservationIgnored private var isHydrating = false
     @ObservationIgnored private var isApplyingPreferences = false
+    /// Awaited after restoring selection, so shared agent ownership is ready too.
+    @ObservationIgnored var onBootstrap: (() async -> Void)?
 
     /// 0.7.0 and earlier always posted agent notifications with sound and saved no
     /// choice, so keep them on for those users while new installs start with them off.
@@ -136,6 +144,7 @@ final class AppModel {
         }
         self.state = loaded
         self.preferences = PreferencesModel(state: self.state)
+        self.agentDisplay = AgentDisplayPreferences(state: self.state)
         self.selector = SelectorModel(environment: environment)
         self.mergeStatus = WorktreeMergeModel(service: mergeService ?? WorktreeCleanupService(git: environment.git))
         self.remoteRefresher = RemoteRefresher(git: environment.git)
@@ -161,6 +170,8 @@ final class AppModel {
         // Deleted worktrees are never forgotten while a removal is running.
         self.selector.isRemovalRunning = { [weak self] in self?.groupActionsStorage?.isWorking == true }
         self.openWith.onChange = { [weak self] in self?.persist() }
+        self.agentDisplay.onChange = { [weak self] in self?.persist() }
+        self.agentDisplay.onDockIconChange = { DockPresence.apply(showsDockIcon: $0) }
         self.preferences.onChange = { [weak self] in
             guard let self else { return }
             self.applyFilePreferences()
@@ -225,10 +236,14 @@ final class AppModel {
         let target = lastRepoPath.flatMap { last in repositories.first { $0.path == last } }
             ?? repositories.first
         isHydrating = false
-        guard let target else { persist(); return }
         // One shot: the saved worktree (when it still exists) is selected directly,
         // never primary-then-saved — the double load crashed the first layout pass.
-        await selector.selectRepo(target, preferredWorktreePath: lastWorktreePath)
+        if let target {
+            await selector.selectRepo(target, preferredWorktreePath: lastWorktreePath)
+        } else {
+            persist()
+        }
+        await onBootstrap?()
     }
 
     // MARK: - Low-power mode + Claude Code hook
@@ -656,6 +671,7 @@ final class AppModel {
         state.terminalApp = terminal.rawValue
         state.agentNotifications = agentNotifications
         state.notificationSound = notificationSound
+        agentDisplay.write(to: &state)
         state.openWithApps = openWith.apps.isEmpty ? nil : openWith.apps
         state.openWithAppsByRepo = openWith.projectApps
         state.openWithPolicy = openWith.policy.rawValue

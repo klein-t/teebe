@@ -6,6 +6,7 @@ import TeebeCore
 
 final class FakeGitClient: GitClient, @unchecked Sendable {
     var worktreesResult: [Worktree] = []
+    var worktreesByRepo: [String: [Worktree]] = [:]
     var branchesResult: [Branch] = []
     var statusResult = StatusResult()
     var workingDiffResult: DiffFile?
@@ -35,7 +36,7 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     func worktrees(repoPath: String) async throws -> [Worktree] {
         if let beforeWorktrees { await beforeWorktrees() }
         if let worktreesError { throw worktreesError }
-        return worktreesResult
+        return worktreesByRepo[repoPath] ?? worktreesResult
     }
     func branches(repoPath: String) async throws -> [Branch] { branchesResult }
     func status(worktreePath: String) async throws -> StatusResult {
@@ -289,7 +290,9 @@ func makeTestEnvironment(
     holdsUnsavedWork: @escaping @Sendable (Worktree, String) async -> Bool = { _, _ in false },
     /// Defaults to picking a fake app, as if the user chose one every time.
     chooseApp: @escaping @MainActor (URL?, String, URL?) -> URL? = { _, _, _ in URL(fileURLWithPath: "/Applications/Editor.app") },
-    appExists: @escaping @Sendable (URL) -> Bool = { _ in true }
+    appExists: @escaping @Sendable (URL) -> Bool = { _ in true },
+    agentSnapshot: (@Sendable ([String], Date) -> AgentSnapshot)? = nil,
+    knownWorktrees: KnownWorktrees = KnownWorktrees()
 ) -> AppEnvironment {
     let storeURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("tb-test-\(UUID().uuidString)")
@@ -314,6 +317,8 @@ func makeTestEnvironment(
         isVolumeMounted: isVolumeMounted,
         holdsUnsavedWork: holdsUnsavedWork,
         chooseApp: chooseApp,
-        appExists: appExists
+        appExists: appExists,
+        agentSnapshot: agentSnapshot,
+        knownWorktrees: knownWorktrees
     )
 }

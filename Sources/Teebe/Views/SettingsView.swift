@@ -27,6 +27,11 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// The tabs of Settings, so a menu can open it on the one it means.
+enum SettingsTab: Hashable {
+    case general, worktrees, files, integrations, updates
+}
+
 /// Standard macOS Settings (Command-comma) edits defaults, never the currently
 /// selected project's overrides. The main-window menus own those overrides.
 struct SettingsView: View {
@@ -36,12 +41,12 @@ struct SettingsView: View {
     @State private var comparison = ""
 
     var body: some View {
-        TabView {
-            general.tabItem { Label("General", systemImage: "gearshape") }
-            worktrees.tabItem { Label("Worktrees", systemImage: "arrow.triangle.branch") }
-            files.tabItem { Label("Files", systemImage: "doc") }
-            integrations.tabItem { Label("Integrations", systemImage: "link") }
-            updates.tabItem { Label("Updates", systemImage: "arrow.down.circle") }
+        TabView(selection: $app.settingsTab) {
+            general.tabItem { Label("General", systemImage: "gearshape") }.tag(SettingsTab.general)
+            worktrees.tabItem { Label("Worktrees", systemImage: "arrow.triangle.branch") }.tag(SettingsTab.worktrees)
+            files.tabItem { Label("Files", systemImage: "doc") }.tag(SettingsTab.files)
+            integrations.tabItem { Label("Integrations", systemImage: "link") }.tag(SettingsTab.integrations)
+            updates.tabItem { Label("Updates", systemImage: "arrow.down.circle") }.tag(SettingsTab.updates)
         }
         .padding(12)
         .frame(width: 480, height: 480)
@@ -188,6 +193,7 @@ struct SettingsView: View {
                 }
                 if let message = app.notificationTestMessage { Text(message).font(Typography.secondary).foregroundStyle(.secondary) }
             }
+            AgentDisplaySettingsSection(display: app.agentDisplay)
             Section("Agent activity") {
                 Text("Claude Code and Codex: status detection. Other tools: file and process activity.")
                     .font(Typography.secondary).foregroundStyle(.secondary)

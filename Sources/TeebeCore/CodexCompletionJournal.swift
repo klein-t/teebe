@@ -10,13 +10,16 @@ final class CodexCompletionJournal: @unchecked Sendable {
     static let seedWindow = WorktreeAttribution.targetWindow
 
     private let lock = NSLock()
+    private let knownWorktrees: KnownWorktrees
     private let open: (URL) -> FileHandle?
     private var beganAt: Date?
     private var reading = false
     private var cursors: [URL: Cursor] = [:]
     private var endings: [String: Ending] = [:]
 
-    init(open: @escaping (URL) -> FileHandle? = { try? FileHandle(forReadingFrom: $0) }) {
+    init(knownWorktrees: KnownWorktrees = KnownWorktrees(),
+         open: @escaping (URL) -> FileHandle? = { try? FileHandle(forReadingFrom: $0) }) {
+        self.knownWorktrees = knownWorktrees
         self.open = open
     }
 
@@ -68,7 +71,8 @@ final class CodexCompletionJournal: @unchecked Sendable {
 
     private func attributed(paths: [String]) -> [AgentTurnEnd] {
         endings.values.compactMap { ending in
-            guard let owner = WorktreeAttribution.owner(targets: ending.targets, cwd: ending.cwd, among: paths) else { return nil }
+            guard case let .here(owner) = WorktreeAttribution.claim(
+                targets: ending.targets, cwd: ending.cwd, among: paths, knownPaths: knownWorktrees.paths) else { return nil }
             return AgentTurnEnd(id: ending.id, worktreePath: owner, endedAt: ending.date, completed: ending.completed)
         }
     }

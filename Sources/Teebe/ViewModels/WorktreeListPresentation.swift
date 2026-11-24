@@ -123,6 +123,14 @@ struct WorktreeListPresentation {
     let naturalHeight: CGFloat
 
     static let rowHeight: CGFloat = 26
+    /// Each agent line under a branch name (task, question) adds this much.
+    static let agentLineHeight: CGFloat = 15
+    /// Below the last agent line, so the row keeps as much room under its text
+    /// as the branch name has above it. One-line rows are unchanged.
+    static let agentLinesBottomInset: CGFloat = 6
+    static func rowHeight(agentLines: Int) -> CGFloat {
+        agentLines == 0 ? rowHeight : rowHeight + CGFloat(agentLines) * agentLineHeight + agentLinesBottomInset
+    }
     static let groupHeight: CGFloat = 25
     static let repoHeight: CGFloat = 29
     static let verticalPadding: CGFloat = 8
@@ -144,6 +152,7 @@ struct WorktreeListPresentation {
         visibleWorktrees = pinned + groups.filter { !collapsed.contains($0.kind) }.flatMap(\.worktrees)
         naturalHeight = (hasRepository ? Self.repoHeight : 0) + Self.verticalPadding
             + CGFloat(max(visibleWorktrees.count, worktrees.isEmpty ? 1 : 0)) * Self.rowHeight
+            + visibleWorktrees.reduce(0) { $0 + Self.rowHeight(agentLines: statuses[$1.path]?.agentLines.count ?? 0) - Self.rowHeight }
             + CGFloat(groups.count) * Self.groupHeight
     }
 }
@@ -156,7 +165,8 @@ extension AppModel {
         let snapshot = mergeStatus.snapshot
         return WorktreeStatus(
             worktree: worktree, merge: mergeEntry(for: worktree, info: info),
-            info: info, targetNames: snapshot?.targetNames ?? [], isChecking: mergeStatus.isChecking)
+            info: info, targetNames: snapshot?.targetNames ?? [], isChecking: mergeStatus.isChecking,
+            agentDisplay: agentDisplay.options)
     }
 
     /// What the removal sheet says for this row, from the same inputs as its mark.
