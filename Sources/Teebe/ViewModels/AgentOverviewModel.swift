@@ -115,8 +115,11 @@ final class AgentOverviewModel {
         for repo in app.repositories {
             if repo.path == app.selector.selectedRepo?.path {
                 // The selector owns this repository's filtered list, including
-                // an empty one. Keep its names ready when selection changes.
-                worktreesByRepo[repo.path] = (now, app.selector.worktrees.map { ($0.path, $0.branch ?? $0.name) })
+                // an empty one. Keep its names ready when selection changes. An
+                // empty list (the repository could not be read) stays due, so it
+                // is listed here as soon as another repository is picked.
+                let visible = app.selector.worktrees.map { ($0.path, $0.branch ?? $0.name) }
+                worktreesByRepo[repo.path] = (visible.isEmpty ? .distantPast : now, visible)
                 continue
             }
             guard worktreesByRepo[repo.path].map({ now.timeIntervalSince($0.listedAt) >= worktreeListInterval }) ?? true,

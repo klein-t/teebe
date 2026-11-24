@@ -252,6 +252,31 @@ struct AgentOverviewTests {
         #expect(selector.info(for: git.worktreesResult[0]).agentState == .working)
     }
 
+    @Test("a burst of writes by another repository's sessions re-derives twice, at its start and its end; own writes always do")
+    func foreignWritesAreBounded() async {
+        let known = KnownWorktrees()
+        known.update(["/repo-a"], forRepository: "/repo-a")
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo-b", isPrimary: true)]
+        let scans = StateBox()
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git, agentStatuses: { _, _ in
+            scans.increment()
+            return ["/repo-b": .working]
+        }, agentProjectsRootPath: "/logs/projects", knownWorktrees: known))
+        defer { selector.clearSelection() }
+        selector.foreignWatchInterval = 0.2
+        await selector.selectRepo(Repository(path: "/repo-b"))
+        let before = scans.count
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<6 {
+                group.addTask { @MainActor in await selector.handleAgentWatchEvent(["/logs/projects/-repo-a/session.jsonl"]) }
+            }
+        }
+        #expect(scans.count == before + 2)
+        for _ in 0..<3 { await selector.handleAgentWatchEvent(["/logs/projects/-repo-b/session.jsonl"]) }
+        #expect(scans.count == before + 5)
+    }
+
     @Test("a poll already listing a repository cannot replace its newly selected visible list")
     func selectedListWinsOverInFlightPoll() async {
         let git = FakeGitClient()
@@ -603,4 +628,7 @@ private final class StateBox: @unchecked Sendable {
         get { lock.withLock { stored } }
         set { lock.withLock { stored = newValue } }
     }
+    private var storedCount = 0
+    var count: Int { lock.withLock { storedCount } }
+    func increment() { lock.withLock { storedCount += 1 } }
 }

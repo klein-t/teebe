@@ -128,6 +128,10 @@ final class SelectorModel {
     }
     /// Delay before the catch-up re-derive that follows a hook ping.
     var agentPingSettle: TimeInterval = 2
+    /// How often writes by other repositories' sessions may re-derive the badges.
+    @ObservationIgnored var foreignWatchInterval: TimeInterval = 5
+    @ObservationIgnored private var lastForeignRefresh = Date.distantPast
+    @ObservationIgnored private var foreignRefreshPending = false
     /// How long a worktree stays working after its last file change or busy
     /// process (`GenericActivity.window`). A var so tests can shrink it.
     var liveWindow: TimeInterval = GenericActivity.window
@@ -729,17 +733,37 @@ final class SelectorModel {
         await refreshAgentStates()
     }
 
-    /// Re-derive for writes in any known launch directory, including sessions
-    /// launched in another repository that now work in the selected one.
+    /// A coalesced batch of session-log writes: re-derive the badges. Writes by
+    /// this repository's sessions do so at once. Writes that belong only to
+    /// sessions launched in other known repositories matter too, since one of
+    /// them may be working here, but those sessions log continuously, so they
+    /// re-derive at most once per `foreignWatchInterval`. Writes of projects
+    /// teebe does not know are ignored.
     func handleAgentWatchEvent(_ paths: [String]) async {
         let otherAgentChanged = paths.contains { path in
             environment.agentExtraWatchPaths.contains { root in path == root || path.hasPrefix(root + "/") }
         }
         if !otherAgentChanged, let root = environment.agentProjectsRootPath,
-           !AgentSessionScanner.eventsMatter(paths, projectsRoot: root,
-                                            worktreePaths: worktrees.map(\.path) + environment.knownWorktrees.paths) {
-            return
+           !AgentSessionScanner.eventsMatter(paths, projectsRoot: root, worktreePaths: worktrees.map(\.path)) {
+            guard AgentSessionScanner.eventsMatter(paths, projectsRoot: root,
+                                                   worktreePaths: environment.knownWorktrees.paths) else { return }
+            return await refreshForForeignWrite()
         }
+        await refreshAgentStates()
+    }
+
+    /// The first foreign write re-derives at once; the ones that follow within
+    /// the interval share a single re-derive at its end, so the last write of a
+    /// burst is never missed.
+    private func refreshForForeignWrite() async {
+        let wait = foreignWatchInterval - Date().timeIntervalSince(lastForeignRefresh)
+        if wait > 0 {
+            guard !foreignRefreshPending else { return }
+            foreignRefreshPending = true
+            try? await Task.sleep(for: .seconds(wait))
+            foreignRefreshPending = false
+        }
+        lastForeignRefresh = Date()
         await refreshAgentStates()
     }
 
