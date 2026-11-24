@@ -50,6 +50,14 @@ struct SettingsView: View {
         }
         .padding(12)
         .frame(width: 480, height: 480)
+        // The same glass as the main window, toolbar included: the forms' own
+        // backdrop goes, their grouped rows stay.
+        .scrollContentBackground(.hidden)
+        .background(WindowBackdrop())
+        .background(WindowAccessor { window in
+            window?.titlebarAppearsTransparent = true
+            window?.styleMask.insert(.fullSizeContentView)
+        })
         .onAppear {
             comparison = app.preferences.defaults.comparisonRef ?? ""
             app.refreshHookStatus()
