@@ -56,6 +56,8 @@ struct AppEnvironment {
     /// States plus each worktree's agent context (prompts, what it waits on) in
     /// one scan; nil falls back to `agentStatuses` with no context.
     let agentSnapshot: (@Sendable (_ worktreePaths: [String], _ now: Date) -> AgentSnapshot)?
+    /// Shared ownership scope for both repository and menu bar agent scans.
+    let knownWorktrees: KnownWorktrees
 
     init(
         git: GitClient,
@@ -78,7 +80,8 @@ struct AppEnvironment {
         holdsUnsavedWork: (@Sendable (Worktree, String) async -> Bool)? = nil,
         chooseApp: @escaping @MainActor (URL?, String, URL?) -> URL? = { AppChooser.choose(file: $0, typeKey: $1, current: $2) },
         appExists: @escaping @Sendable (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) },
-        agentSnapshot: (@Sendable ([String], Date) -> AgentSnapshot)? = nil
+        agentSnapshot: (@Sendable ([String], Date) -> AgentSnapshot)? = nil,
+        knownWorktrees: KnownWorktrees = KnownWorktrees()
     ) {
         self.git = git
         self.opener = opener
@@ -101,6 +104,7 @@ struct AppEnvironment {
         self.chooseApp = chooseApp
         self.appExists = appExists
         self.agentSnapshot = agentSnapshot
+        self.knownWorktrees = knownWorktrees
     }
 
     /// One agent scan: the snapshot when wired, else the states alone.
@@ -135,10 +139,11 @@ struct AppEnvironment {
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? CodexRolloutScanner.defaultSessionsRoot
         let processes = ProcessActivityProbe()
-        let claude = AgentSessionScanner(projectsRoot: projectsRoot)
+        let knownWorktrees = KnownWorktrees()
+        let claude = AgentSessionScanner(projectsRoot: projectsRoot, knownWorktrees: knownWorktrees)
         let adapters = CombinedAgentActivity([
             claude,
-            CodexRolloutScanner(sessionsRoot: codexSessions)
+            CodexRolloutScanner(sessionsRoot: codexSessions, knownWorktrees: knownWorktrees)
         ])
         return AppEnvironment(
             git: ProcessGitClient(),
@@ -158,7 +163,8 @@ struct AppEnvironment {
                     .union(adapters.workingPaths(forWorktreePaths: paths, now: now))
             },
             notify: AgentNotifier.post,
-            agentSnapshot: { paths, now in adapters.snapshot(forWorktreePaths: paths, now: now) }
+            agentSnapshot: { paths, now in adapters.snapshot(forWorktreePaths: paths, now: now) },
+            knownWorktrees: knownWorktrees
         )
     }
 }

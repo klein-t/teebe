@@ -334,13 +334,15 @@ public struct AgentSessionScanner: Sendable {
     /// Whether a pid is still running — registry files can outlive a crash.
     public var isProcessAlive: @Sendable (Int32) -> Bool
     private let contextCache = AgentContextCache()
+    private let knownWorktrees: KnownWorktrees
 
     public init(
         projectsRoot: URL = AgentSessionScanner.defaultProjectsRoot,
         thresholds: AgentStatusThresholds = AgentStatusThresholds(),
         tailBytes: Int = 256 * 1_024,
         sessionsRoot: URL? = nil,
-        isProcessAlive: @escaping @Sendable (Int32) -> Bool = AgentSessionScanner.processIsAlive
+        isProcessAlive: @escaping @Sendable (Int32) -> Bool = AgentSessionScanner.processIsAlive,
+        knownWorktrees: KnownWorktrees = KnownWorktrees()
     ) {
         self.projectsRoot = projectsRoot
         self.thresholds = thresholds
@@ -348,6 +350,7 @@ public struct AgentSessionScanner: Sendable {
         self.sessionsRoot = sessionsRoot ?? projectsRoot.deletingLastPathComponent()
             .appendingPathComponent("sessions", isDirectory: true)
         self.isProcessAlive = isProcessAlive
+        self.knownWorktrees = knownWorktrees
     }
 
     public static var defaultProjectsRoot: URL {
@@ -391,11 +394,9 @@ public struct AgentSessionScanner: Sendable {
         states(forWorktreePaths: [path], now: now)[path] ?? .idle
     }
 
-    /// States for a repo's worktrees, attributing each session to the worktree
-    /// its entries actually ran in (the entry `cwd`), not the directory it was
-    /// launched from. A session started in the primary checkout that then works
-    /// inside a linked worktree logs under the primary's project dir — a purely
-    /// per-dir lookup would pin its "working" badge on the primary.
+    /// States for the given worktrees, using recent targets, then entry cwd,
+    /// across all known worktrees. Sessions owned elsewhere are excluded; only
+    /// those outside every known worktree fall back to their launch directory.
     public func states(forWorktreePaths paths: [String], now: Date = Date()) -> [String: AgentActivityState] {
         scan(paths, now: now, readingContexts: false).states
     }
@@ -432,14 +433,22 @@ public struct AgentSessionScanner: Sendable {
             let session = live[Self.sessionID(of: file.url)]
             let state = AgentStateDeriver.derive(lastEntry: entry, live: session, now: now, thresholds: thresholds)
             guard state != .idle else { continue }
-            let owner = WorktreeAttribution.owner(
+            guard let owner = owner(
                 targets: recentTargets(in: file.url, includingSidechains: false),
-                cwd: entry?.cwd ?? session?.cwd, among: paths) ?? file.launchPath
+                cwd: entry?.cwd ?? session?.cwd, among: paths, launchPath: file.launchPath) else { continue }
             result[owner] = state
             winners[owner] = SessionWinner(url: file.url, state: state, lastActivity: entry?.timestamp ?? file.mtime)
         }
         markBusySubagents(in: &result, paths: paths, live: live, now: now)
         return AgentSnapshot(states: result, contexts: readingContexts ? contexts(of: winners).reconciled(with: result) : [:])
+    }
+
+    private func owner(targets: [String], cwd: String?, among paths: [String], launchPath: String) -> String? {
+        switch WorktreeAttribution.claim(targets: targets, cwd: cwd, among: paths, knownPaths: knownWorktrees.paths) {
+        case let .here(path): return path
+        case .elsewhere: return nil
+        case .nowhere: return launchPath
+        }
     }
 
     /// The context of each worktree's winning session file.
@@ -495,8 +504,9 @@ public struct AgentSessionScanner: Sendable {
 
     /// Subagents log to `<project>/<sessionId>/subagents/agent-*.jsonl`, not to
     /// the parent's file. A busy one means work is happening both in the
-    /// worktree it runs in and in its parent's — a parent that launched a
-    /// background subagent and ended its own turn is still busy.
+    /// worktree it runs in and in its parent's: a parent that launched a
+    /// background subagent and ended its own turn is still busy. Each is marked
+    /// only where it is owned, so every scan gives a worktree the same answer.
     private func markBusySubagents(in result: inout [String: AgentActivityState], paths: [String],
                                    live: [String: LiveAgentSession], now: Date) {
         var seen = Set<URL>()
@@ -515,12 +525,16 @@ public struct AgentSessionScanner: Sendable {
                 guard !busy.isEmpty else { continue }
                 for (url, entry) in busy {
                     let targets = recentTargets(in: url, includingSidechains: true)
-                    result[WorktreeAttribution.owner(targets: targets, cwd: entry.cwd, among: paths) ?? path] = .working
+                    if let owner = owner(targets: targets, cwd: entry.cwd, among: paths, launchPath: path) {
+                        result[owner] = .working
+                    }
                 }
                 let parent = dir.appendingPathComponent(sessionDir.lastPathComponent + ".jsonl")
                 let parentCwd = lastEntry(in: parent, includingSidechains: false)?.cwd
                 let parentTargets = recentTargets(in: parent, includingSidechains: false)
-                result[WorktreeAttribution.owner(targets: parentTargets, cwd: parentCwd, among: paths) ?? path] = .working
+                if let owner = owner(targets: parentTargets, cwd: parentCwd, among: paths, launchPath: path) {
+                    result[owner] = .working
+                }
             }
         }
     }

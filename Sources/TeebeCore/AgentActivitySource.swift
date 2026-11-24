@@ -103,6 +103,12 @@ public struct CombinedAgentActivity: AgentActivitySource {
 /// Containment always picks the deepest worktree (a worktree nested inside the
 /// primary checkout owns its own files).
 public enum WorktreeAttribution {
+    public enum Claim: Equatable, Sendable {
+        case here(String)
+        case elsewhere
+        case nowhere
+    }
+
     /// How far back from a session's newest record its targets still count, and
     /// how many of the newest targets are considered.
     public static let targetWindow: TimeInterval = 300
@@ -113,6 +119,14 @@ public enum WorktreeAttribution {
             if let owner = deepest(containing: target, among: paths) { return owner }
         }
         return cwd.flatMap { deepest(containing: $0, among: paths) }
+    }
+
+    /// Resolve against all known worktrees before deciding whether this scan owns it.
+    public static func claim(targets: [String], cwd: String?, among paths: [String], knownPaths: [String]) -> Claim {
+        let local = Set(paths.map(normalized))
+        let candidates = paths + knownPaths.filter { !local.contains(normalized($0)) }
+        guard let owner = owner(targets: targets, cwd: cwd, among: candidates) else { return .nowhere }
+        return paths.contains(owner) ? .here(owner) : .elsewhere
     }
 
     /// The deepest known worktree containing `path`; nil when outside all of them.

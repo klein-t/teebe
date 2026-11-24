@@ -4,9 +4,9 @@ import Observation
 import TeebeCore
 
 /// Every agent working or waiting across all added repositories, for the menu
-/// bar. The selected repository is read from the worktree list itself, so the
-/// two never disagree; every repository is also scanned here on a slow poll, in
-/// one agent scan, with each worktree list re-read now and then.
+/// bar: the selected repository's rows, plus a slower scan of all repositories.
+/// It also keeps every repository's worktrees known to the agent readers, icon
+/// shown or not, so both scans give a session to the same single worktree.
 @MainActor
 @Observable
 final class AgentOverviewModel {
@@ -77,13 +77,13 @@ final class AgentOverviewModel {
 
     var summary: Summary { Self.summarize(entries) }
 
-    /// Poll the other repositories while the menu bar icon is shown.
+    /// Keep worktree ownership current; scan agents while the icon is shown.
     func start() {
         guard pollTask == nil else { return }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                if self.app.agentDisplay.showsMenuBarIcon { await self.refreshOthers() }
+                await self.refreshOthers()
                 try? await Task.sleep(for: .seconds(self.pollInterval))
             }
         }
@@ -93,7 +93,6 @@ final class AgentOverviewModel {
         // The selected repository is scanned too, so its agents are already known
         // here the moment another one is picked.
         let repos = app.repositories
-        guard repos.count > 1 else { others = []; return }
         let environment = app.environment
         for repo in repos where worktreesByRepo[repo.path].map({ now.timeIntervalSince($0.listedAt) >= worktreeListInterval }) ?? true {
             let listed = (try? await environment.worktreeService.worktrees(for: repo)) ?? []
@@ -102,6 +101,10 @@ final class AgentOverviewModel {
         let owners = Dictionary(repos.flatMap { repo in (worktreesByRepo[repo.path]?.paths ?? []).map { ($0.path, (repo, $0.name)) } },
                                 uniquingKeysWith: { first, _ in first })
         let paths = Array(owners.keys)
+        if environment.knownWorktrees.update(paths), app.selector.selectedRepo != nil {
+            await app.selector.refreshAgentStates(now: now)
+        }
+        guard repos.count > 1, app.agentDisplay.showsMenuBarIcon else { others = []; return }
         let snapshot = environment.agentSnapshot
         let statuses = environment.agentStatuses
         let agents = await Task.detached {

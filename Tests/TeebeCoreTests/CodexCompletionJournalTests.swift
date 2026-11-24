@@ -6,6 +6,31 @@ import Testing
 struct CodexCompletionJournalTests {
     private let epoch = Date(timeIntervalSince1970: 1_790_000_000)
 
+    @Test("turn ends owned by another known repository stay out of this scan", arguments: [true, false])
+    func knownRepositoryExcludesTurnEnds(byTarget: Bool) throws {
+        let rig = try Fixture(); defer { rig.cleanUp() }
+        let known = KnownWorktrees()
+        let scanner = CodexRolloutScanner(sessionsRoot: rig.root, knownWorktrees: known)
+        _ = scanner.turnEnds(forWorktreePaths: ["/repo"], now: epoch)
+        try rig.append(line("task_started", at: epoch.addingTimeInterval(1)) + "\n")
+        let record: [String: Any] = byTarget
+            ? ["timestamp": stamp(epoch.addingTimeInterval(2)), "type": "response_item",
+               "payload": ["type": "function_call", "call_id": "c1", "name": "exec_command",
+                           "arguments": #"{"workdir":"/other/worktree","cmd":"true"}"#]]
+            : ["timestamp": stamp(epoch.addingTimeInterval(2)), "type": "turn_context", "payload": ["cwd": "/other/worktree"]]
+        let data = try JSONSerialization.data(withJSONObject: record)
+        try rig.append(try #require(String(data: data, encoding: .utf8)) + "\n")
+        try rig.append(line("task_complete", at: epoch.addingTimeInterval(3)) + "\n")
+        let now = epoch.addingTimeInterval(4)
+        let original = scanner.turnEnds(forWorktreePaths: ["/repo"], now: now)
+        #expect(original.count == (byTarget ? 1 : 0))
+        known.update(["/repo", "/other/worktree"])
+        #expect(scanner.turnEnds(forWorktreePaths: ["/repo"], now: now).isEmpty)
+        let ends = scanner.turnEnds(forWorktreePaths: ["/repo", "/other/worktree"], now: now)
+        #expect(ends.map(\.worktreePath) == ["/other/worktree"])
+        #expect(ends.map(\.id) == ["codex:session:t"])
+    }
+
     @Test func readsEveryCompletionBeyondTheStatusTailAndAcrossPartialLines() throws {
         let rig = try Fixture(); defer { rig.cleanUp() }
         let scanner = CodexRolloutScanner(sessionsRoot: rig.root, tailBytes: 512)

@@ -22,6 +22,78 @@ struct AgentOverviewTests {
         #expect(summary.waiting.map(\.name) == ["feat/z", "feat/a", "feat/b"])
         #expect(summary.working.map(\.name) == ["fix/a"])
     }
+
+    @Test("shared ownership lists a session once and corrects selected rows even with the icon hidden", arguments: [true, false])
+    func crossRepositorySessionAppearsOnce(iconShown: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launch = "/repo-a", target = "/repo-b/worktree"
+        let now = Date()
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let file = root.appendingPathComponent(AgentSessionScanner.projectDirName(forWorktreePath: launch))
+            .appendingPathComponent("session.jsonl")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let record = #"{"type":"assistant","cwd":"\#(launch)","timestamp":"\#(formatter.string(from: now))","isSidechain":false,"message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"c1","name":"Read","input":{"file_path":"\#(target)/file.swift"}}]}}"#
+        try (record + "\n").write(to: file, atomically: true, encoding: .utf8)
+        let known = KnownWorktrees()
+        let scanner = AgentSessionScanner(projectsRoot: root, knownWorktrees: known)
+        let git = FakeGitClient()
+        let worktree = Worktree(path: launch, branch: "main", isPrimary: true)
+        git.worktreesByRepo = [launch: [worktree], "/repo-b": [Worktree(path: target, branch: "feature")]]
+        let environment = makeTestEnvironment(git: git, store: AppStateStore(url: root.appendingPathComponent("state.json")),
+            agentSnapshot: { paths, date in scanner.snapshot(forWorktreePaths: paths, now: date) }, knownWorktrees: known)
+        let app = AppModel(environment: environment)
+        defer { app.selector.clearSelection() }
+        #expect(await app.addRepository(path: launch))
+        #expect(await app.addRepository(path: "/repo-b"))
+        await app.selector.selectRepo(Repository(path: launch))
+        app.agentDisplay.showsMenuBarIcon = iconShown
+        #expect(app.selector.info(for: worktree).agentState == .working)
+        #expect(app.selector.info(for: worktree).agentContext != nil)
+        let overview = AgentOverviewModel(app: app)
+        let gitCalls = git.statusCallCount
+        await overview.refreshOthers(now: now)
+        #expect(Set(known.paths) == [launch, target])
+        #expect(app.selector.info(for: worktree).agentState == .idle)
+        #expect(app.selector.info(for: worktree).agentContext == nil)
+        #expect(git.statusCallCount == gitCalls)
+        if !iconShown {
+            #expect(overview.others.isEmpty)
+            app.agentDisplay.showsMenuBarIcon = true
+            await overview.refreshOthers(now: now)
+        }
+        #expect(overview.entries.map(\.worktreePath) == [target])
+        #expect(overview.entries.first?.context?.terminalSession?.id == "session")
+    }
+
+    @Test("worktree discovery follows the listing interval and removes forgotten repositories")
+    func knownPathsFollowListings() async {
+        let git = FakeGitClient()
+        git.worktreesByRepo = ["/repo-a": [Worktree(path: "/repo-a", isPrimary: true)],
+                               "/repo-b": [Worktree(path: "/repo-b", isPrimary: true)]]
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+        defer { app.selector.clearSelection() }
+        #expect(await app.addRepository(path: "/repo-a"))
+        #expect(await app.addRepository(path: "/repo-b"))
+        app.selector.clearSelection()
+        app.agentDisplay.showsMenuBarIcon = false
+        let overview = AgentOverviewModel(app: app)
+        let now = Date()
+        await overview.refreshOthers(now: now)
+        #expect(Set(app.environment.knownWorktrees.paths) == ["/repo-a", "/repo-b"])
+        git.worktreesByRepo["/repo-b"]?.append(Worktree(path: "/repo-b/new"))
+        await overview.refreshOthers(now: now.addingTimeInterval(1))
+        #expect(!app.environment.knownWorktrees.paths.contains("/repo-b/new"))
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval))
+        #expect(Set(app.environment.knownWorktrees.paths) == ["/repo-a", "/repo-b", "/repo-b/new"])
+        app.removeRepository(Repository(path: "/repo-b"))
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval + 1))
+        #expect(app.environment.knownWorktrees.paths == ["/repo-a"])
+        app.removeRepository(Repository(path: "/repo-a"))
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval + 2))
+        #expect(app.environment.knownWorktrees.paths.isEmpty)
+    }
 }
 
 @Suite("Worktree agent lines")

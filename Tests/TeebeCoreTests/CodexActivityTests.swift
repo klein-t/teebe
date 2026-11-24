@@ -160,12 +160,12 @@ struct CodexRolloutScannerTests {
         var scanner: CodexRolloutScanner
     }
 
-    func makeFixture(tailBytes: Int = 256 * 1_024) throws -> Fixture {
+    func makeFixture(tailBytes: Int = 256 * 1_024, knownWorktrees: KnownWorktrees = KnownWorktrees()) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("teebe-tests", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        return Fixture(root: root, scanner: CodexRolloutScanner(sessionsRoot: root, tailBytes: tailBytes))
+        return Fixture(root: root, scanner: CodexRolloutScanner(sessionsRoot: root, tailBytes: tailBytes, knownWorktrees: knownWorktrees))
     }
 
     /// Writes a rollout in the date folder `daysAgo` before `now`.
@@ -205,8 +205,47 @@ struct CodexRolloutScannerTests {
         let states = fx.scanner.states(forWorktreePaths: acmePaths, now: now)
         #expect(states[lens] == .working)
         #expect(states[acme] == .idle)
-        // Seen from the repo it was launched in, it is still that checkout's session.
+        // With no other known worktrees, the launch cwd still owns the session.
         #expect(fx.scanner.states(forWorktreePaths: [launch], now: now)[launch] == .working)
+    }
+
+    @Test("targets or cwd in another known repository exclude the thread", arguments: [true, false])
+    func knownRepositoryOwnsThread(byTarget: Bool) throws {
+        let known = KnownWorktrees()
+        let fx = try makeFixture(knownWorktrees: known)
+        defer { try? FileManager.default.removeItem(at: fx.root) }
+        let record = byTarget ? Rollout.patch(lens + "/file.swift", call: "c1", at: now.addingTimeInterval(-3))
+            : Rollout.context(cwd: lens, at: now.addingTimeInterval(-3))
+        try write(userTurn([record]), id: parentID, fx)
+        let original = fx.scanner.snapshot(forWorktreePaths: [launch], now: now)
+        #expect(original.states[launch] == (byTarget ? .working : .idle))
+        known.update([launch, lens])
+        let local = fx.scanner.snapshot(forWorktreePaths: [launch], now: now)
+        #expect(local.states == [launch: .idle])
+        #expect(local.contexts.isEmpty)
+        let all = fx.scanner.snapshot(forWorktreePaths: [launch, lens], now: now)
+        #expect(all.states == [launch: .idle, lens: .working])
+        #expect(Set(all.contexts.keys) == [lens])
+    }
+
+    @Test("a busy subagent in another repository marks only where it and its parent are owned, in every scan",
+          arguments: [true, false])
+    func busySubagentElsewhere(parentHere: Bool) throws {
+        let known = KnownWorktrees()
+        let fx = try makeFixture(knownWorktrees: known)
+        defer { try? FileManager.default.removeItem(at: fx.root) }
+        try write([Rollout.meta(id: parentID, cwd: parentHere ? launch : lens, at: now.addingTimeInterval(-4_000)),
+                   Rollout.event("task_complete", at: now.addingTimeInterval(-3_900))],
+                  id: parentID, fx, mtime: now.addingTimeInterval(-3_900))
+        try write([Rollout.meta(id: childID, cwd: launch, source: Rollout.subagentSource(parent: parentID),
+                                at: now.addingTimeInterval(-30)),
+                   Rollout.event("task_started", at: now.addingTimeInterval(-30)),
+                   Rollout.commandDone(cwd: lens, at: now.addingTimeInterval(-3))], id: childID, fx)
+        known.update([launch, lens])
+        // A parent owned here is still busy while its subagent works elsewhere.
+        let here: AgentActivityState = parentHere ? .working : .idle
+        #expect(fx.scanner.states(forWorktreePaths: [launch], now: now) == [launch: here])
+        #expect(fx.scanner.states(forWorktreePaths: [launch, lens], now: now) == [launch: here, lens: .working])
     }
 
     @Test("a completed or interrupted turn waits for the user")

@@ -474,9 +474,8 @@ final class SelectorModel {
         let generation = agentRefreshGeneration
         let worktrees = self.worktrees
         let paths = worktrees.map(\.path)
-        // One batched agent-log scan for the whole repo — the scanner needs every
-        // worktree path to attribute a session to the worktree it runs in, not
-        // the one it was launched from. Runs off-main alongside the git reads.
+        // One scan for this repo's rows, with ownership checked against every
+        // known worktree. Runs off-main alongside the git reads.
         let agentSnapshot = environment.agentSnapshot
         let agentTask = Task.detached {
             (AppEnvironment.readAgents(paths, now, snapshot: agentSnapshot, statuses: agentStatuses), agentTurnEnds(paths, now))
