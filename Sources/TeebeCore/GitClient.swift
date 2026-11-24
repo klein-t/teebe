@@ -101,7 +101,8 @@ public protocol GitClient: Sendable {
     func status(worktreePath: String) async throws -> StatusResult
 
     // Diffs
-    func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile?
+    /// `ignoreWhitespace` is git's `-w`: changes in whitespace alone are left out.
+    func workingDiff(worktreePath: String, path: String, staged: Bool, ignoreWhitespace: Bool) async throws -> DiffFile?
 
     // Writes (serialize per repo)
     func stage(worktreePath: String, paths: [String]) async throws
@@ -125,4 +126,10 @@ public protocol GitClient: Sendable {
     // Low-level escape hatch
     @discardableResult
     func run(_ arguments: [String], in directory: String) async throws -> GitInvocationResult
+}
+
+extension GitClient {
+    public func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? {
+        try await workingDiff(worktreePath: worktreePath, path: path, staged: staged, ignoreWhitespace: false)
+    }
 }

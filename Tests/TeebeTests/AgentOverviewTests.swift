@@ -1,0 +1,634 @@
+import AppKit
+import Foundation
+import Testing
+@testable import Teebe
+@testable import TeebeCore
+
+@Suite("Agent menu bar counts")
+@MainActor
+struct AgentOverviewTests {
+    func entry(_ name: String, repo: String, _ state: AgentActivityState) -> AgentOverviewModel.Entry {
+        AgentOverviewModel.Entry(repoPath: "/r/\(repo)", repoTitle: repo, worktreePath: "/r/\(repo)/\(name)", name: name,
+                                 state: state, context: nil)
+    }
+
+    @Test("counts waiting and working across repositories; idle counts for nothing")
+    func counts() {
+        let summary = AgentOverviewModel.summarize([
+            entry("feat/b", repo: "web", .needsAttention), entry("main", repo: "web", .idle),
+            entry("fix/a", repo: "api", .working), entry("feat/a", repo: "web", .needsAttention),
+            entry("feat/z", repo: "api", .needsAttention)
+        ])
+        #expect(summary.waiting.map(\.name) == ["feat/z", "feat/a", "feat/b"])
+        #expect(summary.working.map(\.name) == ["fix/a"])
+    }
+
+    @Test("the open menu keeps the rows it opened with; the counts stay live and closing lets it follow again")
+    func menuHoldsStillWhileOpen() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let states = StateBox()
+        let git = FakeGitClient()
+        git.worktreesByRepo = ["/repo-a": [Worktree(path: "/repo-a", branch: "main", isPrimary: true)],
+                               "/repo-b": [Worktree(path: "/repo-b", branch: "feature", isPrimary: true)]]
+        let environment = makeTestEnvironment(git: git, store: AppStateStore(url: root.appendingPathComponent("state.json")),
+            agentSnapshot: { paths, _ in AgentSnapshot(states: Dictionary(uniqueKeysWithValues: paths.map { ($0, states.value[$0] ?? .idle) })) })
+        let app = AppModel(environment: environment)
+        defer { app.selector.clearSelection() }
+        #expect(await app.addRepository(path: "/repo-a"))
+        #expect(await app.addRepository(path: "/repo-b"))
+        await app.selector.selectRepo(Repository(path: "/repo-a"))
+        let overview = AgentOverviewModel(app: app)
+        states.value = ["/repo-b": .working]
+        await overview.refreshOthers()
+        #expect(overview.menuSummary.working.map(\.worktreePath) == ["/repo-b"])
+
+        overview.menuOpened()
+        states.value = ["/repo-b": .needsAttention]
+        await overview.refreshOthers()
+        #expect(overview.summary.waiting.map(\.worktreePath) == ["/repo-b"])
+        #expect(overview.menuSummary.working.map(\.worktreePath) == ["/repo-b"])
+        #expect(overview.menuSummary.waiting.isEmpty)
+
+        overview.menuClosed()
+        #expect(overview.menuSummary == overview.summary)
+    }
+
+    @Test("shared ownership lists a session once and corrects selected rows even with the icon hidden", arguments: [true, false])
+    func crossRepositorySessionAppearsOnce(iconShown: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launch = "/repo-a", target = "/repo-b/worktree"
+        let now = Date()
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let file = root.appendingPathComponent(AgentSessionScanner.projectDirName(forWorktreePath: launch))
+            .appendingPathComponent("session.jsonl")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let record = #"{"type":"assistant","cwd":"\#(launch)","timestamp":"\#(formatter.string(from: now))","isSidechain":false,"message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"c1","name":"Read","input":{"file_path":"\#(target)/file.swift"}}]}}"#
+        try (record + "\n").write(to: file, atomically: true, encoding: .utf8)
+        let known = KnownWorktrees()
+        let scanner = AgentSessionScanner(projectsRoot: root, knownWorktrees: known)
+        let git = FakeGitClient()
+        let worktree = Worktree(path: launch, branch: "main", isPrimary: true)
+        git.worktreesByRepo = [launch: [worktree], "/repo-b": [Worktree(path: target, branch: "feature")]]
+        let environment = makeTestEnvironment(git: git, store: AppStateStore(url: root.appendingPathComponent("state.json")),
+            agentSnapshot: { paths, date in scanner.snapshot(forWorktreePaths: paths, now: date) }, knownWorktrees: known)
+        let app = AppModel(environment: environment)
+        defer { app.selector.clearSelection() }
+        #expect(await app.addRepository(path: launch))
+        #expect(await app.addRepository(path: "/repo-b"))
+        await app.selector.selectRepo(Repository(path: launch))
+        app.agentDisplay.showsMenuBarIcon = iconShown
+        let overview = AgentOverviewModel(app: app)
+        let gitCalls = git.statusCallCount
+        await overview.refreshOthers(now: now)
+        #expect(Set(known.paths) == [launch, target])
+        #expect(app.selector.info(for: worktree).agentState == .idle)
+        #expect(app.selector.info(for: worktree).agentContext == nil)
+        #expect(git.statusCallCount == gitCalls)
+        if !iconShown {
+            #expect(overview.others.isEmpty)
+            app.agentDisplay.showsMenuBarIcon = true
+            await overview.refreshOthers(now: now)
+        }
+        #expect(overview.entries.map(\.worktreePath) == [target])
+        #expect(overview.entries.first?.context?.terminalSession?.id == "session")
+        await app.selector.selectRepo(Repository(path: "/repo-b"))
+        let targetRow = try #require(app.selector.worktrees.first)
+        #expect(app.selector.info(for: targetRow).agentState == .working)
+        #expect(app.selector.info(for: targetRow).agentContext?.terminalSession == AgentTerminalSession(provider: .claude, id: "session",
+            transcriptPath: file.path, claudeProjectsPath: root.path))
+        await overview.refreshOthers(now: now)
+        #expect(overview.entries.map(\.worktreePath) == [target])
+        #expect(overview.menuSummary.working.map(\.worktreePath) == [target])
+        #expect(overview.menuSummary.waiting.isEmpty)
+    }
+
+    @Test("worktree discovery follows the listing interval and removes forgotten repositories")
+    func knownPathsFollowListings() async {
+        let git = FakeGitClient()
+        git.worktreesByRepo = ["/repo-a": [Worktree(path: "/repo-a", isPrimary: true)],
+                               "/repo-b": [Worktree(path: "/repo-b", isPrimary: true)]]
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+        defer { app.selector.clearSelection() }
+        #expect(await app.addRepository(path: "/repo-a"))
+        #expect(await app.addRepository(path: "/repo-b"))
+        app.selector.clearSelection()
+        app.agentDisplay.showsMenuBarIcon = false
+        let overview = AgentOverviewModel(app: app)
+        let now = Date()
+        await overview.refreshOthers(now: now)
+        #expect(Set(app.environment.knownWorktrees.paths) == ["/repo-a", "/repo-b"])
+        git.worktreesByRepo["/repo-b"]?.append(Worktree(path: "/repo-b/new"))
+        await overview.refreshOthers(now: now.addingTimeInterval(1))
+        #expect(!app.environment.knownWorktrees.paths.contains("/repo-b/new"))
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval))
+        #expect(Set(app.environment.knownWorktrees.paths) == ["/repo-a", "/repo-b", "/repo-b/new"])
+        app.removeRepository(Repository(path: "/repo-b"))
+        #expect(app.environment.knownWorktrees.paths == ["/repo-a"])
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval + 1))
+        #expect(app.environment.knownWorktrees.paths == ["/repo-a"])
+        app.removeRepository(Repository(path: "/repo-a"))
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval + 2))
+        #expect(app.environment.knownWorktrees.paths.isEmpty)
+    }
+
+    @Test("bootstrap discovers all repositories before returning, even after an empty startup poll", arguments: [true, false])
+    func bootstrapKnowsWorktrees(iconShown: Bool) async throws {
+        let git = FakeGitClient()
+        git.worktreesByRepo = ["/repo-a": [Worktree(path: "/repo-a", isPrimary: true)],
+                               "/repo-b": [Worktree(path: "/repo-b/worktree")]]
+        let environment = makeTestEnvironment(git: git)
+        var state = AppState()
+        state.repositories = [PersistedRepository(path: "/repo-a"), PersistedRepository(path: "/repo-b")]
+        state.lastSelectedRepoPath = "/repo-a"
+        state.agentMenuBarIcon = iconShown
+        try environment.store.save(state)
+        let app = AppModel(environment: environment)
+        defer { app.selector.clearSelection() }
+        let overview = AgentOverviewModel(app: app)
+        await overview.refreshOthers()
+        #expect(environment.knownWorktrees.paths.isEmpty)
+        await app.bootstrap()
+        #expect(Set(environment.knownWorktrees.paths) == ["/repo-a", "/repo-b/worktree"])
+    }
+
+    @Test("a failed overview listing keeps the last successful paths and retries next poll")
+    func failedListingKeepsPaths() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo-a", isPrimary: true)]
+        let app = AppModel(environment: makeTestEnvironment(git: git))
+        defer { app.selector.clearSelection() }
+        #expect(await app.addRepository(path: "/repo-a"))
+        app.selector.clearSelection()
+        let overview = AgentOverviewModel(app: app)
+        let now = Date()
+        await overview.refreshOthers(now: now)
+        git.worktreesError = .commandFailed(command: ["worktree", "list"], exitCode: 1, stderr: "Unavailable")
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval))
+        #expect(app.environment.knownWorktrees.paths == ["/repo-a"])
+        git.worktreesError = nil
+        git.worktreesResult.append(Worktree(path: "/repo-a/new"))
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval + overview.pollInterval))
+        #expect(Set(app.environment.knownWorktrees.paths) == ["/repo-a", "/repo-a/new"])
+    }
+
+    @Test("the selected visible list removes stale ownership and the poll cannot restore it", arguments: [true, false], [true, false])
+    func selectedVisiblePathsWin(hidden: Bool, byTarget: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launch = "/repo-a", removed = "/repo-a-worktree"
+        let file = root.appendingPathComponent(AgentSessionScanner.projectDirName(forWorktreePath: launch))
+            .appendingPathComponent("session.jsonl")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let command = byTarget ? "cd \(removed) && swift test" : "swift test"
+        let record = #"{"type":"assistant","cwd":"\#(byTarget ? launch : removed)","timestamp":"\#(ISO8601DateFormatter().string(from: Date()))","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"\#(command)"}}]}}"#
+        try (record + "\n").write(to: file, atomically: true, encoding: .utf8)
+        let known = KnownWorktrees()
+        let scanner = AgentSessionScanner(projectsRoot: root, knownWorktrees: known)
+        let git = FakeGitClient()
+        let primary = Worktree(path: launch, isPrimary: true)
+        git.worktreesByRepo = [launch: [primary, Worktree(path: removed)], "/repo-b": [Worktree(path: "/repo-b", isPrimary: true)]]
+        let environment = makeTestEnvironment(git: git, folderExists: { $0 != removed }, isVolumeMounted: { $0 != removed },
+            agentSnapshot: { paths, date in scanner.snapshot(forWorktreePaths: paths, now: date) }, knownWorktrees: known)
+        let app = AppModel(environment: environment)
+        defer { app.selector.clearSelection() }
+        #expect(await app.addRepository(path: launch))
+        #expect(await app.addRepository(path: "/repo-b"))
+        let overview = AgentOverviewModel(app: app)
+        let now = Date()
+        await overview.refreshOthers(now: now)
+        #expect(known.paths.contains(removed))
+        if !hidden { git.worktreesByRepo[launch] = [primary] }
+        await app.selector.selectRepo(Repository(path: launch))
+        #expect(app.selector.worktrees == [primary])
+        #expect(!known.paths.contains(removed))
+        #expect(app.selector.info(for: primary).agentState == .working)
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval))
+        #expect(!known.paths.contains(removed))
+        #expect(overview.entries.map(\.worktreePath) == [launch])
+        // Switching away must not resurrect an older cached poll list either.
+        await app.selector.selectRepo(Repository(path: "/repo-b"))
+        await overview.refreshOthers(now: now.addingTimeInterval(overview.worktreeListInterval + 1))
+        #expect(!known.paths.contains(removed))
+        #expect(overview.entries.map(\.worktreePath) == [launch])
+    }
+
+    @Test("selector refresh publishes its latest list and failed listings keep known paths")
+    func selectorRefreshKeepsKnownPathsCurrent() async {
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo-a", isPrimary: true), Worktree(path: "/repo-a-worktree")]
+        let environment = makeTestEnvironment(git: git)
+        let selector = SelectorModel(environment: environment)
+        defer { selector.clearSelection() }
+        await selector.selectRepo(Repository(path: "/repo-a"))
+        #expect(environment.knownWorktrees.paths == ["/repo-a", "/repo-a-worktree"])
+        git.worktreesResult.removeLast()
+        await selector.refreshWorktrees()
+        #expect(environment.knownWorktrees.paths == ["/repo-a"])
+        git.worktreesError = .commandFailed(command: ["worktree", "list"], exitCode: 1, stderr: "Unavailable")
+        await selector.refreshWorktrees()
+        #expect(environment.knownWorktrees.paths == ["/repo-a"])
+        await selector.selectRepo(Repository(path: "/repo-a"))
+        #expect(environment.knownWorktrees.paths == ["/repo-a"])
+    }
+
+    @Test("known foreign project events refresh the selected rows while unknown projects stay ignored")
+    func foreignProjectEventsRefreshSelectedRows() async {
+        let known = KnownWorktrees()
+        known.update(["/repo-a"], forRepository: "/repo-a")
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo-b", isPrimary: true)]
+        let states = StateBox()
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git,
+            agentStatuses: { _, _ in states.value }, agentProjectsRootPath: "/logs/projects", knownWorktrees: known))
+        defer { selector.clearSelection() }
+        await selector.selectRepo(Repository(path: "/repo-b"))
+        states.value = ["/repo-b": .working]
+        await selector.handleAgentWatchEvent(["/logs/projects/-unknown/session.jsonl"])
+        #expect(selector.info(for: git.worktreesResult[0]).agentState == .idle)
+        await selector.handleAgentWatchEvent(["/logs/projects/-repo-a/session.jsonl"])
+        #expect(selector.info(for: git.worktreesResult[0]).agentState == .working)
+    }
+
+    @Test("a burst of writes by another repository's sessions re-derives twice, at its start and its end; own writes always do")
+    func foreignWritesAreBounded() async {
+        let known = KnownWorktrees()
+        known.update(["/repo-a"], forRepository: "/repo-a")
+        let git = FakeGitClient()
+        git.worktreesResult = [Worktree(path: "/repo-b", isPrimary: true)]
+        let scans = StateBox()
+        let selector = SelectorModel(environment: makeTestEnvironment(git: git, agentStatuses: { _, _ in
+            scans.increment()
+            return ["/repo-b": .working]
+        }, agentProjectsRootPath: "/logs/projects", knownWorktrees: known))
+        defer { selector.clearSelection() }
+        selector.foreignWatchInterval = 0.2
+        await selector.selectRepo(Repository(path: "/repo-b"))
+        let before = scans.count
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<6 {
+                group.addTask { @MainActor in await selector.handleAgentWatchEvent(["/logs/projects/-repo-a/session.jsonl"]) }
+            }
+        }
+        #expect(scans.count == before + 2)
+        for _ in 0..<3 { await selector.handleAgentWatchEvent(["/logs/projects/-repo-b/session.jsonl"]) }
+        #expect(scans.count == before + 5)
+    }
+
+    @Test("a poll already listing a repository cannot replace its newly selected visible list")
+    func selectedListWinsOverInFlightPoll() async {
+        let git = FakeGitClient()
+        git.worktreesByRepo = ["/repo-a": [Worktree(path: "/repo-a", isPrimary: true), Worktree(path: "/missing")],
+                               "/repo-b": [Worktree(path: "/repo-b", isPrimary: true)]]
+        let environment = makeTestEnvironment(git: git, folderExists: { $0 != "/missing" }, isVolumeMounted: { $0 != "/missing" })
+        let app = AppModel(environment: environment)
+        defer { app.selector.clearSelection() }
+        #expect(await app.addRepository(path: "/repo-a"))
+        #expect(await app.addRepository(path: "/repo-b"))
+        let overview = AgentOverviewModel(app: app)
+        let entered = Gate(), gate = Gate()
+        git.beforeWorktrees = { await entered.open(); await gate.wait() }
+        let poll = Task { await overview.refreshOthers() }
+        await entered.wait()
+        git.beforeWorktrees = nil
+        await app.selector.selectRepo(Repository(path: "/repo-a"))
+        await gate.open()
+        await poll.value
+        #expect(environment.knownWorktrees.paths == ["/repo-a", "/repo-b"])
+    }
+}
+
+@Suite("Worktree agent lines")
+struct WorktreeAgentLinesTests {
+    let waiting = AgentContext(state: .needsAttention, firstPrompt: "First", latestPrompt: "Latest", waitingReason: "Proceed?")
+
+    @Test("a waiting row shows the task and the question; options turn each off")
+    func options() {
+        let all = WorktreeAgentLines(context: waiting, mark: .waiting, options: AgentDisplayOptions())
+        #expect(all == WorktreeAgentLines(task: "First", question: "Proceed?"))
+        #expect(all.count == 2)
+        let latest = AgentDisplayOptions(showsQuestion: false, showsTask: true, taskSource: .latest)
+        #expect(WorktreeAgentLines(context: waiting, mark: .waiting, options: latest) == WorktreeAgentLines(task: "Latest", question: nil))
+        let none = AgentDisplayOptions(showsQuestion: false, showsTask: false)
+        #expect(WorktreeAgentLines(context: waiting, mark: .waiting, options: none) == .none)
+    }
+
+    @Test("only the waiting mark shows a question; a missing prompt falls back to the other one")
+    func fallbacks() {
+        #expect(WorktreeAgentLines(context: waiting, mark: .working, options: AgentDisplayOptions()).question == nil)
+        let onlyLatest = AgentContext(state: .working, latestPrompt: "Latest")
+        #expect(WorktreeAgentLines(context: onlyLatest, mark: .working, options: AgentDisplayOptions()).task == "Latest")
+        #expect(WorktreeAgentLines(context: nil, mark: .waiting, options: AgentDisplayOptions()) == .none)
+    }
+
+    @Test("the waiting card says what the agent asks, or the generic sentence without it")
+    func card() {
+        let worktree = Worktree(path: "/feature", branch: "feature", head: "abc")
+        var info = SelectorModel.WorktreeInfo()
+        info.agentState = .needsAttention
+        info.agentContext = waiting
+        let status = WorktreeStatus(worktree: worktree, merge: nil, info: info, targetNames: [], isChecking: false)
+        #expect(status.card.title == "Waiting for you")
+        #expect(status.card.subtitle == "Proceed?")
+        let off = WorktreeStatus(worktree: worktree, merge: nil, info: info, targetNames: [], isChecking: false,
+                                 agentDisplay: AgentDisplayOptions(showsQuestion: false))
+        #expect(off.card.subtitle == "An agent is waiting for your input.")
+        info.agentContext = nil
+        let unknown = WorktreeStatus(worktree: worktree, merge: nil, info: info, targetNames: [], isChecking: false)
+        #expect(unknown.card.subtitle == "An agent is waiting for your input.")
+    }
+
+    @Test("the list grows by each agent line and one bottom inset; one-line rows keep their height")
+    func listHeight() {
+        let worktree = Worktree(path: "/feature", branch: "feature", head: "abc")
+        var info = SelectorModel.WorktreeInfo()
+        info.agentState = .needsAttention
+        info.agentContext = waiting
+        let status = WorktreeStatus(worktree: worktree, merge: nil, info: info, targetNames: [], isChecking: false)
+        let plain = WorktreeListPresentation(worktrees: [worktree], statuses: [:], grouped: false, collapsed: [], hasRepository: true)
+        let lined = WorktreeListPresentation(worktrees: [worktree], statuses: [worktree.path: status], grouped: false,
+                                             collapsed: [], hasRepository: true)
+        #expect(lined.naturalHeight - plain.naturalHeight
+                == 2 * WorktreeListPresentation.agentLineHeight + WorktreeListPresentation.agentLinesBottomInset)
+        #expect(WorktreeListPresentation.rowHeight(agentLines: 0) == WorktreeListPresentation.rowHeight)
+        #expect(WorktreeListPresentation.rowHeight(agentLines: 2) == WorktreeListPresentation.rowHeight + 36)
+    }
+}
+
+@Suite("Menu bar title and app presence")
+@MainActor
+struct AgentMenuBarTitleTests {
+    @Test("waiting first, then working; a zero count or an option off leaves its segment out")
+    func segments() {
+        #expect(AgentMenuBarTitle(waiting: 3, working: 2, showsWaiting: true, showsWorking: true).segments
+                == [.waiting(3), .working(2)])
+        #expect(AgentMenuBarTitle(waiting: 3, working: 0, showsWaiting: true, showsWorking: true).segments == [.waiting(3)])
+        #expect(AgentMenuBarTitle(waiting: 0, working: 2, showsWaiting: true, showsWorking: true).segments == [.working(2)])
+        #expect(AgentMenuBarTitle(waiting: 3, working: 2, showsWaiting: false, showsWorking: true).segments == [.working(2)])
+        #expect(AgentMenuBarTitle(waiting: 3, working: 2, showsWaiting: true, showsWorking: false).segments == [.waiting(3)])
+    }
+
+    @Test("nothing to show falls back to the neutral glyph; VoiceOver still hears both counts")
+    func neutral() {
+        let idle = AgentMenuBarTitle(waiting: 0, working: 0, showsWaiting: true, showsWorking: true)
+        #expect(idle.isNeutral)
+        let off = AgentMenuBarTitle(waiting: 3, working: 2, showsWaiting: false, showsWorking: false)
+        #expect(off.isNeutral)
+        #expect(off.accessibilityLabel == "Teebe: 3 waiting, 2 working")
+    }
+
+    @Test("the Dock icon hides only while the menu bar item shows, and comes back when it hides")
+    func presenceRule() {
+        var presence = AppPresence(showsMenuBarIcon: true, showsDockIcon: true)
+        presence.setDockIcon(false)
+        #expect(!presence.showsDockIcon)
+        presence.setMenuBarIcon(false)
+        #expect(presence.showsDockIcon)
+        #expect(!presence.canHideDockIcon)
+        presence.setDockIcon(false)
+        #expect(presence.showsDockIcon)
+        // A saved state with neither is read as Dock on.
+        #expect(AppPresence(showsMenuBarIcon: false, showsDockIcon: false).showsDockIcon)
+    }
+
+    @Test("the choices round-trip through the saved state, and hiding the menu bar item restores the Dock")
+    func persistence() {
+        let prefs = AgentDisplayPreferences(state: AppState())
+        var dockCalls: [Bool] = []
+        prefs.onDockIconChange = { dockCalls.append($0) }
+        prefs.showsDockIcon = false
+        prefs.showsWorkingAgents = false
+        var state = AppState()
+        prefs.write(to: &state)
+        #expect(state.showDockIcon == false && state.agentMenuBarWorking == false && state.agentMenuBarWaiting == true)
+        let reloaded = AgentDisplayPreferences(state: state)
+        #expect(!reloaded.showsDockIcon && !reloaded.showsWorkingAgents && reloaded.showsWaitingAgents)
+        prefs.showsMenuBarIcon = false
+        #expect(prefs.showsDockIcon)
+        #expect(dockCalls == [false, true])
+        prefs.write(to: &state)
+        #expect(state.showDockIcon == true && state.agentMenuBarIcon == false)
+    }
+
+    @Test("saved state from before these options decodes with everything on")
+    func migration() throws {
+        let old = #"{"repositories":[],"showChangedOnly":false,"showIgnored":false,"floatOnTop":false,"agentMenuBarIcon":true}"#
+        let state = try JSONDecoder().decode(AppState.self, from: Data(old.utf8))
+        let prefs = AgentDisplayPreferences(state: state)
+        #expect(prefs.showsWaitingAgents && prefs.showsWorkingAgents && prefs.showsDockIcon && prefs.showsMenuBarIcon && prefs.animatesMenuBarIcons)
+    }
+}
+
+@Suite("Menu bar dropdown sections and motion")
+@MainActor
+struct AgentMenuBarSectionsTests {
+    @Test("each kind is listed only when its choice is on and it has agents")
+    func sections() {
+        let both = AgentMenuBarSections(waiting: 2, working: 1, showsWaiting: true, showsWorking: true)
+        #expect(both.showsWaiting && both.showsWorking && both.emptyNote == nil)
+        let waitingOnly = AgentMenuBarSections(waiting: 2, working: 1, showsWaiting: true, showsWorking: false)
+        #expect(waitingOnly.showsWaiting && !waitingOnly.showsWorking && waitingOnly.emptyNote == nil)
+        let workingOnly = AgentMenuBarSections(waiting: 2, working: 1, showsWaiting: false, showsWorking: true)
+        #expect(!workingOnly.showsWaiting && workingOnly.showsWorking && workingOnly.emptyNote == nil)
+        let neither = AgentMenuBarSections(waiting: 2, working: 1, showsWaiting: false, showsWorking: false)
+        #expect(!neither.showsWaiting && !neither.showsWorking && neither.emptyNote == nil)
+    }
+
+    @Test("without sessions a shown kind says it is empty; both off says nothing")
+    func empty() {
+        #expect(AgentMenuBarSections(waiting: 0, working: 0, showsWaiting: true, showsWorking: true).emptyNote
+                == "No agents waiting or working")
+        #expect(AgentMenuBarSections(waiting: 0, working: 3, showsWaiting: true, showsWorking: false).emptyNote
+                == "No agents waiting")
+        #expect(AgentMenuBarSections(waiting: 3, working: 0, showsWaiting: false, showsWorking: true).emptyNote
+                == "No agents working")
+        let neither = AgentMenuBarSections(waiting: 0, working: 0, showsWaiting: false, showsWorking: false)
+        #expect(neither.emptyNote == nil && !neither.showsWaiting && !neither.showsWorking)
+        // One kind empty, the other listed: no note.
+        #expect(AgentMenuBarSections(waiting: 0, working: 2, showsWaiting: true, showsWorking: true).emptyNote == nil)
+    }
+
+    @Test("only drawn segments move, and nothing moves with the option off or Reduce Motion")
+    func animationGating() {
+        let both = AgentMenuBarTitle(waiting: 2, working: 1, showsWaiting: true, showsWorking: true)
+        #expect(AgentMenuBarAnimation.animated(both, animates: true, reduceMotion: false) == [.waiting, .working])
+        let zeroWorking = AgentMenuBarTitle(waiting: 2, working: 0, showsWaiting: true, showsWorking: true)
+        #expect(AgentMenuBarAnimation.animated(zeroWorking, animates: true, reduceMotion: false) == [.waiting])
+        let hiddenWaiting = AgentMenuBarTitle(waiting: 2, working: 1, showsWaiting: false, showsWorking: true)
+        #expect(AgentMenuBarAnimation.animated(hiddenWaiting, animates: true, reduceMotion: false) == [.working])
+        #expect(AgentMenuBarAnimation.animated(both, animates: false, reduceMotion: false).isEmpty)
+        #expect(AgentMenuBarAnimation.animated(both, animates: true, reduceMotion: true).isEmpty)
+        let idle = AgentMenuBarTitle(waiting: 0, working: 0, showsWaiting: true, showsWorking: true)
+        #expect(AgentMenuBarAnimation.animated(idle, animates: true, reduceMotion: false).isEmpty)
+    }
+
+    @Test("the timer runs only while something moves and can be seen")
+    func timer() {
+        #expect(AgentMenuBarAnimation.timerRuns([.working], screenAsleep: false, sessionLocked: false, itemVisible: true))
+        #expect(!AgentMenuBarAnimation.timerRuns([], screenAsleep: false, sessionLocked: false, itemVisible: true))
+        #expect(!AgentMenuBarAnimation.timerRuns([.working], screenAsleep: true, sessionLocked: false, itemVisible: true))
+        #expect(!AgentMenuBarAnimation.timerRuns([.working], screenAsleep: false, sessionLocked: true, itemVisible: true))
+        #expect(!AgentMenuBarAnimation.timerRuns([.working], screenAsleep: false, sessionLocked: false, itemVisible: false))
+    }
+
+    @Test("a question slides only when it is clipped, by the clipped width, at a reading pace")
+    func slide() {
+        #expect(HoverSlide(textWidth: 200, available: 240) == nil)
+        #expect(HoverSlide(textWidth: 240.5, available: 240) == nil)
+        #expect(HoverSlide(textWidth: 300, available: 0) == nil)
+        let slide = HoverSlide(textWidth: 390, available: 240)
+        #expect(slide?.distance == 150)
+        #expect(slide?.duration == 5)
+    }
+
+    @Test("on a row with a task and a question each line slides its own length, from the same start")
+    func twoLines() {
+        // A waiting row 240 pt wide: the task fits, the question does not.
+        #expect(HoverSlide(textWidth: 230, available: 240) == nil)
+        let question = HoverSlide(textWidth: 300, available: 240)
+        #expect(question?.distance == 60 && question?.duration == 2)
+        // Both cut off: each its own distance and time at the same pace, same dwell.
+        let task = HoverSlide(textWidth: 330, available: 240)
+        let longer = HoverSlide(textWidth: 480, available: 240)
+        #expect(task?.duration == 3 && longer?.duration == 8)
+        #expect(HoverSlide.dwell == .milliseconds(500))
+    }
+
+    @Test("the animate choice defaults on and round-trips")
+    func animateOption() {
+        let prefs = AgentDisplayPreferences(state: AppState())
+        #expect(prefs.animatesMenuBarIcons)
+        prefs.animatesMenuBarIcons = false
+        var state = AppState()
+        prefs.write(to: &state)
+        #expect(state.agentMenuBarAnimate == false)
+        #expect(!AgentDisplayPreferences(state: state).animatesMenuBarIcons)
+    }
+}
+
+@Suite("Menu bar frames")
+@MainActor
+struct AgentMenuBarFramesTests {
+    /// The pixels of a frame's first digit, as alpha values.
+    func digitAlpha(_ image: NSImage, from x: CGFloat, width: CGFloat) -> [UInt8] {
+        guard let rep = image.representations.first as? NSBitmapImageRep else { return [] }
+        let scale = CGFloat(rep.pixelsWide) / image.size.width
+        var alphas: [UInt8] = []
+        for py in 0..<rep.pixelsHigh {
+            for px in Int(x * scale)..<min(rep.pixelsWide, Int((x + width) * scale)) {
+                alphas.append(UInt8((rep.colorAt(x: px, y: py)?.alphaComponent ?? 0) * 255))
+            }
+        }
+        return alphas
+    }
+
+    /// The digit drawn upright the plain way, in a y-up bitmap, as a reference.
+    func reference(_ digit: String, height: CGFloat, scale: CGFloat) -> NSBitmapImageRep? {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+        let size = (digit as NSString).size(withAttributes: attributes)
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(ceil(size.width * scale)),
+                                   pixelsHigh: Int(ceil(height * scale)), bitsPerSample: 8, samplesPerPixel: 4,
+                                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        guard let rep else { return nil }
+        rep.size = NSSize(width: size.width, height: height)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        (digit as NSString).draw(at: NSPoint(x: 0, y: (height - size.height) / 2), withAttributes: attributes)
+        NSGraphicsContext.restoreGraphicsState()
+        return rep
+    }
+
+    @Test("the still title draws both digits upright; leaving an orb out keeps size and digits")
+    func digitsUpright() throws {
+        let title = AgentMenuBarTitle(waiting: 3, working: 2, showsWaiting: true, showsWorking: true)
+        let still = AgentMenuBarImage.render(title)
+        let image = AgentMenuBarImage.self
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        let digitWidth = ("3" as NSString).size(withAttributes: [.font: font]).width
+        let firstDigit = image.glyphSize + image.digitGap
+        let secondDigit = 2 * (image.glyphSize + image.digitGap) + ceil(digitWidth) + image.segmentGap
+        for moving in [Set<AgentMenuBarAnimation.Orb>([.waiting]), [.working], [.waiting, .working]] {
+            let base = AgentMenuBarImage.render(title, leavingOut: moving)
+            #expect(base.size == still.size)
+            for x in [firstDigit, secondDigit] {
+                let expected = digitAlpha(still, from: x, width: digitWidth)
+                #expect(expected.contains { $0 > 128 })
+                #expect(digitAlpha(base, from: x, width: digitWidth) == expected)
+            }
+            // The orbs Core Animation draws are not in the image.
+            for piece in AgentMenuBarImage.Layout(title).pieces where moving.contains(piece.orb) {
+                #expect(!digitAlpha(base, from: piece.orbRect.minX, width: piece.orbRect.width).contains { $0 > 0 })
+            }
+        }
+        // Upright: the still "2" matches a plainly drawn "2", not its mirror image.
+        let rep = try #require(still.representations.first as? NSBitmapImageRep)
+        let scale = CGFloat(rep.pixelsWide) / still.size.width
+        let plain = try #require(reference("2", height: still.size.height, scale: scale))
+        func rows(_ r: NSBitmapImageRep, x0: Int) -> [[Bool]] {
+            (0..<plain.pixelsHigh).map { py in
+                (0..<plain.pixelsWide).map { px in (r.colorAt(x: x0 + px, y: py)?.alphaComponent ?? 0) > 0.5 }
+            }
+        }
+        let drawn = rows(rep, x0: Int(secondDigit * scale))
+        let upright = rows(plain, x0: 0)
+        func mismatch(_ a: [[Bool]], _ b: [[Bool]]) -> Int { zip(a, b).map { zip($0, $1).filter { $0 != $1 }.count }.reduce(0, +) }
+        #expect(mismatch(drawn, upright) < mismatch(drawn, upright.reversed()))
+    }
+
+    @Test("each orb's frames cover one cycle at the rows' speed and the rows' frame rate, and move")
+    func orbFrames() {
+        for state in [ThinkingOrbState.solving, .breathing] {
+            let frames = AgentMenuBarImage.orbFrames(state, framesPerSecond: AgentMenuBarAnimator.framesPerSecond, scale: 2)
+            let cycle = ThinkingOrbStyle.phaseSpan / ThinkingOrbStyle(state: state).speed
+            #expect(AgentMenuBarImage.cycle(state) == cycle)
+            #expect(frames.count == Int((cycle * AgentMenuBarAnimator.framesPerSecond).rounded()))
+            #expect(frames.allSatisfy { $0.width == 32 && $0.height == 32 })
+            let distinct = Set(frames.compactMap { $0.dataProvider?.data as Data? })
+            #expect(distinct.count > frames.count / 2)
+        }
+    }
+}
+
+/// The bundled logo, read from the sources: tests run without the app bundle.
+func sourceLogo() -> NSImage? {
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().appendingPathComponent("Sources/Teebe/Resources/teebe-logo.png")
+    return NSImage(contentsOf: url)
+}
+
+@Suite("Menu bar neutral glyph")
+@MainActor
+struct AgentMenuBarNeutralTests {
+    @Test("the neutral item is the teebe mark from the app icon, as a template at 1x and 2x")
+    func teebeMark() throws {
+        let glyph = try #require(AgentMenuBarImage.teebeGlyph(from: sourceLogo()))
+        #expect(glyph.isTemplate)
+        #expect(glyph.size.height == 16)
+        let reps = glyph.representations.compactMap { $0 as? NSBitmapImageRep }
+        #expect(Set(reps.map(\.pixelsHigh)) == [16, 32])
+        let rep = try #require(reps.first { $0.pixelsHigh == 32 })
+        func ink(_ x: Int, _ y: Int) -> Bool { (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 }
+        let w = rep.pixelsWide, h = rep.pixelsHigh
+        // The stem of the "i" runs down the middle; the dark tile between the
+        // chevrons and the stem is transparent; the corners stay empty.
+        #expect(ink(w / 2, h - 4))
+        #expect(!ink(w / 4, h - 3) && !ink(w / 2, 1))
+        #expect(!ink(w / 2 - 5, h / 2 + 6))
+    }
+}
+
+/// A value a `@Sendable` closure can read while the test changes it.
+private final class StateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String: AgentActivityState] = [:]
+    var value: [String: AgentActivityState] {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+    private var storedCount = 0
+    var count: Int { lock.withLock { storedCount } }
+    func increment() { lock.withLock { storedCount += 1 } }
+}

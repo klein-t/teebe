@@ -105,6 +105,8 @@ struct WorktreeStatus: Equatable {
     /// What is working in the folder right now, said where removal is confirmed;
     /// nil when nothing is.
     let activityWarning: String?
+    /// The task and question lines under the branch name.
+    let agentLines: WorktreeAgentLines
 
     var showsTrash: Bool { trashAction != nil }
     var isSafeToDelete: Bool { removal.isSafeToDelete }
@@ -148,7 +150,7 @@ struct WorktreeStatus: Equatable {
     ///   - targetNames: what the scan checks against, e.g. ["dev", "main"].
     ///   - isChecking: a scan is running (only matters while `merge` is nil).
     init(worktree: Worktree, merge: WorktreeMergeEntry?, info: SelectorModel.WorktreeInfo,
-         targetNames: [String], isChecking: Bool) {
+         targetNames: [String], isChecking: Bool, agentDisplay: AgentDisplayOptions = AgentDisplayOptions()) {
         let entry = merge?.entry
         // The worktree list already has a HEAD the scan never saw: a commit in a row
         // that isn't open (an open row's commit sets `isRechecking` itself).
@@ -169,7 +171,8 @@ struct WorktreeStatus: Equatable {
         group = Self.group(facts, isMergedClean: removal.isSafeToDelete)
         mark = Self.mark(facts, isMergedClean: removal.isSafeToDelete)
         trashAction = removal.isSafeToDelete ? entry.map { .remove($0) } : nil
-        card = facts.card(mark: mark, isRemovable: trashAction != nil)
+        agentLines = WorktreeAgentLines(context: info.agentContext, mark: mark, options: agentDisplay)
+        card = facts.card(mark: mark, isRemovable: trashAction != nil, agentQuestion: agentLines.question)
     }
 }
 
@@ -225,8 +228,10 @@ private struct Facts {
     /// Every card: a fixed state title, one short sentence, and the same three facts
     /// (changes, merge, remote) in that order. A broken link has no footer: Git
     /// can't read the folder, so there is nothing to report.
-    func card(mark: WorktreeMark, isRemovable: Bool) -> WorktreeCard {
-        let (title, subtitle) = headline(mark: mark, isRemovable: isRemovable)
+    func card(mark: WorktreeMark, isRemovable: Bool, agentQuestion: String? = nil) -> WorktreeCard {
+        var (title, subtitle) = headline(mark: mark, isRemovable: isRemovable)
+        // What the agent asks says more than the generic sentence.
+        if mark == .waiting, let agentQuestion { subtitle = agentQuestion }
         let facts = mark == .brokenLink ? [] : [changesFact, mergeFact, WorktreeWording.remoteFact(info.remote)]
         return WorktreeCard(title: title, subtitle: subtitle, facts: facts)
     }

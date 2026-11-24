@@ -78,8 +78,12 @@ Conductor run the agents for you. teebe only watches.
   changes, commits not merged yet, or merged and safe to delete. Group and sort
   the list by status.
 - **Agent activity.** See when Claude Code or Codex is working or waiting in a
-  worktree, with optional notifications when a turn finishes. Files badge live
-  as any agent or tool edits them.
+  worktree, the task it was given and what it is asking you, with optional
+  notifications when a turn finishes. Files badge live as any agent or tool
+  edits them.
+- **Agents in the menu bar.** A menu bar item counts the agents waiting for you
+  and working across all your repos. Pick one to jump to its cmux terminal, or
+  to its worktree in teebe.
 - **Merge detection that understands squash merges.** Worktrees are checked
   against your default and integration branches, and a background fetch keeps
   it current.
@@ -89,8 +93,9 @@ Conductor run the agents for you. teebe only watches.
 - **New worktrees without the commands.** Create one on a new or existing
   branch, from any starting point, in a folder teebe suggests.
 - **Diffs, one keystroke away.** Press Space on a change to peek its diff,
-  unified or side by side. Return opens a file in the app you already use, and
-  ⌘⇧C copies files as `@`-refs for an agent prompt.
+  unified or side by side, with syntax colors and the changed words marked.
+  Return opens a file in the app you already use, and ⌘⇧C copies files as
+  `@`-refs for an agent prompt.
 
 ## What it is not
 

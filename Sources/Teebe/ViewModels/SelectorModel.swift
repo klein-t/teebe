@@ -21,6 +21,9 @@ final class SelectorModel {
         /// What the coding agents working in this worktree are doing, from their
         /// own records (session logs, rollouts, session registry).
         var agentState: AgentActivityState = .idle
+        /// What the session behind `agentState` was asked and waits on; nil
+        /// without a working or waiting session.
+        var agentContext: AgentContext?
         /// The branch against its same-named remote branch; unknown until a status
         /// read succeeds.
         var remote: RemoteSync = .unknown
@@ -125,6 +128,10 @@ final class SelectorModel {
     }
     /// Delay before the catch-up re-derive that follows a hook ping.
     var agentPingSettle: TimeInterval = 2
+    /// How often writes by other repositories' sessions may re-derive the badges.
+    @ObservationIgnored var foreignWatchInterval: TimeInterval = 5
+    @ObservationIgnored private var lastForeignRefresh = Date.distantPast
+    @ObservationIgnored private var foreignRefreshPending = false
     /// How long a worktree stays working after its last file change or busy
     /// process (`GenericActivity.window`). A var so tests can shrink it.
     var liveWindow: TimeInterval = GenericActivity.window
@@ -198,6 +205,7 @@ final class SelectorModel {
 
     func setRepositories(_ repos: [Repository]) {
         repositories = repos
+        environment.knownWorktrees.retainRepositories(repos.map(\.path))
     }
 
     /// The calm one-line notice after deleted worktrees were forgotten.
@@ -263,7 +271,7 @@ final class SelectorModel {
             errorMessage = nil
         } catch {
             guard isCurrent() else { return }
-            applyDiscovered([])
+            applyDiscovered([], rememberPaths: false)
             branches = []
             errorMessage = WorktreeModel.describe(error)
         }
@@ -451,7 +459,10 @@ final class SelectorModel {
     /// when the set of checkouts changed or one of their HEADs did, so discovery
     /// bumps `mergeRevision` only then. Fetch completion and leaving low power
     /// invalidate separately because comparison refs may move with unchanged HEADs.
-    private func applyDiscovered(_ discovered: [Worktree]) {
+    private func applyDiscovered(_ discovered: [Worktree], rememberPaths: Bool = true) {
+        if rememberPaths, let repo = selectedRepo {
+            environment.knownWorktrees.update(discovered.map(\.path), forRepository: repo.path)
+        }
         func identity(_ trees: [Worktree]) -> [String] { trees.map { $0.path + "\u{0}" + $0.head } }
         if identity(discovered) != identity(worktrees) { mergeRevision += 1 }
         let pathsChanged = discovered.map(\.path) != worktrees.map(\.path)
@@ -471,10 +482,12 @@ final class SelectorModel {
         let generation = agentRefreshGeneration
         let worktrees = self.worktrees
         let paths = worktrees.map(\.path)
-        // One batched agent-log scan for the whole repo — the scanner needs every
-        // worktree path to attribute a session to the worktree it runs in, not
-        // the one it was launched from. Runs off-main alongside the git reads.
-        let agentTask = Task.detached { (agentStatuses(paths, now), agentTurnEnds(paths, now)) }
+        // One scan for this repo's rows, with ownership checked against every
+        // known worktree. Runs off-main alongside the git reads.
+        let agentSnapshot = environment.agentSnapshot
+        let agentTask = Task.detached {
+            (AppEnvironment.readAgents(paths, now, snapshot: agentSnapshot, statuses: agentStatuses), agentTurnEnds(paths, now))
+        }
         // Fetch each worktree's status concurrently — these are independent git
         // reads, so a repo with many worktrees shouldn't serialize N `git status`
         // calls on every repo switch.
@@ -491,14 +504,14 @@ final class SelectorModel {
             }
             return byPath
         }
-        let (agentStates, turnEnds) = await agentTask.value
+        let (agents, turnEnds) = await agentTask.value
         guard selectedRepo?.path == repository, self.worktrees.map(\.path) == paths,
               generation == agentRefreshGeneration else { return }
         let remoteBranches = Set(branches.filter(\.isRemote).map(\.name))
         var info: [String: WorktreeInfo] = [:]
         for worktree in worktrees {
             let status = statuses[worktree.path] ?? nil
-            let agent = agentStates[worktree.path] ?? .idle
+            let agent = agents.states[worktree.path] ?? .idle
             let remote = status.map { RemoteSync(status: $0, remoteBranches: remoteBranches) } ?? .unknown
             info[worktree.path] = WorktreeInfo(
                 ahead: remote.ahead,
@@ -507,6 +520,7 @@ final class SelectorModel {
                 hasStatus: status != nil,
                 isLive: environment.activityMonitor.isBusy(worktreePath: worktree.path, within: liveWindow, now: now),
                 agentState: agent,
+                agentContext: agents.contexts[worktree.path],
                 remote: remote,
                 isKeptMissing: keptMissingPaths.contains(worktree.path)
             )
@@ -531,13 +545,17 @@ final class SelectorModel {
         let generation = agentRefreshGeneration
         let worktrees = self.worktrees
         let paths = worktrees.map(\.path)
-        let (states, turnEnds) = await Task.detached { (agentStatuses(paths, now), agentTurnEnds(paths, now)) }.value
+        let agentSnapshot = environment.agentSnapshot
+        let (agents, turnEnds) = await Task.detached {
+            (AppEnvironment.readAgents(paths, now, snapshot: agentSnapshot, statuses: agentStatuses), agentTurnEnds(paths, now))
+        }.value
         guard selectedRepo?.path == repository, self.worktrees.map(\.path) == paths,
               generation == agentRefreshGeneration else { return }
         var info = worktreeInfo
         for worktree in worktrees {
             var entry = info[worktree.path] ?? WorktreeInfo()
-            entry.agentState = states[worktree.path] ?? .idle
+            entry.agentState = agents.states[worktree.path] ?? .idle
+            entry.agentContext = agents.contexts[worktree.path]
             entry.isLive = environment.activityMonitor.isBusy(worktreePath: worktree.path, within: liveWindow, now: now)
             info[worktree.path] = entry
         }
@@ -715,17 +733,37 @@ final class SelectorModel {
         await refreshAgentStates()
     }
 
-    /// A coalesced batch of session-log writes — re-derive the badges, unless
-    /// every write belongs to another project's sessions (which the scan never
-    /// reads): Claude Code sessions elsewhere log continuously.
+    /// A coalesced batch of session-log writes: re-derive the badges. Writes by
+    /// this repository's sessions do so at once. Writes that belong only to
+    /// sessions launched in other known repositories matter too, since one of
+    /// them may be working here, but those sessions log continuously, so they
+    /// re-derive at most once per `foreignWatchInterval`. Writes of projects
+    /// teebe does not know are ignored.
     func handleAgentWatchEvent(_ paths: [String]) async {
         let otherAgentChanged = paths.contains { path in
             environment.agentExtraWatchPaths.contains { root in path == root || path.hasPrefix(root + "/") }
         }
         if !otherAgentChanged, let root = environment.agentProjectsRootPath,
            !AgentSessionScanner.eventsMatter(paths, projectsRoot: root, worktreePaths: worktrees.map(\.path)) {
-            return
+            guard AgentSessionScanner.eventsMatter(paths, projectsRoot: root,
+                                                   worktreePaths: environment.knownWorktrees.paths) else { return }
+            return await refreshForForeignWrite()
         }
+        await refreshAgentStates()
+    }
+
+    /// The first foreign write re-derives at once; the ones that follow within
+    /// the interval share a single re-derive at its end, so the last write of a
+    /// burst is never missed.
+    private func refreshForForeignWrite() async {
+        let wait = foreignWatchInterval - Date().timeIntervalSince(lastForeignRefresh)
+        if wait > 0 {
+            guard !foreignRefreshPending else { return }
+            foreignRefreshPending = true
+            try? await Task.sleep(for: .seconds(wait))
+            foreignRefreshPending = false
+        }
+        lastForeignRefresh = Date()
         await refreshAgentStates()
     }
 
@@ -811,6 +849,13 @@ final class SelectorModel {
         guard !active.isEmpty else { return }
         for path in active { environment.activityMonitor.recordActivity(worktreePath: path, at: now) }
         refreshLiveState(now: now)
+    }
+
+    /// Selection and cursor move to `wt` at once, without loading it, so a click
+    /// paints before `selectWorktree` gets to run.
+    func markSelected(_ wt: Worktree) {
+        selectedWorktree = wt
+        highlightedWorktree = wt
     }
 
     func selectWorktree(_ wt: Worktree) async {

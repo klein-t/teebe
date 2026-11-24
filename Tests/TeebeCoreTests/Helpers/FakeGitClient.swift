@@ -48,7 +48,7 @@ final class FakeGitClient: GitClient, @unchecked Sendable {
     func branches(repoPath: String) async throws -> [Branch] { try throwIfNeeded(); return branchesResult }
     func status(worktreePath: String) async throws -> StatusResult { try throwIfNeeded(); return statusResult }
 
-    func workingDiff(worktreePath: String, path: String, staged: Bool) async throws -> DiffFile? {
+    func workingDiff(worktreePath: String, path: String, staged: Bool, ignoreWhitespace: Bool) async throws -> DiffFile? {
         try throwIfNeeded(); workingDiffStagedFlags.append(staged); return workingDiffResult
     }
 
