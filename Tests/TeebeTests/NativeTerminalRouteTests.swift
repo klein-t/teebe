@@ -23,6 +23,14 @@ struct NativeTerminalRouteTests {
         #expect(NativeTerminalProbe.terminalIO("f0\nn/dev/ttys003") == nil)
     }
 
+    @Test("a Unicode line break inside a file name cannot forge a field")
+    func rawLineBreaksInNames() {
+        // lsof prints U+2028 raw: the forged "n/dev/ttys003" stays part of fd 1's name.
+        #expect(NativeTerminalProbe.terminalIO("f0\nn/dev/ttys003\nf1\nn/tmp/x\u{2028}n/dev/ttys003") == nil)
+        #expect(NativeTerminalProbe.uniqueSocket("n/tmp/x\u{2028}n/tmp/cmux.sock\n") == "/tmp/x\u{2028}n/tmp/cmux.sock")
+        #expect(NativeTerminalProbe.uniquePID("42\u{2028}42\n") == nil)
+    }
+
     @Test("shared brokers, headless agents and unsupported processes cannot supply a terminal")
     func processRoles() {
         #expect(NativeTerminalProcess.isInteractive(provider: .codex, name: "codex", arguments: ["codex", "resume", "session"]))

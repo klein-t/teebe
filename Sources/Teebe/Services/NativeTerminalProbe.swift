@@ -83,8 +83,12 @@ struct NativeTerminalProbe: AgentTerminalProbe {
         return path
     }
 
+    /// lsof ends a field with a line feed and escapes one inside a name, but prints
+    /// the other Unicode line breaks raw: only the line feed separates fields.
+    static let fieldEnd: Character = "\n"
+
     static func uniquePID(_ text: String) -> Int32? {
-        let lines = text.split(whereSeparator: \.isNewline)
+        let lines = text.split(separator: Self.fieldEnd)
         let pids = lines.compactMap { Int32($0) }
         guard pids.count == lines.count, Set(pids).count == 1, let pid = pids.first, pid > 0 else { return nil }
         return pid
@@ -94,7 +98,7 @@ struct NativeTerminalProbe: AgentTerminalProbe {
         var descriptor: String?
         var input: String?
         var output: String?
-        for line in text.split(whereSeparator: \.isNewline) {
+        for line in text.split(separator: Self.fieldEnd) {
             if line.hasPrefix("f") { descriptor = String(line.dropFirst()) }
             if line.hasPrefix("n") {
                 if descriptor == "0" { input = String(line.dropFirst()) }
@@ -106,7 +110,7 @@ struct NativeTerminalProbe: AgentTerminalProbe {
     }
 
     static func uniqueSocket(_ text: String) -> String? {
-        let paths = Set(text.split(whereSeparator: \.isNewline).compactMap { line -> String? in
+        let paths = Set(text.split(separator: Self.fieldEnd).compactMap { line -> String? in
             guard line.hasPrefix("n/") else { return nil }
             let path = String(line.dropFirst()).components(separatedBy: " type=")[0]
             let name = URL(fileURLWithPath: path).lastPathComponent
@@ -121,7 +125,7 @@ struct NativeTerminalProbe: AgentTerminalProbe {
     static func ownsTranscript(_ text: String, device: UInt64, inode: UInt64) -> Bool {
         let files = text.components(separatedBy: "\nf").dropFirst()
         return files.contains { file in
-            let fields = file.split(whereSeparator: \.isNewline)
+            let fields = file.split(separator: Self.fieldEnd)
             let access = fields.first { $0.hasPrefix("a") }.map { String($0.dropFirst()) }
             let fileDevice = fields.first { $0.hasPrefix("D0x") }.flatMap { UInt64($0.dropFirst(3), radix: 16) }
             let fileInode = fields.first { $0.hasPrefix("i") }.flatMap { UInt64($0.dropFirst()) }
@@ -155,7 +159,7 @@ struct NativeTerminalProbe: AgentTerminalProbe {
     }
 
     private func independentSession(_ text: String, requested: AgentTerminalSession) -> Bool {
-        let paths = Set(text.split(whereSeparator: \.isNewline)
+        let paths = Set(text.split(separator: Self.fieldEnd)
             .filter { $0.hasPrefix("n/") && $0.hasSuffix(".jsonl") }.map { String($0.dropFirst()) })
         guard paths.count <= 64, paths.contains(requested.transcriptPath) else { return false }
         var sessions = Set<String>()
