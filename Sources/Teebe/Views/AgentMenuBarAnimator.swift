@@ -57,7 +57,8 @@ final class AgentMenuBarAnimator {
         let visible = button.window?.occlusionState.contains(.visible) ?? true
         guard AgentMenuBarAnimation.timerRuns(orbs, screenAsleep: screenAsleep, sessionLocked: sessionLocked,
                                               itemVisible: visible) else { return stop() }
-        let overlay = self.overlay ?? makeOverlay(on: button)
+        // A status item put back after being hidden has a new button.
+        let overlay = self.overlay.flatMap { $0.superview === button ? $0 : nil } ?? makeOverlay(on: button)
         overlay.show(AgentMenuBarImage.Layout(request.title), moving: orbs, in: button) { orb, scale in
             self.frames(orb, scale: scale)
         }
@@ -79,6 +80,7 @@ final class AgentMenuBarAnimator {
     }
 
     private func makeOverlay(on button: NSStatusBarButton) -> OrbOverlayView {
+        self.overlay?.removeFromSuperview()
         let overlay = OrbOverlayView(frame: button.bounds)
         overlay.autoresizingMask = [.width, .height]
         button.addSubview(overlay)
@@ -130,14 +132,18 @@ final class AgentMenuBarAnimator {
 
 /// The moving orbs, laid over the status button where its title image leaves
 /// them out. Invisible to clicks, so the item works as before.
+///
+/// The button changes width with its title (one count or two), after the new
+/// title is known. The orbs are placed again whenever this view is resized with
+/// it, so they never keep the position they had in the old width.
 @MainActor
 final class OrbOverlayView: NSView {
-    private var orbLayers: [AgentMenuBarAnimation.Orb: CALayer] = [:]
-    private var shown: Shown?
+    private(set) var orbLayers: [AgentMenuBarAnimation.Orb: CALayer] = [:]
+    private var built: Built?
+    private var layout: AgentMenuBarImage.Layout?
 
-    /// What the layers were last built for.
-    private struct Shown: Equatable {
-        let rects: [NSRect]
+    /// What the layers were last built for. Where they sit is `place`'s job.
+    private struct Built: Equatable {
         let moving: Set<AgentMenuBarAnimation.Orb>
         let scale: CGFloat
     }
@@ -151,50 +157,74 @@ final class OrbOverlayView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    func show(_ layout: AgentMenuBarImage.Layout, moving: Set<AgentMenuBarAnimation.Orb>, in button: NSStatusBarButton,
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        place()
+    }
+
+    func show(_ layout: AgentMenuBarImage.Layout, moving: Set<AgentMenuBarAnimation.Orb>, in button: NSView,
               frames: (AgentMenuBarAnimation.Orb, CGFloat) -> [CGImage]) {
         guard let layer else { return }
+        if frame != button.bounds { frame = button.bounds }
         let scale = button.window?.backingScaleFactor ?? 2
-        // The title image is centered in the button, like any status item image.
-        let origin = NSPoint(x: ((bounds.width - layout.size.width) / 2).rounded(),
-                             y: ((bounds.height - layout.size.height) / 2).rounded())
-        let rects = layout.pieces.map { piece -> NSRect in
-            // Layout is y down; this view is y up.
-            NSRect(x: origin.x + piece.orbRect.minX, y: origin.y + layout.size.height - piece.orbRect.maxY,
-                   width: piece.orbRect.width, height: piece.orbRect.height)
+        let wanted = Built(moving: moving, scale: scale)
+        if built != wanted {
+            clear()
+            built = wanted
+            for piece in layout.pieces where moving.contains(piece.orb) {
+                let images = frames(piece.orb, scale)
+                guard let first = images.first else { continue }
+                let ink = CALayer()
+                ink.bounds = NSRect(origin: .zero, size: piece.orbRect.size)
+                ink.anchorPoint = .zero
+                ink.contentsScale = scale
+                let mask = CALayer()
+                mask.frame = ink.bounds
+                mask.contentsScale = scale
+                mask.contents = first
+                ink.mask = mask
+                let animation = CAKeyframeAnimation(keyPath: "contents")
+                animation.values = images
+                animation.calculationMode = .discrete
+                animation.duration = AgentMenuBarImage.cycle(piece.orb.state)
+                animation.repeatCount = .infinity
+                animation.isRemovedOnCompletion = false
+                mask.add(animation, forKey: "orb")
+                layer.addSublayer(ink)
+                orbLayers[piece.orb] = ink
+            }
+            updateInk()
         }
-        let wanted = Shown(rects: rects, moving: moving, scale: scale)
-        guard shown != wanted else { return }
-        clear()
-        shown = wanted
-        for (piece, rect) in zip(layout.pieces, rects) where moving.contains(piece.orb) {
-            let images = frames(piece.orb, scale)
-            guard let first = images.first else { continue }
-            let ink = CALayer()
-            ink.frame = rect
-            ink.contentsScale = scale
-            let mask = CALayer()
-            mask.frame = ink.bounds
-            mask.contentsScale = scale
-            mask.contents = first
-            ink.mask = mask
-            let animation = CAKeyframeAnimation(keyPath: "contents")
-            animation.values = images
-            animation.calculationMode = .discrete
-            animation.duration = AgentMenuBarImage.cycle(piece.orb.state)
-            animation.repeatCount = .infinity
-            animation.isRemovedOnCompletion = false
-            mask.add(animation, forKey: "orb")
-            layer.addSublayer(ink)
-            orbLayers[piece.orb] = ink
+        self.layout = layout
+        place()
+    }
+
+    /// Where an orb of `layout` sits in a button of `size`, y up: the title image
+    /// is centered in the button, like any status item image.
+    static func orbOrigin(_ piece: AgentMenuBarPiece, of layout: AgentMenuBarImage.Layout, in size: NSSize) -> NSPoint {
+        let origin = NSPoint(x: ((size.width - layout.size.width) / 2).rounded(),
+                             y: ((size.height - layout.size.height) / 2).rounded())
+        // Layout is y down; this view is y up.
+        return NSPoint(x: origin.x + piece.orbRect.minX, y: origin.y + layout.size.height - piece.orbRect.maxY)
+    }
+
+    /// Move the orbs to where the title image leaves room for them, in the size
+    /// this view has now. The layers stay, so the motion does not start over.
+    private func place() {
+        guard let layout else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for piece in layout.pieces {
+            orbLayers[piece.orb]?.position = Self.orbOrigin(piece, of: layout, in: bounds.size)
         }
-        updateInk()
+        CATransaction.commit()
     }
 
     func clear() {
         orbLayers.values.forEach { $0.removeFromSuperlayer() }
         orbLayers = [:]
-        shown = nil
+        built = nil
+        layout = nil
     }
 
     /// The label color as the menu bar shows it: dark on a light bar, light on a dark one.
